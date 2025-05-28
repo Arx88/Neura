@@ -589,7 +589,10 @@ async def create_portal_session(
         # Get customer ID
         customer_id = await get_stripe_customer_id(client, current_user_id)
         if not customer_id:
-            raise HTTPException(status_code=404, detail="No billing customer found")
+            user_result = await client.auth.admin.get_user_by_id(current_user_id)
+            if not user_result: raise HTTPException(status_code=404, detail="User not found")
+            email = user_result.user.email
+            customer_id = await create_stripe_customer(client, current_user_id, email)
         
         # Ensure the portal configuration has subscription_update enabled
         try:
