@@ -47,6 +47,26 @@ interface ModelSelectorProps {
   refreshCustomModels?: () => void;
 }
 
+// Helper function to get display names for providers
+const getProviderDisplayName = (providerKey: string): string => {
+  switch (providerKey) {
+    case 'ollama': return 'Ollama (Local)';
+    case 'openai': return 'OpenAI';
+    case 'anthropic': return 'Anthropic';
+    case 'openrouter': return 'OpenRouter';
+    case 'groq': return 'Groq';
+    case 'bedrock': return 'AWS Bedrock';
+    case 'custom': return 'Custom Models';
+    default: 
+      const key = providerKey || 'unknown';
+      return key.charAt(0).toUpperCase() + key.slice(1);
+  }
+};
+
+// Define the preferred order for providers
+const orderedProviderKeys = ['ollama', 'openai', 'anthropic', 'openrouter', 'groq', 'bedrock', 'custom'];
+
+
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   selectedModel,
   onModelChange,
@@ -224,9 +244,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
   };
 
-  const premiumModels = sortedModels.filter(m => !getFreeModels().some(id => m.id.includes(id)));
+  // const premiumModels = sortedModels.filter(m => !getFreeModels().some(id => m.id.includes(id))); // Removed
 
-  const shouldDisplayAll = (!isLocalMode() && subscriptionStatus === 'no_subscription') && premiumModels.length > 0;
+  // const shouldDisplayAll = (!isLocalMode() && subscriptionStatus === 'no_subscription') && premiumModels.length > 0; // Removed: Simplifying to a single rendering path
 
   // Handle opening the custom model dialog
   const openAddCustomModelDialog = (e?: React.MouseEvent) => {
@@ -531,206 +551,182 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
         <DropdownMenuContent
           align="end"
-          className="w-72 p-0 overflow-hidden"
+          className="w-80 p-0 overflow-hidden" // Increased width to w-80
           sideOffset={4}
         >
-          <div className="overflow-y-auto w-full scrollbar-hide relative">
-            {/* Completely separate views for subscribers and non-subscribers */}
-            {shouldDisplayAll ? (
-              /* No Subscription View */
-              <div>
-                {/* Available Models Section - ONLY hardcoded free models */}
-                <div className="px-3 py-3 text-xs font-medium text-muted-foreground">
-                  Available Models
-                </div>
-                {/* Only show free models */}
-                {uniqueModels
-                  .filter(m =>
-                    !m.requiresSubscription &&
-                    (m.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      m.id.toLowerCase().includes(searchQuery.toLowerCase()))
-                  )
-                  .map((model, index) => (
-                    <TooltipProvider key={model.uniqueKey || `model-${model.id}-${index}`}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className='w-full'>
-                            <DropdownMenuItem
-                              className={cn(
-                                "text-sm mx-2 my-0.5 px-3 py-2 flex items-center justify-between cursor-pointer",
-                                selectedModel === model.id && "bg-accent"
-                              )}
-                              onClick={() => onModelChange(model.id)}
-                              onMouseEnter={() => setHighlightedIndex(filteredOptions.indexOf(model))}
-                            >
-                              <div className="flex items-center">
-                                <span className="font-medium">{model.label}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {/* Show capabilities */}
-                                {(MODELS[model.id]?.lowQuality || false) && (
-                                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                                )}
-                                {(MODELS[model.id]?.recommended || false) && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded-sm bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 font-medium">
-                                    Recommended
-                                  </span>
-                                )}
-                                {selectedModel === model.id && (
-                                  <Check className="h-4 w-4 text-blue-500" />
-                                )}
-                              </div>
-                            </DropdownMenuItem>
-                          </div>
-                        </TooltipTrigger>
-                        {MODELS[model.id]?.lowQuality && (
-                          <TooltipContent side="left" className="text-xs max-w-xs">
-                            <p>Basic model with limited capabilities</p>
-                          </TooltipContent>
-                        )}
-                      </Tooltip>
-                    </TooltipProvider>
-                  ))
-                }
+          <div className="max-h-[calc(100vh-200px)] overflow-y-auto w-full scrollbar-hide relative p-2"> {/* Added padding p-2 */}
+            {/* Unified rendering logic starts here */}
+            {orderedProviderKeys.map(providerKey => {
+              // Filter models for the current provider and search query
+              // modelOptions already contains custom models correctly marked
+              const providerModels = uniqueModels.filter(m => 
+                m.provider === providerKey &&
+                (m.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                 m.id.toLowerCase().includes(searchQuery.toLowerCase()))
+              );
 
-                {/* Premium Models Section */}
-                <div className="mt-4 border-t border-border pt-2">
-                  <div className="px-3 py-1.5 text-xs font-medium text-blue-500 flex items-center">
-                    <Crown className="h-3.5 w-3.5 mr-1.5" />
-                    Premium Models
+              if (providerModels.length === 0 && providerKey !== 'custom') return null; // Don't render header if no models for this provider unless it's the custom group
+
+              // All models from a provider share the same 'configured' status, taken from the first model.
+              // For 'custom' provider, it's always considered configured.
+              const isProviderConfigured = providerKey === 'custom' ? true : (providerModels.length > 0 ? providerModels[0].configured : false);
+              const providerDisplayName = getProviderDisplayName(providerKey);
+
+              return (
+                <React.Fragment key={providerKey}>
+                  {/* Provider Group Header */}
+                  <div className={cn("px-2 py-1.5 text-xs font-semibold text-muted-foreground flex justify-between items-center", !isProviderConfigured && "opacity-60")}>
+                    <span>
+                      {providerDisplayName}
+                      {!isProviderConfigured ? <span className="font-normal"> (Not Configured)</span> : ''}
+                    </span>
+                    {/* "Add Custom Model" button for the 'custom' provider group */}
+                    {providerKey === 'custom' && isLocalMode() && (
+                       <TooltipProvider>
+                         <Tooltip>
+                           <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 w-6 p-0"
+                                onClick={openAddCustomModelDialog}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </Button>
+                           </TooltipTrigger>
+                           <TooltipContent side="bottom" className="text-xs">Add Custom Model</TooltipContent>
+                         </Tooltip>
+                       </TooltipProvider>
+                    )}
                   </div>
+                  
+                  {/* Models within the group */}
+                  {providerModels.map((modelFromProvider) => {
+                    // modelFromProvider is of type ModelOption due to uniqueModels derivation
+                    const opt = modelFromProvider as ModelOption & { uniqueKey?: string }; // Cast for clarity, uniqueKey is added earlier
+                    const isEffectivelyDisabled = !isProviderConfigured;
 
-                  {/* Premium models container with paywall overlay */}
-                  <div className="relative h-40 overflow-hidden px-2">
-                    {getPremiumModels()
-                      .filter(m =>
-                        m.requiresSubscription &&
-                        (m.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          m.id.toLowerCase().includes(searchQuery.toLowerCase()))
-                      )
-                      .slice(0, 3)
-                      .map((model, index) => (
-                        <TooltipProvider key={model.uniqueKey || `model-${model.id}-${index}`}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className='w-full'>
-                                <DropdownMenuItem
-                                  className="text-sm px-3 py-2 flex items-center justify-between opacity-70 cursor-pointer pointer-events-none"
-                                >
-                                  <div className="flex items-center">
-                                    <span className="font-medium">{model.label}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {/* Show capabilities */}
-                                    {MODELS[model.id]?.recommended && (
-                                      <span className="text-xs px-1.5 py-0.5 rounded-sm bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 font-medium whitespace-nowrap">
-                                        Recommended
-                                      </span>
-                                    )}
-                                    <Crown className="h-3.5 w-3.5 text-blue-500" />
-                                  </div>
-                                </DropdownMenuItem>
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent side="left" className="text-xs max-w-xs">
-                              <p>Requires subscription to access premium model</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ))
+                    // Calculate a unique index across all *currently filtered* models for highlighting
+                    // This ensures highlighting works correctly with search
+                    const currentlyFilteredModels = uniqueModels.filter(m => (m.label.toLowerCase().includes(searchQuery.toLowerCase()) || m.id.toLowerCase().includes(searchQuery.toLowerCase())));
+                    const visualIndex = currentlyFilteredModels.indexOf(opt);
+                    
+                    const isCustom = opt.provider === 'custom';
+                    // Accessible check: if provider disabled, not accessible. Else, use canAccessModel.
+                    const accessible = isEffectivelyDisabled ? false : canAccessModel(opt.id);
+
+                    const isHighlighted = visualIndex === highlightedIndex;
+                    const isPremium = opt.requiresSubscription ?? false;
+                    const modelMeta = MODELS[opt.id] || MODELS[opt.id.replace(/^openrouter\//, '')] || {};
+                    const isLowQuality = modelMeta.lowQuality || false;
+                    const isRecommended = modelMeta.recommended || false;
+
+                    const handleItemClick = () => {
+                      if (isEffectivelyDisabled) return; // Do nothing if provider not configured
+                      // handleSelect already contains logic for paywall if !accessible but provider IS configured
+                      handleSelect(opt.id); 
+                    };
+
+                    let tooltipMessage = '';
+                    if (isEffectivelyDisabled) {
+                      tooltipMessage = 'This model provider is not configured in the backend.';
+                    } else if (!accessible && isPremium) {
+                      tooltipMessage = `The model "${opt.label}" requires a subscription.`;
+                    } else if (isLowQuality) {
+                      tooltipMessage = `The model "${opt.label}" is not recommended for complex tasks.`;
+                    } else if (isRecommended) {
+                      tooltipMessage = `The model "${opt.label}" is recommended for most tasks.`;
+                    } else if (isCustom) {
+                      tooltipMessage = `Custom model: ${opt.id}`;
                     }
-
-                    {/* Absolute positioned paywall overlay with gradient fade */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-background via-background/95 to-transparent flex items-end justify-center">
-                      <div className="w-full p-3">
-                        <div className="rounded-xl bg-gradient-to-br from-blue-50/80 to-blue-200/70 dark:from-blue-950/40 dark:to-blue-900/30 shadow-sm border border-blue-200/50 dark:border-blue-800/50 p-3">
-                          <div className="flex flex-col space-y-2">
-                            <div className="flex items-center">
-                              <Crown className="h-4 w-4 text-blue-500 mr-2 flex-shrink-0" />
-                              <div>
-                                <p className="text-sm font-medium">Unlock all models + higher limits</p>
-                              </div>
+                    
+                    return (
+                      <TooltipProvider key={opt.uniqueKey || opt.id}>
+                        <Tooltip open={tooltipMessage ? undefined : false} delayDuration={300}>
+                          <TooltipTrigger asChild>
+                            <div className='w-full'>
+                              <DropdownMenuItem
+                                className={cn(
+                                  "text-sm px-3 py-2 mx-1 my-0.5 flex items-center justify-between rounded-md",
+                                  isHighlighted && !isEffectivelyDisabled && "bg-accent dark:bg-accent/70",
+                                  isEffectivelyDisabled && "opacity-50 cursor-not-allowed",
+                                  !isEffectivelyDisabled && !accessible && isPremium && "opacity-70", // Style for paywalled items
+                                  !isEffectivelyDisabled && accessible && "cursor-pointer"
+                                )}
+                                onClick={handleItemClick}
+                                onMouseEnter={() => !isEffectivelyDisabled && setHighlightedIndex(visualIndex)}
+                                disabled={isEffectivelyDisabled} // Disables the item, good for a11y
+                              >
+                                <div className="flex items-center overflow-hidden">
+                                  <span className="font-medium truncate" title={opt.label}>{opt.label || 'Unnamed Model'}</span>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {isLowQuality && (
+                                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                                  )}
+                                  {isRecommended && !isEffectivelyDisabled && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded-sm bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 font-medium">
+                                      Recommended
+                                    </span>
+                                  )}
+                                  {isPremium && !accessible && !isEffectivelyDisabled && (
+                                    <Crown className="h-3.5 w-3.5 text-blue-500" />
+                                  )}
+                                  {isLocalMode() && isCustom && !isEffectivelyDisabled && (
+                                    <>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); openEditCustomModelDialog(opt as unknown as CustomModel, e); }}
+                                        className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted" title="Edit custom model"
+                                      >
+                                        <Edit className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteCustomModel(opt.id, e); }}
+                                        className="text-muted-foreground hover:text-red-500 p-0.5 rounded hover:bg-muted" title="Delete custom model"
+                                      >
+                                        <Trash className="h-3.5 w-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+                                  {selectedModel === opt.id && !isEffectivelyDisabled && (
+                                    <Check className="h-4 w-4 text-blue-500" />
+                                  )}
+                                </div>
+                              </DropdownMenuItem>
                             </div>
-                            <Button
-                              size="sm"
-                              className="w-full h-8 font-medium"
-                              onClick={handleUpgradeClick}
-                            >
-                              Upgrade now
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* Subscription or other status view */
-              <div className='max-h-[320px] overflow-y-auto w-full'>
-                <div className="px-3 py-3 flex justify-between items-center">
-                  <span className="text-xs font-medium text-muted-foreground">All Models</span>
-                  {isLocalMode() && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 w-6 p-0"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openAddCustomModelDialog(e);
-                            }}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" className="text-xs">
-                          Add a custom model
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-                </div>
-                {uniqueModels
-                  .filter(m =>
-                    m.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    m.id.toLowerCase().includes(searchQuery.toLowerCase())
-                  )
-                  // Sort to prioritize recommended paid models first
-                  .sort((a, b) => {
-                    const aRecommendedPaid = MODELS[a.id]?.recommended && a.requiresSubscription;
-                    const bRecommendedPaid = MODELS[b.id]?.recommended && b.requiresSubscription;
+                          </TooltipTrigger>
+                          {tooltipMessage && (
+                            <TooltipContent side="left" className="text-xs max-w-xs z-[60]"> {/* Ensure tooltip is above other elements */}
+                              <p>{tooltipMessage}</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  })}
+                  {/* If custom provider has no models yet, show add button */}
+                   {providerKey === 'custom' && providerModels.length === 0 && isLocalMode() && (
+                     <DropdownMenuItem
+                       className="text-sm px-3 py-2 mx-2 my-0.5 flex items-center justify-start cursor-pointer text-muted-foreground hover:text-foreground"
+                       onClick={openAddCustomModelDialog}
+                     >
+                       <Plus className="h-3.5 w-3.5 mr-2" />
+                       Add Custom Model
+                     </DropdownMenuItem>
+                   )}
+                </React.Fragment>
+              );
+            })}
 
-                    if (aRecommendedPaid && !bRecommendedPaid) return -1;
-                    if (!aRecommendedPaid && bRecommendedPaid) return 1;
-
-                    // Secondary sorting: recommended free models next
-                    const aRecommended = MODELS[a.id]?.recommended;
-                    const bRecommended = MODELS[b.id]?.recommended;
-
-                    if (aRecommended && !bRecommended) return -1;
-                    if (!aRecommended && bRecommended) return 1;
-
-                    // Paid models next
-                    if (a.requiresSubscription && !b.requiresSubscription) return -1;
-                    if (!a.requiresSubscription && b.requiresSubscription) return 1;
-
-                    // Default to alphabetical order
-                    return a.label.localeCompare(b.label);
-                  })
-                  .map((model, index) => renderModelOption(model, index))}
-
-                {uniqueModels.length === 0 && (
-                  <div className="text-sm text-center py-4 text-muted-foreground">
-                    No models match your search
-                  </div>
-                )}
+            {/* Handle case where no models match search across all providers */}
+            {uniqueModels.filter(m => (m.label.toLowerCase().includes(searchQuery.toLowerCase()) || m.id.toLowerCase().includes(searchQuery.toLowerCase()))).length === 0 && (
+              <div className="text-sm text-center py-4 text-muted-foreground">
+                No models match your search
               </div>
             )}
+            {/* End of Unified rendering logic */}
           </div>
-          {!shouldDisplayAll && <div className="px-3 py-2 border-t border-border">
+          { <div className="px-3 py-2 border-t border-border"> {/* Search bar always visible now */}
             <div className="relative flex items-center">
               <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <input
@@ -740,7 +736,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={handleSearchInputKeyDown}
-                className="w-full h-8 px-8 py-1 rounded-lg text-sm focus:outline-none bg-muted"
+                className="w-full h-8 px-8 py-1 rounded-md text-sm focus:outline-none bg-background border border-border focus:border-primary" // Changed to bg-background and added border
               />
             </div>
           </div>}
