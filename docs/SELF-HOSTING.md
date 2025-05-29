@@ -156,6 +156,11 @@ ANTHROPIC_API_KEY=your-anthropic-key
 OPENAI_API_KEY=your-openai-key
 MODEL_TO_USE=anthropic/claude-3-7-sonnet-latest
 
+# Ollama Configuration (Example for local setup)
+# OLLAMA_API_BASE=http://localhost:11434  # Required: Set this to your Ollama server URL.
+# OLLAMA_API_KEY=                       # Optional: Usually left blank or omitted for local Ollama.
+                                       # Only set if your Ollama instance is specifically configured to require a key.
+
 # WEB SEARCH
 TAVILY_API_KEY=your-tavily-key
 
