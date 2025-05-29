@@ -662,7 +662,8 @@ def check_requirements():
                         print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
                         print_info(f"Please open a new terminal/command prompt and re-run this setup script.")
                         if cmd == 'tesseract':
-                             print_info(f"If the problem persists, ensure Tesseract OCR's installation directory (e.g., '{default_tesseract_path or 'C:\\Program Files\\Tesseract-OCR'}') is in your system PATH.")
+                             tesseract_example_path = 'C:\\Program Files\\Tesseract-OCR'
+                             print_info(f"If the problem persists, ensure Tesseract OCR's installation directory (e.g., '{default_tesseract_path or tesseract_example_path}') is in your system PATH.")
                         missing.append((cmd, url))
                 else: # For other tools, not tesseract
                     subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
