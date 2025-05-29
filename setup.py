@@ -27,24 +27,101 @@ TESSERACT_OPT_OUT_FLAG_FILE = os.path.expanduser("~/.suna_skip_tesseract_check")
 
 # Helper function to run winget install
 def run_winget_install(package_id, package_name):
-    """Attempts to install a package using winget."""
+    """
+    Attempts to install a package using winget.
+    Returns a tuple: (success: bool, already_installed: bool)
+    """
     if not IS_WINDOWS:
-        return False
+        return False, False
 
     try:
-        # Check if winget is available
         subprocess.run(['winget', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
         print_info(f"winget is available. Attempting to install {package_name}...")
     except (subprocess.SubprocessError, FileNotFoundError):
         print_warning("winget command not found. Please install winget or install the tool manually.")
+        return False, False
+
+    already_installed_flag = False
+
+    def _check_install_status(process_result, pkg_name):
+        nonlocal already_installed_flag
+        stdout = process_result.stdout.lower() if process_result.stdout else ""
+        stderr = process_result.stderr.lower() if process_result.stderr else ""
+
+        # Winget error codes: https://learn.microsoft.com/en-us/windows/package-manager/winget/return-codes
+        # 0x8A15002B / 2316632107 / -2011873237 (SCHED_E_TASK_TERMINATED) - sometimes means already installed or needs elevation
+        # 0x8A150018 / 2316632088 / -2011873264 (INSTALL_PACKAGE_IN_USE)
+        # Common strings indicating already installed (these can vary by winget version and locale)
+        already_installed_strings = [
+            "already installed",  # English
+            "package already installed", # English
+            "no applicable upgrade found", # English
+            "no upgrade available", # English
+            "found an existing package if this is not the intended application", # More verbose
+            # Add other language strings if necessary, e.g.:
+            # "ya está instalado", # Spanish
+            # "déjà installé", # French
+        ]
+        # Specific error codes that might imply "already installed" or "no action needed"
+        # WINGET_ERROR_ALREADY_INSTALLED (0x8A150057) is not directly listed in public docs but observed.
+        # Some sources suggest 0x80070000 related codes.
+        # For Python specifically, "Python 3.11.X is already installed."
+        python_specific_already_installed = f"{pkg_name.lower()} is already installed" # More specific for Python
+
+        if python_specific_already_installed in stdout or python_specific_already_installed in stderr:
+            print_info(f"{pkg_name} is already installed (detected by specific message).")
+            already_installed_flag = True
+            return True # Treat as success
+
+        for s in already_installed_strings:
+            if s in stdout or s in stderr:
+                print_info(f"{pkg_name} is already installed or no upgrade needed (detected by string: '{s}').")
+                already_installed_flag = True
+                return True # Treat as success
+
+        # Check for specific return codes that indicate "already installed" or similar non-failure states
+        # NoApplicableUpgrade 0x8A15010E / 2316632334
+        if process_result.returncode == 0x8A15010E: # NoApplicableUpgrade
+            print_info(f"{pkg_name} has no applicable upgrade. Assuming already installed or latest.")
+            already_installed_flag = True
+            return True
+
+        # If return code is 0, it's a success regardless of "already installed" strings
+        if process_result.returncode == 0:
+            print_info(f"winget install command output for {pkg_name}:\n{process_result.stdout}")
+            print_success(f"{pkg_name} installation via winget successful.")
+            return True
+
+        # Handle specific error codes before generic failure
+        if process_result.returncode == 2316632107: # 0x8A15002B (SCHED_E_TASK_TERMINATED)
+            print_warning(f"Winget returned exit code 2316632107 (SCHED_E_TASK_TERMINATED) for {pkg_name}.")
+            print_warning("This can sometimes mean the package is already installed, or it might indicate an issue.")
+            print_warning("Consider it a potential pre-existing installation. If issues persist, manual check is advised.")
+            # We might heuristically decide this means already_installed if other clues exist,
+            # but for now, let's not set already_installed_flag unless a string confirms it.
+            # Let's return True to allow the script to proceed, but not mark as 'already_installed' unless a string confirms.
+            # This is a tricky case. If this code means "installed" for Python, we need to catch it.
+            # However, if it means "failed", we should return False.
+            # Given the ambiguity, let's be conservative for now and not assume it means "already installed"
+            # unless a string also indicates it.
+            # If Python install fails with this and no string, then the outer logic will catch it.
+            # For Python, if winget says "Python 3.11.X is already installed" AND this code, it's fine.
+            # If it's just this code, it's ambiguous.
+            # Let's assume if this code appears, it's a success (as in, no need to retry with different flags for now)
+            # but *not* necessarily "already_installed".
+            # The function will return (True, already_installed_flag)
+            return True # Tentative success, let the caller decide based on `already_installed_flag`
+
+        # Generic failure
+        print_error(f"winget installation of {pkg_name} failed with exit code {process_result.returncode}.")
+        if process_result.stdout:
+            print_error(f"Winget stdout:\n{process_result.stdout}")
+        if process_result.stderr:
+            print_error(f"Winget stderr:\n{process_result.stderr}")
         return False
 
+
     try:
-        # Attempt to install the package
-        # Standard flags: --accept-source-agreements --accept-package-agreements
-        # --disable-interactivity is used for a more silent install
-        # --force can be added if needed but might have unintended consequences. Starting without it.
-        # Using -s winget to specify the source explicitly.
         install_command = [
             'winget', 'install', package_id,
             '-s', 'winget',
@@ -53,49 +130,20 @@ def run_winget_install(package_id, package_name):
             '--disable-interactivity'
         ]
         print_info(f"Executing winget command: {' '.join(install_command)}")
-        process = subprocess.run(install_command, capture_output=True, text=True, check=False, shell=True) # check=False to handle errors manually
+        process = subprocess.run(install_command, capture_output=True, text=True, check=False, shell=True)
 
-        if process.returncode == 0:
-            print_info(f"winget install command output for {package_name}:\n{process.stdout}")
-            print_success(f"{package_name} installation via winget seems successful.")
-            return True
+        if _check_install_status(process, package_name):
+            return True, already_installed_flag
         else:
-            print_error(f"winget installation of {package_name} failed with exit code {process.returncode}.")
-            if process.stdout:
-                print_error(f"Winget stdout:\n{process.stdout}")
-            if process.stderr:
-                print_error(f"Winget stderr:\n{process.stderr}")
+            # If initial attempt failed and wasn't due to "already installed"
+            # Check for access denied, which is a common issue for winget
+            stderr_lower = process.stderr.lower() if process.stderr else ""
+            if "0x80070005" in stderr_lower or "access is denied" in stderr_lower or "error 0x80070005" in stderr_lower:
+                print_warning("Winget may require administrator privileges. The first attempt failed with an access denied error.")
+                print_warning("Please try running this script in an administrator terminal if issues persist.")
             
-            if process.returncode == 2316632107: # 0x8A15002B
-                print_warning("Winget returned exit code 2316632107 (SCHED_E_TASK_TERMINATED).")
-                print_warning("This may indicate the task was stopped unexpectedly. Possible causes include system policy, resource limits, or external intervention.")
-                print_warning("Retrying without --disable-interactivity might help, or a manual install may be needed if it persists.")
-            # Fall through to the fallback mechanism below
-            
-            # Simulate SubprocessError to trigger fallback, but we've already printed details
-            # This ensures the existing fallback logic is used.
-            # We raise a generic one because the original 'check=True' would have raised it.
-            raise subprocess.SubprocessError("Winget initial install failed, triggering fallback.")
-
-    except subprocess.SubprocessError as e:
-        # This block now primarily catches the simulated error above, or genuine SubprocessError if shell=True fails catastrophically
-        # before even running winget (e.g. winget command not found after initial check - though unlikely here)
-        # or if check=True was used and an error occurred.
-        # If we raised our custom SubprocessError, e.stdout/stderr might not be populated from the process directly.
-        # The actual process.stdout/stderr was already printed if process.returncode !=0.
-        # So we only print e.stdout/e.stderr if they exist on 'e' and weren't from our manual raise.
-        if not (isinstance(e, subprocess.SubprocessError) and e.args[0] == "Winget initial install failed, triggering fallback."):
-            print_error(f"Failed to install {package_name} using winget: {e}")
-            if hasattr(e, 'stdout') and e.stdout:
-                print_error(f"Winget stdout: {e.stdout}")
-            if hasattr(e, 'stderr') and e.stderr:
-                print_error(f"Winget stderr: {e.stderr}")
-
-        if hasattr(e, 'stderr') and e.stderr and ("0x80070005" in str(e.stderr) or "Access is denied" in str(e.stderr)):
-            print_warning("Winget may require administrator privileges. Try running this script in an administrator terminal.")
-        
-        # Try without --disable-interactivity as a fallback
-        try:
+            # Fallback: Try without --disable-interactivity as it sometimes helps
+            # This is only if the first attempt truly failed (not already installed)
             print_info(f"Retrying winget install for {package_name} without --disable-interactivity...")
             install_command_fallback = [
                 'winget', 'install', package_id,
@@ -105,32 +153,17 @@ def run_winget_install(package_id, package_name):
             ]
             print_info(f"Executing winget command (fallback): {' '.join(install_command_fallback)}")
             process_fallback = subprocess.run(install_command_fallback, capture_output=True, text=True, check=False, shell=True)
-            
-            if process_fallback.returncode == 0:
-                print_info(f"winget install command output for {package_name} (fallback):\n{process_fallback.stdout}")
-                print_success(f"{package_name} installation via winget (fallback) seems successful.")
-                return True
-            else:
-                print_error(f"winget installation of {package_name} (fallback) failed with exit code {process_fallback.returncode}.")
-                if process_fallback.stdout:
-                    print_error(f"Winget stdout (fallback):\n{process_fallback.stdout}")
-                if process_fallback.stderr:
-                    print_error(f"Winget stderr (fallback):\n{process_fallback.stderr}")
 
-                if process_fallback.returncode == 2316632107: # 0x8A15002B
-                    print_warning("Winget (fallback) returned exit code 2316632107 (SCHED_E_TASK_TERMINATED).")
-                    print_warning("This may indicate the task was stopped unexpectedly. Manual install may be needed if this persists.")
-                return False
-        except subprocess.SubprocessError as e_fallback:
-            print_error(f"Fallback winget install for {package_name} also failed critically: {e_fallback}")
-            if hasattr(e_fallback, 'stdout') and e_fallback.stdout:
-                print_error(f"Winget stdout (fallback critical): {e_fallback.stdout}")
-            if hasattr(e_fallback, 'stderr') and e_fallback.stderr:
-                print_error(f"Winget stderr (fallback critical): {e_fallback.stderr}")
-            return False
-    except Exception as e: # Catches other unexpected errors
+            if _check_install_status(process_fallback, package_name):
+                return True, already_installed_flag # already_installed_flag would be set by _check_install_status
+            else:
+                # If fallback also failed
+                print_error(f"Fallback winget install for {package_name} also failed.")
+                return False, False # Definitely failed
+
+    except Exception as e: # Catches other unexpected errors like if winget itself is not runnable after the initial check
         print_error(f"An unexpected error occurred during winget installation of {package_name}: {e}")
-        return False
+        return False, False
 
 def print_banner():
     """Print Suna setup banner"""
@@ -173,7 +206,9 @@ def check_requirements():
     requirements = {
         # Tool name: (URL, winget_package_id, winget_package_name, specific_version_check_command (optional))
         'git': ('https://git-scm.com/downloads', 'Git.Git', 'Git', None),
-        'python3': ('https://www.python.org/downloads/', 'Python.Python.3.11', 'Python 3.11', ['python', '--version']), # Check for 3.11
+        # Python 3.11 check is now primarily handled by ensure_python_311_and_venv()
+        # However, we keep an entry here to ensure 'python' (from venv) is reported as found.
+        'python3': ('https://www.python.org/downloads/', 'Python.Python.3.11', 'Python 3.11', [sys.executable, '--version']),
         'pip3': ('https://pip.pypa.io/en/stable/installation/', None, 'pip3', None), # pip should come with python
         'node': ('https://nodejs.org/en/download/', 'OpenJS.NodeJS', 'Node.js (includes npm)', None), # Node includes npm
         'npm': ('https://docs.npmjs.com/downloading-and-installing-node-js-and-npm', None, 'npm', None), # npm check, but installed with Node
@@ -196,15 +231,36 @@ def check_requirements():
             continue # Skip all processing for Tesseract
 
         try:
+            # If we are in the venv, python3 check should use sys.executable and is implicitly 3.11
+            if cmd == 'python3' and os.environ.get(VENV_ACTIVATION_MARKER) == "1":
+                current_python_version = get_python_version(sys.executable)
+                if current_python_version and "3.11" in current_python_version:
+                    print_success(f"Python 3.11 ({current_python_version}) is active in the virtual environment.")
+                else:
+                    # This case should ideally not be reached if ensure_python_311_and_venv worked correctly.
+                    print_error(f"Inside venv, but Python version is {current_python_version} (expected 3.11).")
+                    missing.append((cmd, url)) # Add to missing to indicate a problem
+                    continue # Next requirement
+            elif cmd == 'python3': # Not in venv, or marker not set (should have been handled by ensure_python_311_and_venv)
+                 # This path should ideally not be hit for python3 if ensure_python_311_and_venv is called first.
+                 # If it is, it means ensure_python_311_and_venv didn't run or didn't exit upon failure.
+                py_version = get_python_version('python')
+                if py_version and "3.11" in py_version:
+                    print_success(f"Python 3.11 ({py_version}) found in PATH.")
+                elif IS_WINDOWS:
+                    py_version_launcher = get_python_version('py -3.11')
+                    if py_version_launcher and "3.11" in py_version_launcher:
+                         print_success(f"Python 3.11 ({py_version_launcher}) found via 'py -3.11'.")
+                    else:
+                        # This will be caught by the FileNotFoundError below and attempt winget if applicable
+                        raise FileNotFoundError("Python 3.11 not found via 'python' or 'py -3.11'")
+                else: # Non-windows
+                    raise FileNotFoundError("Python 3.11 not found in PATH")
+
+
+            # Standard check for other tools, or if python3 check above passed through
             version_check_cmd = [cmd_to_check, '--version']
-            if cmd == 'python3' and IS_WINDOWS: # Special handling for python3.11 check
-                py_version_proc = subprocess.run(['python', '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
-                py_version_output = py_version_proc.stdout.strip() + py_version_proc.stderr.strip()
-                print_info(f"Found Python version: {py_version_output}")
-                if "3.11" not in py_version_output:
-                    raise FileNotFoundError("Python 3.11 not found") # Trigger winget install for 3.11
-                # If 3.11 is found, then pip3 should also be checked/available.
-            elif specific_version_check:
+            if specific_version_check: # e.g. for python3, this now uses sys.executable if in venv
                 subprocess.run(specific_version_check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
             else:
                 subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
@@ -225,14 +281,36 @@ def check_requirements():
 
         except (subprocess.SubprocessError, FileNotFoundError) as e:
             original_error_msg = f"{cmd} is not installed or not found in PATH."
-            if isinstance(e, subprocess.SubprocessError) and e.stderr:
+            if isinstance(e, subprocess.SubprocessError) and hasattr(e, 'stderr') and e.stderr:
                 original_error_msg += f" Error: {e.stderr.strip()}"
-            elif isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e):
-                original_error_msg = "Python 3.11 is specifically required but not found."
+            elif isinstance(e, FileNotFoundError) and cmd == 'python3':
+                 # More specific message if ensure_python_311_and_venv should have handled it
+                if os.environ.get(VENV_ACTIVATION_MARKER) == "1":
+                    original_error_msg = f"Python 3.11 check failed using '{sys.executable}'. This is unexpected in the activated venv."
+                else:
+                    original_error_msg = "Python 3.11 is required but not found."
             
             print_error(original_error_msg)
 
-            if IS_WINDOWS:
+            if IS_WINDOWS and cmd == 'python3' and os.environ.get(VENV_ACTIVATION_MARKER) != "1":
+                # This specific block for installing Python via winget should only trigger
+                # if ensure_python_311_and_venv somehow didn't run or failed to install/relaunch.
+                # Generally, ensure_python_311_and_venv should handle Python 3.11 installation.
+                print_info(f"Attempting to install {winget_name} for Python 3.11 using winget as a fallback...")
+                winget_success, winget_already_installed = run_winget_install(winget_id, winget_name)
+                if winget_success:
+                    if winget_already_installed:
+                        print_info(f"{winget_name} was already installed (reported by winget). A new terminal might be needed.")
+                    else:
+                        print_success(f"{winget_name} installation via winget seems successful.")
+                    print_info("Please re-run the setup script in a new terminal for changes to take effect.")
+                    sys.exit(0) # Exit for user to re-run
+                else:
+                    print_error(f"Automated installation of {winget_name} via winget failed.")
+                    print_info(f"Please install {cmd} manually from {url}")
+                    print_info("Ensure 'Add Python to PATH' is checked during installation if applicable.")
+                    missing.append((cmd, url))
+            elif IS_WINDOWS: # For other tools on Windows
                 # Enhanced Tesseract detection for Windows
                 if cmd == 'tesseract':
                     tesseract_exe_path = None
@@ -410,33 +488,48 @@ def check_requirements():
                 elif winget_id:
                     print_info(f"Attempting to install {winget_name} using winget...")
                     if cmd == 'poetry': # Poetry special handling
-                        # First, try pip install if python is available
+                        # First, try pip install if python (from venv, so it's python 3.11) is available
                         try:
-                            subprocess.run(['python', '-m', 'pip', 'install', 'poetry'], check=True, shell=IS_WINDOWS)
-                            print_success("Poetry installed successfully using pip.")
+                            # Use sys.executable to ensure pip is called from the venv's Python
+                            pip_install_cmd = [sys.executable, '-m', 'pip', 'install', 'poetry']
+                            print_info(f"Attempting to install Poetry using: {' '.join(pip_install_cmd)}")
+                            subprocess.run(pip_install_cmd, check=True, shell=IS_WINDOWS)
+                            print_success("Poetry installed successfully using pip in the current environment.")
                             # Re-check poetry
                             try:
+                                # If Poetry is installed into the venv's scripts, it should be found.
+                                # On Windows, this might require the venv to be active in the PATH,
+                                # or calling poetry via `python -m poetry`.
+                                # For simplicity, let's assume if pip install works, poetry command will be available
+                                # or poetry can be run via `python -m poetry`.
+                                # We will rely on the later `poetry lock` and `poetry install` commands to truly fail
+                                # if poetry is not usable.
                                 subprocess.run(['poetry', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                                print_success("Poetry successfully verified after pip installation.")
+                                print_success("Poetry successfully verified after pip installation ('poetry --version').")
                                 continue # Installed, so skip to next requirement
                             except (subprocess.SubprocessError, FileNotFoundError):
-                                print_warning("Poetry installed via pip, but 'poetry --version' still fails. This might be a PATH issue.")
-                                installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
-                                continue # Assume installed for now, will be checked later
-                        except subprocess.SubprocessError:
-                            print_warning("pip install poetry failed. Attempting winget install for Poetry...")
-                            if run_winget_install(winget_id, winget_name):
+                                print_warning("Poetry installed via pip, but 'poetry --version' still fails directly.")
+                                print_info("This might be a PATH issue if the venv's Scripts directory isn't in PATH, or if Poetry was installed globally by pip.")
+                                print_info("Will attempt to use 'python -m poetry' for subsequent Poetry commands if direct call fails.")
+                                # We don't add to winget_needs_path_check here as pip was the primary method.
+                                # We assume it's installed for now and rely on later Poetry commands.
+                                continue 
+                        except subprocess.SubprocessError as poetry_pip_e:
+                            print_warning(f"pip install poetry failed: {poetry_pip_e}. Attempting winget install for Poetry...")
+                            winget_success_poetry, _ = run_winget_install(winget_id, winget_name) # already_installed doesn't matter as much here
+                            if winget_success_poetry:
                                 installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
                             else:
-                                print_error(f"Automated installation of {winget_name} via winget also failed.")
+                                print_error(f"Automated installation of {winget_name} via pip and winget also failed.")
                                 print_info(f"Please install {cmd} manually from {url}")
                                 print_info("For Poetry, the recommended method is often via pip or their official install script.")
                                 missing.append((cmd, url))
-                    elif run_winget_install(winget_id, winget_name):
-                        # Add to a list to re-check after loop, in case PATH needs update
-                        installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
-                    else: # All automated attempts for this tool (including winget) failed
-                        if cmd == 'tesseract':
+                    else: # For other tools (not poetry, not python3 handled by ensure_python_311_and_venv)
+                        winget_success_other, _ = run_winget_install(winget_id, winget_name)
+                        if winget_success_other:
+                            installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
+                        else: # All automated attempts for this tool (including winget) failed
+                            if cmd == 'tesseract':
                             print_warning("All automated attempts to install Tesseract OCR have failed (PATH, common locations, registry, Chocolatey, winget).")
                             user_choice = input(f"{Colors.YELLOW}Would you like to skip Tesseract OCR requirement for now and in future Suna setups? (yes/no): {Colors.ENDC}").strip().lower()
                             if user_choice in ['yes', 'y']:
@@ -514,22 +607,31 @@ def check_requirements():
                 continue
             try:
                 version_check_cmd = [cmd_to_check_again, '--version']
-                if cmd == 'python3': # Ensure we check 'python --version'
-                    py_version_proc = subprocess.run(['python', '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
-                    py_version_output = py_version_proc.stdout.strip() + py_version_proc.stderr.strip()
-                    if "3.11" not in py_version_output:
-                         raise FileNotFoundError("Python 3.11 not found after winget install")
-                    print_success(f"Python 3.11 successfully verified after winget installation: {py_version_output}")
+                if cmd == 'python3': # Re-check for Python (should be sys.executable if in venv)
+                    # This re-check is mostly for consistency if winget installed it and a new shell was needed.
+                    # If already in venv, this should pass easily.
+                    py_version_recheck = get_python_version(sys.executable if os.environ.get(VENV_ACTIVATION_MARKER) == "1" else 'python')
+                    if py_version_recheck and "3.11" in py_version_recheck:
+                        print_success(f"Python 3.11 ({py_version_recheck}) successfully verified after potential installation.")
+                    else:
+                         raise FileNotFoundError(f"Python 3.11 not found or not the correct version ({py_version_recheck}) after automated install attempt.")
                 elif cmd == 'poetry' and IS_WINDOWS: 
                     try:
+                        # Try direct 'poetry --version' first
                         subprocess.run([cmd_to_check_again, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                        print_success(f"{cmd} successfully verified after installation.")
+                        print_success(f"{cmd} successfully verified after installation ('{cmd_to_check_again} --version').")
                     except (subprocess.SubprocessError, FileNotFoundError):
-                        print_warning(f"{cmd} was reportedly installed, but '{cmd_to_check_again} --version' still fails.")
-                        print_info(f"This is often a PATH issue. Ensure Python's user script directory is in your PATH.")
-                        print_info(f"Example user script directory: %APPDATA%\\Python\\Python311\\Scripts")
-                        print_info(f"Please open a new terminal and re-run the setup. If the issue persists, add {cmd} to PATH manually.")
-                        missing.append((cmd,url))
+                        # If direct call fails, try 'python -m poetry --version' as Poetry might be installed as a module
+                        print_warning(f"'{cmd_to_check_again} --version' failed. Trying '{sys.executable} -m poetry --version'.")
+                        try:
+                            subprocess.run([sys.executable, '-m', 'poetry', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                            print_success(f"{cmd} successfully verified using '{sys.executable} -m poetry --version'.")
+                        except (subprocess.SubprocessError, FileNotFoundError):
+                            print_warning(f"{cmd} was reportedly installed (e.g., via pip or winget), but neither direct call nor '{sys.executable} -m poetry' works.")
+                            print_info(f"This could be a PATH issue or incomplete installation.")
+                            print_info(f"If installed via pip into a user script dir (e.g., %APPDATA%\\Python\\Python311\\Scripts on Windows), ensure that's in PATH.")
+                            print_info(f"Please open a new terminal and re-run the setup. If the issue persists, manual PATH adjustment or reinstallation might be needed.")
+                            missing.append((cmd,url))
                 elif cmd == 'tesseract' and IS_WINDOWS:
                     try:
                         subprocess.run([cmd_to_check_again, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
@@ -566,14 +668,15 @@ def check_requirements():
                     subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
                     print_success(f"{cmd} successfully verified after automated installation.")
             except (subprocess.SubprocessError, FileNotFoundError) as e:
-                # This outer except block catches failures from the initial try for non-Tesseract tools,
-                # or if the Tesseract temporary PATH logic itself had an unexpected issue (though unlikely for SubprocessError).
-                final_error_msg = f"{cmd} was reportedly installed by an automated method, but is still not found or the correct version is not active."
-                if isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e): # This specific check might be less relevant here if Python isn't typically installed via this list
-                    final_error_msg = "Python 3.11 was reportedly installed by an automated method, but is still not the active version."
-                
+                final_error_msg = f"Verification of {cmd} failed after automated installation attempt."
+                if isinstance(e, FileNotFoundError) and cmd == 'python3':
+                    final_error_msg = f"Python 3.11 was reportedly installed, but '{sys.executable if os.environ.get(VENV_ACTIVATION_MARKER) == '1' else 'python'} --version' still fails or shows wrong version."
+
                 print_error(final_error_msg)
-                print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
+                if isinstance(e, subprocess.SubprocessError) and hasattr(e, 'stderr') and e.stderr:
+                    print_error(f"Error details: {e.stderr.strip()}")
+                
+                print_info("This could be due to the PATH environment variable not being updated in the current terminal session.")
                 print_info(f"Please open a new terminal/command prompt and re-run this setup script.")
                 print_info(f"If the problem persists, you may need to manually adjust your PATH or ensure the correct version is selected (e.g., using pyenv or similar tools for Python).")
                 missing.append((cmd, url))
@@ -1202,21 +1305,64 @@ def install_dependencies():
         print_success("Frontend dependencies installed successfully")
         
         # Lock dependencies
-        print_info("Locking dependencies...")
-        subprocess.run(
-            ['poetry', 'lock'],
-            cwd='backend',
-            check=True,
-            shell=IS_WINDOWS
-        )
+        print_info("Locking backend dependencies using poetry...")
+        poetry_base_command = [sys.executable, '-m', 'poetry'] if os.environ.get(VENV_ACTIVATION_MARKER) == "1" else ['poetry']
+        
+        lock_command = poetry_base_command + ['lock', '--no-update'] # Use --no-update to respect pyproject.toml versions unless strictly necessary
+        print_info(f"Executing: {' '.join(lock_command)} in backend directory")
+        try:
+            subprocess.run(
+                lock_command,
+                cwd='backend',
+                check=True,
+                shell=IS_WINDOWS # shell=True if 'poetry' might be a .bat or .cmd on Windows not directly executable
+            )
+            print_success("Poetry lock successful.")
+        except subprocess.SubprocessError as e_lock:
+            print_error(f"Poetry lock failed: {e_lock}")
+            # Try direct poetry if sys.executable -m poetry failed and we weren't using direct poetry already
+            if poetry_base_command[0] == sys.executable:
+                print_info("Retrying poetry lock with direct 'poetry' command...")
+                try:
+                    subprocess.run(['poetry', 'lock', '--no-update'], cwd='backend', check=True, shell=IS_WINDOWS)
+                    print_success("Poetry lock successful with direct command.")
+                except subprocess.SubprocessError as e_lock_direct:
+                    print_error(f"Direct poetry lock also failed: {e_lock_direct}")
+                    print_info("Please ensure Poetry is installed and accessible. If you installed it via pip in the venv, it might not be in PATH.")
+                    print_info("You might need to activate the venv manually or add Poetry's script directory to PATH.")
+                    return False # Exit install_dependencies due to failure
+            else: # Direct poetry already failed
+                 print_info("Please ensure Poetry is installed and accessible.")
+                 return False
+
+
         # Install backend dependencies
-        print_info("Installing backend dependencies...")
-        subprocess.run(
-            ['poetry', 'install'], 
-            cwd='backend',
-            check=True,
-            shell=IS_WINDOWS
-        )
+        print_info("Installing backend dependencies using poetry...")
+        install_command = poetry_base_command + ['install']
+        print_info(f"Executing: {' '.join(install_command)} in backend directory")
+        try:
+            subprocess.run(
+                install_command, 
+                cwd='backend',
+                check=True,
+                shell=IS_WINDOWS
+            )
+            print_success("Backend dependencies installed successfully.")
+        except subprocess.SubprocessError as e_install:
+            print_error(f"Poetry install failed: {e_install}")
+            if poetry_base_command[0] == sys.executable:
+                print_info("Retrying poetry install with direct 'poetry' command...")
+                try:
+                    subprocess.run(['poetry', 'install'], cwd='backend', check=True, shell=IS_WINDOWS)
+                    print_success("Poetry install successful with direct command.")
+                except subprocess.SubprocessError as e_install_direct:
+                    print_error(f"Direct poetry install also failed: {e_install_direct}")
+                    print_info("Please ensure Poetry is installed and accessible.")
+                    return False
+            else:
+                print_info("Please ensure Poetry is installed and accessible.")
+                return False
+            
         print_success("Backend dependencies installed successfully")
         
         return True
@@ -1329,7 +1475,7 @@ def final_instructions(use_docker=True, env_vars=None):
     if env_vars and 'llm' in env_vars and 'MODEL_TO_USE' in env_vars['llm']:
         default_model = env_vars['llm']['MODEL_TO_USE']
         print_info(f"Suna is configured to use {Colors.GREEN}{default_model}{Colors.ENDC} as the default LLM model")
-    
+
     if use_docker:
         print_info("Your Suna instance is now running!")
         print_info("Access it at: http://localhost:3000")
@@ -1363,31 +1509,189 @@ def final_instructions(use_docker=True, env_vars=None):
         print_info("4. Once all services are running, access Suna at: http://localhost:3000")
         print_info("5. Create an account using Supabase authentication to start using Suna")
 
+# Path to the virtual environment
+VENV_PATH = os.path.join(os.getcwd(), '.venv')
+PYTHON_IN_VENV = os.path.join(VENV_PATH, 'Scripts', 'python.exe') if IS_WINDOWS else os.path.join(VENV_PATH, 'bin', 'python')
+VENV_ACTIVATION_MARKER = "_SUNA_SETUP_IN_VENV_" # Environment variable to prevent re-launch loop
+
+def get_python_version(python_exe='python'):
+    """Gets the version of the specified python executable."""
+    try:
+        process = subprocess.run([python_exe, '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
+        version_output = process.stdout.strip() + process.stderr.strip() # stderr for some python versions like system python on mac
+        match = re.search(r"Python (\d+\.\d+\.\d+)", version_output)
+        if match:
+            return match.group(1)
+        return None
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+def ensure_python_311_and_venv():
+    """
+    Ensures Python 3.11 is available and the script is running in a venv with it.
+    If not, it attempts to install Python 3.11 (on Windows), create the venv,
+    and re-launch the setup script from within the venv.
+    """
+    if os.environ.get(VENV_ACTIVATION_MARKER) == "1":
+        print_info("Already running in the Suna setup virtual environment.")
+        # Verify it's actually Python 3.11 in the venv
+        current_version = get_python_version(sys.executable)
+        if current_version and "3.11" in current_version:
+            print_success(f"Confirmed Python {current_version} in venv.")
+            return # Already in the correct venv
+        else:
+            print_error(f"Running in a venv, but it's Python {current_version}, not 3.11. Please delete the .venv folder and re-run.")
+            sys.exit(1)
+
+    print_info("Checking Python 3.11 and virtual environment...")
+
+    # 1. Check if system Python is 3.11
+    system_python_executable = "python" # Default
+    python_version = get_python_version(system_python_executable)
+    if not (python_version and "3.11" in python_version):
+        if IS_WINDOWS:
+            # Try 'py -3.11' if 'python' isn't 3.11
+            python_version = get_python_version('py -3.11')
+            if python_version and "3.11" in python_version:
+                system_python_executable = 'py -3.11' # Found a way to call 3.11
+                print_success(f"Found Python {python_version} using '{system_python_executable}'.")
+            else: # 'python' and 'py -3.11' are not 3.11
+                print_warning("System Python is not 3.11. Attempting to install Python 3.11 using winget...")
+                success, already_installed = run_winget_install("Python.Python.3.11", "Python 3.11")
+                if success:
+                    if already_installed:
+                        print_info("Python 3.11 was already installed (as reported by winget).")
+                    else:
+                        print_success("Python 3.11 installed successfully via winget.")
+                    print_info("Please re-run this script in a new terminal for changes to take effect and for Python 3.11 to be detected.")
+                    sys.exit(0) # Exit for user to re-run in new terminal
+                else:
+                    print_error("Failed to install Python 3.11 using winget.")
+                    print_info("Please install Python 3.11 manually from https://www.python.org/downloads/ and ensure it's in your PATH.")
+                    sys.exit(1)
+        else: # Not Windows
+            print_error("Python 3.11 is required but not found in your PATH.")
+            print_info("Please install Python 3.11 manually from https://www.python.org/downloads/ or use your system's package manager.")
+            sys.exit(1)
+    else: # 'python' command is already 3.11
+        print_success(f"Found Python {python_version} using '{system_python_executable}'.")
+
+
+    # 2. Create or verify the virtual environment
+    if not os.path.exists(VENV_PATH):
+        print_info(f"Creating virtual environment at: {VENV_PATH} using {system_python_executable}")
+        try:
+            # Use the confirmed Python 3.11 executable to create the venv
+            subprocess.run([system_python_executable, '-m', 'venv', VENV_PATH], check=True, shell=IS_WINDOWS)
+            print_success("Virtual environment created successfully.")
+        except subprocess.SubprocessError as e:
+            print_error(f"Failed to create virtual environment: {e}")
+            sys.exit(1)
+    else: # VENV_PATH exists
+        print_info(f"Virtual environment directory '{VENV_PATH}' already exists.")
+        # Check if the Python in this venv is 3.11
+        venv_python_version = get_python_version(PYTHON_IN_VENV)
+        if venv_python_version and "3.11" in venv_python_version:
+            print_success(f"Existing venv uses Python {venv_python_version}.")
+        else:
+            print_warning(f"Existing venv at '{VENV_PATH}' does not seem to use Python 3.11 (found {venv_python_version}).")
+            recreate_venv = input(f"{Colors.YELLOW}Do you want to remove the existing .venv and recreate it? (yes/no): {Colors.ENDC}").strip().lower()
+            if recreate_venv in ['yes', 'y']:
+                try:
+                    import shutil
+                    shutil.rmtree(VENV_PATH)
+                    print_info(f"Removed existing .venv directory.")
+                    print_info(f"Creating virtual environment at: {VENV_PATH} using {system_python_executable}")
+                    subprocess.run([system_python_executable, '-m', 'venv', VENV_PATH], check=True, shell=IS_WINDOWS)
+                    print_success("Virtual environment recreated successfully.")
+                except Exception as e:
+                    print_error(f"Failed to recreate virtual environment: {e}. Please remove '.venv' manually and re-run.")
+                    sys.exit(1)
+            else:
+                print_info("Proceeding with existing .venv. If issues occur, please remove it manually and re-run.")
+
+    # 3. Re-launch script from venv if not already in it
+    print_info(f"Checking if running from venv: sys.prefix='{sys.prefix}', VENV_PATH='{os.path.abspath(VENV_PATH)}'")
+    # More robust check for venv activation:
+    # On Windows, sys.prefix for a venv is the venv path itself.
+    # On Unix, sys.prefix for a venv is also the venv path.
+    # sys.base_prefix points to the original Python installation.
+    # If they are different, we are in a venv.
+    is_in_venv = sys.prefix != sys.base_prefix 
+    
+    # Additionally, check if the venv is the one we created/expect
+    expected_venv_path_abs = os.path.abspath(VENV_PATH)
+    current_venv_path_abs = os.path.abspath(sys.prefix)
+
+    if is_in_venv and current_venv_path_abs == expected_venv_path_abs:
+        print_success(f"Correct virtual environment ('{expected_venv_path_abs}') is already active.")
+        # Set marker for subsequent checks within the same run (e.g. if ensure_python_311_and_venv is called again)
+        os.environ[VENV_ACTIVATION_MARKER] = "1"
+        # And confirm it's 3.11
+        current_version_in_venv = get_python_version(sys.executable)
+        if current_version_in_venv and "3.11" in current_version_in_venv:
+             print_success(f"Confirmed Python {current_version_in_venv} in active venv.")
+             return # All good
+        else:
+            print_error(f"Script is in the correct venv path, but Python version is {current_version_in_venv}, not 3.11. This is unexpected.")
+            print_info("Please delete the .venv folder and re-run the script.")
+            sys.exit(1)
+    else:
+        if is_in_venv:
+            print_warning(f"Script is running in a virtual environment ('{current_venv_path_abs}'), but not the expected one ('{expected_venv_path_abs}').")
+            print_info("Attempting to re-launch in the correct Suna virtual environment...")
+        else:
+             print_info("Not running in the Suna virtual environment. Attempting to re-launch...")
+
+        print_info(f"Re-launching setup with Python from: {PYTHON_IN_VENV}")
+        
+        # Set the marker environment variable before re-launching
+        os.environ[VENV_ACTIVATION_MARKER] = "1"
+        
+        try:
+            # sys.argv includes the script name as the first argument.
+            # We want to run 'python.exe setup.py install' (or other args)
+            args_for_subprocess = [PYTHON_IN_VENV] + sys.argv
+            print_info(f"Executing: {' '.join(args_for_subprocess)}")
+            
+            # For Windows, shell=True might sometimes be needed if PYTHON_IN_VENV has spaces
+            # and we are not careful with quoting, but subprocess typically handles this.
+            # Pass current environment variables, including the marker.
+            process = subprocess.Popen(args_for_subprocess, env=os.environ.copy())
+            process.wait() # Wait for the new process to complete
+            sys.exit(process.returncode) # Exit with the same code as the child process
+
+        except FileNotFoundError:
+            print_error(f"Failed to re-launch: Python executable not found at {PYTHON_IN_VENV}")
+            print_info("Ensure the virtual environment was created correctly.")
+            sys.exit(1)
+        except subprocess.SubprocessError as e:
+            print_error(f"Failed to re-launch script in virtual environment: {e}")
+            sys.exit(1)
+
 def main():
-    total_steps = 8  # Reduced by 1 since we're skipping the clone step
+    # Ensure Python 3.11 and venv are set up before anything else.
+    # This function will handle re-launching if necessary.
+    ensure_python_311_and_venv()
+
+    total_steps = 8
     current_step = 1
     
-    # Print banner
     print_banner()
     print("This wizard will guide you through setting up Suna, an open-source generalist AI agent.\n")
     
-    # Step 1: Check requirements
-    print_step(current_step, total_steps, "Checking requirements")
-    check_requirements()
+    print_step(current_step, total_steps, "Checking requirements & Environment")
+    # check_requirements() will be called, and Python 3.11 check within it should now pass
+    # because we are (or will be after re-launch) in the venv.
+    check_requirements() # Python check within this should be fine now
     check_docker_running()
     
-    # Check if we're in the Suna repository
     if not check_suna_directory():
         print_error("This setup script must be run from the Suna repository root directory.")
-        print_info("Please clone the repository first with:")
-        print_info("  git clone https://github.com/kortix-ai/suna.git")
-        print_info("  cd suna")
-        print_info("Then run this setup script again.")
         sys.exit(1)
-    
     current_step += 1
     
-    # Collect all environment variables
+    # Steps below assume we are now running in the correct Python 3.11 venv
     print_step(current_step, total_steps, "Collecting Supabase information")
     supabase_info = collect_supabase_info()
     # Set Supabase URL in environment for later use
