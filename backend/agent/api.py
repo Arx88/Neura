@@ -215,91 +215,99 @@ async def start_agent(
     user_id: str = Depends(get_current_user_id_from_jwt)
 ):
     """Start an agent for a specific thread in the background."""
-    global instance_id # Ensure instance_id is accessible
-    if not instance_id:
-        raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
-
-    # Use model from config if not specified in the request
-    model_name = body.model_name
-    logger.info(f"Original model_name from request: {model_name}")
-
-    if model_name is None:
-        model_name = config.MODEL_TO_USE
-        logger.info(f"Using model from config: {model_name}")
-
-    # Log the model name after alias resolution
-    resolved_model = MODEL_NAME_ALIASES.get(model_name, model_name)
-    logger.info(f"Resolved model name: {resolved_model}")
-
-    # Update model_name to use the resolved version
-    model_name = resolved_model
-
-    logger.info(f"Starting new agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager} (Instance: {instance_id})")
-    client = await db.client
-
-    await verify_thread_access(client, thread_id, user_id)
-    thread_result = await client.table('threads').select('project_id', 'account_id').eq('thread_id', thread_id).execute()
-    if not thread_result.data:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    thread_data = thread_result.data[0]
-    project_id = thread_data.get('project_id')
-    account_id = thread_data.get('account_id')
-
-    can_use, model_message, allowed_models = await can_use_model(client, account_id, model_name)
-    if not can_use:
-        raise HTTPException(status_code=403, detail={"message": model_message, "allowed_models": allowed_models})
-
-    can_run, message, subscription = await check_billing_status(client, account_id)
-    if not can_run:
-        raise HTTPException(status_code=402, detail={"message": message, "subscription": subscription})
-
-    active_run_id = await check_for_active_project_agent_run(client, project_id)
-    if active_run_id:
-        logger.info(f"Stopping existing agent run {active_run_id} for project {project_id}")
-        await stop_agent_run(active_run_id)
-
     try:
-        # Get project data to find sandbox ID
-        project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
-        if not project_result.data:
-            raise HTTPException(status_code=404, detail="Project not found")
-        
-        project_data = project_result.data[0]
-        sandbox_info = project_data.get('sandbox', {})
-        if not sandbox_info.get('id'):
-            raise HTTPException(status_code=404, detail="No sandbox found for this project")
+        global instance_id # Ensure instance_id is accessible
+        if not instance_id:
+            # This specific check should probably remain as it's a precondition for the API itself
+            raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
+
+        # Use model from config if not specified in the request
+        model_name = body.model_name
+        logger.info(f"Original model_name from request: {model_name}")
+
+        if model_name is None:
+            model_name = config.MODEL_TO_USE
+            logger.info(f"Using model from config: {model_name}")
+
+        # Log the model name after alias resolution
+        resolved_model = MODEL_NAME_ALIASES.get(model_name, model_name)
+        logger.info(f"Resolved model name: {resolved_model}")
+
+        # Update model_name to use the resolved version
+        model_name = resolved_model
+
+        logger.info(f"Starting new agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager} (Instance: {instance_id})")
+        client = await db.client
+
+        await verify_thread_access(client, thread_id, user_id)
+        thread_result = await client.table('threads').select('project_id', 'account_id').eq('thread_id', thread_id).execute()
+        if not thread_result.data:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        thread_data = thread_result.data[0]
+        project_id = thread_data.get('project_id')
+        account_id = thread_data.get('account_id')
+
+        can_use, model_message, allowed_models = await can_use_model(client, account_id, model_name)
+        if not can_use:
+            raise HTTPException(status_code=403, detail={"message": model_message, "allowed_models": allowed_models})
+
+        can_run, message, subscription = await check_billing_status(client, account_id)
+        if not can_run:
+            raise HTTPException(status_code=402, detail={"message": message, "subscription": subscription})
+
+        active_run_id = await check_for_active_project_agent_run(client, project_id)
+        if active_run_id:
+            logger.info(f"Stopping existing agent run {active_run_id} for project {project_id}")
+            await stop_agent_run(active_run_id)
+
+        try:
+            # Get project data to find sandbox ID
+            project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
+            if not project_result.data:
+                raise HTTPException(status_code=404, detail="Project not found")
             
-        sandbox_id = sandbox_info['id']
-        sandbox = await get_or_start_sandbox(sandbox_id)
-        logger.info(f"Successfully started sandbox {sandbox_id} for project {project_id}")
-    except Exception as e:
-        logger.error(f"Failed to start sandbox for project {project_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to initialize sandbox: {str(e)}")
+            project_data = project_result.data[0]
+            sandbox_info = project_data.get('sandbox', {})
+            if not sandbox_info.get('id'):
+                raise HTTPException(status_code=404, detail="No sandbox found for this project")
+                
+            sandbox_id = sandbox_info['id']
+            sandbox = await get_or_start_sandbox(sandbox_id)
+            logger.info(f"Successfully started sandbox {sandbox_id} for project {project_id}")
+        except Exception as e_sandbox: # Keep existing specific exception handling for sandbox
+            logger.error(f"Failed to start sandbox for project {project_id}: {str(e_sandbox)}") # Existing log
+            raise HTTPException(status_code=500, detail=f"Failed to initialize sandbox: {str(e_sandbox)}") # Existing raise
 
-    agent_run = await client.table('agent_runs').insert({
-        "thread_id": thread_id, "status": "running",
-        "started_at": datetime.now(timezone.utc).isoformat()
-    }).execute()
-    agent_run_id = agent_run.data[0]['id']
-    logger.info(f"Created new agent run: {agent_run_id}")
+        agent_run = await client.table('agent_runs').insert({
+            "thread_id": thread_id, "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat()
+        }).execute()
+        agent_run_id = agent_run.data[0]['id']
+        logger.info(f"Created new agent run: {agent_run_id}")
 
-    # Register this run in Redis with TTL using instance ID
-    instance_key = f"active_run:{instance_id}:{agent_run_id}"
-    try:
-        await redis.set(instance_key, "running", ex=redis.REDIS_KEY_TTL)
-    except Exception as e:
-        logger.warning(f"Failed to register agent run in Redis ({instance_key}): {str(e)}")
+        # Register this run in Redis with TTL using instance ID
+        instance_key = f"active_run:{instance_id}:{agent_run_id}"
+        try:
+            await redis.set(instance_key, "running", ex=redis.REDIS_KEY_TTL)
+        except Exception as e_redis: # More specific logging for Redis error
+            logger.warning(f"Failed to register agent run in Redis ({instance_key}): {str(e_redis)}")
+            # Depending on policy, you might want to raise here or allow continuing without Redis registration
 
-    # Run the agent in the background
-    run_agent_background.send(
-        agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
-        project_id=project_id,
-        model_name=model_name,  # Already resolved above
-        enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
-        stream=body.stream, enable_context_manager=body.enable_context_manager
-    )
+        # Run the agent in the background
+        run_agent_background.send(
+            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+            project_id=project_id,
+            model_name=model_name,  # Already resolved above
+            enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
+            stream=body.stream, enable_context_manager=body.enable_context_manager
+        )
 
-    return {"agent_run_id": agent_run_id, "status": "running"}
+        return {"agent_run_id": agent_run_id, "status": "running"}
+
+    except Exception as e: # New outer catch-all
+        logger.error(f"Error in start_agent for thread {thread_id}: {str(e)}", exc_info=True)
+        # Potentially add cleanup logic here if needed, similar to initiate_agent_with_files
+        raise HTTPException(status_code=500, detail=f"Failed to start agent: {str(e)}")
 
 @router.post("/agent-run/{agent_run_id}/stop")
 async def stop_agent(agent_run_id: str, user_id: str = Depends(get_current_user_id_from_jwt)):
