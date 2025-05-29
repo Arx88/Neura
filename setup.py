@@ -561,27 +561,19 @@ def check_requirements():
                             print_info(f"Attempting to install Poetry using: {' '.join(pip_install_cmd)}")
                             subprocess.run(pip_install_cmd, check=True, shell=IS_WINDOWS)
                             print_success("Poetry installed successfully using pip in the current environment.")
-                            # Re-check poetry
-                            try:
-                                # If Poetry is installed into the venv's scripts, it should be found.
-                                # On Windows, this might require the venv to be active in the PATH,
-                                # or calling poetry via `python -m poetry`.
-                                # For simplicity, let's assume if pip install works, poetry command will be available
-                                # or poetry can be run via `python -m poetry`.
-                                # We will rely on the later `poetry lock` and `poetry install` commands to truly fail
-                                # if poetry is not usable.
-                                subprocess.run(['poetry', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                                print_success("Poetry successfully verified after pip installation ('poetry --version').")
-                                continue # Installed, so skip to next requirement
-                            except (subprocess.SubprocessError, FileNotFoundError):
-                                print_warning("Poetry installed via pip, but 'poetry --version' still fails directly.")
-                                print_info("This might be a PATH issue if the venv's Scripts directory isn't in PATH, or if Poetry was installed globally by pip.")
-                                print_info("Will attempt to use 'python -m poetry' for subsequent Poetry commands if direct call fails.")
-                                # We don't add to winget_needs_path_check here as pip was the primary method.
-                                # We assume it's installed for now and rely on later Poetry commands.
-                                continue 
+                            
+                            # Verify the pip-installed Poetry using its direct path in the venv
+                            poetry_in_venv_scripts = os.path.join(VENV_PATH, 'Scripts', 'poetry.exe')
+                            print_info(f"Verifying Poetry at {poetry_in_venv_scripts}...")
+                            # This subprocess.run will raise SubprocessError if it fails (due to check=True)
+                            # and be caught by the outer `except subprocess.SubprocessError as poetry_pip_e`
+                            subprocess.run([poetry_in_venv_scripts, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                            print_success(f"Poetry successfully verified at {poetry_in_venv_scripts} ('--version').")
+                            continue # Successfully installed and verified via pip, skip to next requirement
+
                         except subprocess.SubprocessError as poetry_pip_e:
-                            print_warning(f"pip install poetry failed: {poetry_pip_e}. Attempting winget install for Poetry...")
+                            # This block catches failures from 'pip install poetry' OR from the verification of 'poetry.exe --version'
+                            print_warning(f"Poetry installation via pip or its verification failed: {poetry_pip_e}. Attempting winget install for Poetry...")
                             winget_success_poetry, _ = run_winget_install(winget_id, winget_name) # already_installed doesn't matter as much here
                             if winget_success_poetry:
                                 installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
@@ -1691,38 +1683,67 @@ def install_dependencies(dependencies_installed=False):
         
         # Lock dependencies
         print_info("Locking backend dependencies using poetry...")
-        poetry_base_command = [sys.executable, '-m', 'poetry'] if os.environ.get(VENV_ACTIVATION_MARKER) == "1" else ['poetry']
+
+        poetry_exe_in_venv = os.path.join(VENV_PATH, 'Scripts', 'poetry.exe') # For Windows
+
+        # Check if the venv poetry executable exists
+        if IS_WINDOWS and os.path.isfile(poetry_exe_in_venv): # Only check this specific path on Windows
+            poetry_base_command = [poetry_exe_in_venv]
+            print_info(f"Using Poetry executable from venv: {poetry_exe_in_venv}")
+        elif os.environ.get(VENV_ACTIVATION_MARKER) == "1" and not IS_WINDOWS: # Non-Windows, in venv
+             poetry_base_command = [sys.executable, '-m', 'poetry']
+             print_info(f"Using '{sys.executable} -m poetry' for Poetry in activated venv.")
+        else: # Fallback for non-Windows not in venv, or Windows if poetry.exe not in venv Scripts
+            print_warning(f"Poetry executable not found at {poetry_exe_in_venv} (or not on Windows). Falling back to 'poetry' command directly.")
+            print_warning("This might use a global Poetry installation or rely on 'python -m poetry' if 'poetry' is not in PATH.")
+            poetry_base_command = ['poetry']
         
-        lock_command = poetry_base_command + ['lock', '--no-update'] # Use --no-update to respect pyproject.toml versions unless strictly necessary
+        lock_command = poetry_base_command + ['lock', '--no-update']
         print_info(f"Executing: {' '.join(lock_command)} in backend directory")
         try:
             subprocess.run(
                 lock_command,
                 cwd='backend',
                 check=True,
-                shell=IS_WINDOWS # shell=True if 'poetry' might be a .bat or .cmd on Windows not directly executable
+                shell=IS_WINDOWS # shell=True because poetry_base_command might be just 'poetry'
             )
             print_success("Poetry lock successful.")
         except subprocess.SubprocessError as e_lock:
-            print_error(f"Poetry lock failed: {e_lock}")
-            # Try direct poetry if sys.executable -m poetry failed and we weren't using direct poetry already
-            if poetry_base_command[0] == sys.executable:
+            print_error(f"Poetry lock failed with '{' '.join(lock_command)}': {e_lock}")
+            # If the initial attempt was with poetry_exe_in_venv (Windows specific path) and it failed,
+            # and we hadn't already fallen back to direct 'poetry'
+            if IS_WINDOWS and poetry_base_command[0] == poetry_exe_in_venv:
                 print_info("Retrying poetry lock with direct 'poetry' command...")
                 try:
                     subprocess.run(['poetry', 'lock', '--no-update'], cwd='backend', check=True, shell=IS_WINDOWS)
-                    print_success("Poetry lock successful with direct command.")
+                    print_success("Poetry lock successful with direct 'poetry' command.")
                 except subprocess.SubprocessError as e_lock_direct:
-                    print_error(f"Direct poetry lock also failed: {e_lock_direct}")
+                    print_error(f"Direct 'poetry lock' also failed: {e_lock_direct}")
                     print_info("Please ensure Poetry is installed and accessible. If you installed it via pip in the venv, it might not be in PATH.")
                     print_info("You might need to activate the venv manually or add Poetry's script directory to PATH.")
                     return False # Exit install_dependencies due to failure
-            else: # Direct poetry already failed
-                 print_info("Please ensure Poetry is installed and accessible.")
+            # If the initial attempt was with 'python -m poetry' (non-Windows venv)
+            elif not IS_WINDOWS and poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
+                print_info("Retrying poetry lock with direct 'poetry' command...")
+                try:
+                    subprocess.run(['poetry', 'lock', '--no-update'], cwd='backend', check=True, shell=IS_WINDOWS) # shell=IS_WINDOWS is fine here too
+                    print_success("Poetry lock successful with direct 'poetry' command.")
+                except subprocess.SubprocessError as e_lock_direct_non_win:
+                    print_error(f"Direct 'poetry lock' also failed on non-Windows: {e_lock_direct_non_win}")
+                    print_info("Please ensure Poetry is installed and in your PATH.")
+                    return False
+            else: # Direct poetry (the fallback) already failed, or some other unhandled case
+                 print_info("Poetry lock failed. Please ensure Poetry is installed and accessible.")
                  return False
-
 
         # Install backend dependencies
         print_info("Installing backend dependencies using poetry...")
+        # poetry_base_command is already defined and potentially updated by successful fallback in lock
+        # However, we should re-evaluate poetry_base_command for install, in case lock succeeded with a fallback
+        # and we want to use that successful command for install too.
+        # For simplicity, the original logic just reuses the initially determined poetry_base_command.
+        # The provided refactor plan implies the same.
+
         install_command = poetry_base_command + ['install']
         print_info(f"Executing: {' '.join(install_command)} in backend directory")
         try:
@@ -1734,25 +1755,34 @@ def install_dependencies(dependencies_installed=False):
             )
             print_success("Backend dependencies installed successfully.")
         except subprocess.SubprocessError as e_install:
-            print_error(f"Poetry install failed: {e_install}")
-            if poetry_base_command[0] == sys.executable:
+            print_error(f"Poetry install failed with '{' '.join(install_command)}': {e_install}")
+            if IS_WINDOWS and poetry_base_command[0] == poetry_exe_in_venv:
                 print_info("Retrying poetry install with direct 'poetry' command...")
                 try:
                     subprocess.run(['poetry', 'install'], cwd='backend', check=True, shell=IS_WINDOWS)
-                    print_success("Poetry install successful with direct command.")
+                    print_success("Poetry install successful with direct 'poetry' command.")
                 except subprocess.SubprocessError as e_install_direct:
-                    print_error(f"Direct poetry install also failed: {e_install_direct}")
+                    print_error(f"Direct 'poetry install' also failed: {e_install_direct}")
                     print_info("Please ensure Poetry is installed and accessible.")
                     return False
+            elif not IS_WINDOWS and poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
+                 print_info("Retrying poetry install with direct 'poetry' command...")
+                 try:
+                    subprocess.run(['poetry', 'install'], cwd='backend', check=True, shell=IS_WINDOWS)
+                    print_success("Poetry install successful with direct 'poetry' command.")
+                 except subprocess.SubprocessError as e_install_direct_non_win:
+                    print_error(f"Direct 'poetry install' also failed on non-Windows: {e_install_direct_non_win}")
+                    print_info("Please ensure Poetry is installed and in your PATH.")
+                    return False
             else:
-                print_info("Please ensure Poetry is installed and accessible.")
+                print_info("Poetry install failed. Please ensure Poetry is installed and accessible.")
                 return False
             
-        print_success("Backend dependencies installed successfully")
+        print_success("Backend dependencies installed successfully") # This line seems redundant if previous try/except handles all paths
         
         return True
-    except subprocess.SubprocessError as e:
-        print_error(f"Failed to install dependencies: {e}")
+    except subprocess.SubprocessError as e: # This top-level except might be for npm install?
+        print_error(f"Failed to install dependencies: {e}") # More specific message if possible
         print_info("You may need to install them manually.")
         return False
 
