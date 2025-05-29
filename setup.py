@@ -1364,31 +1364,76 @@ def setup_supabase():
         installation_attempted = False
 
         if IS_WINDOWS:
-            print_info("Attempting to install Supabase CLI using Scoop for Windows...")
+            scoop_available_in_session = False
+            # Try to detect Scoop first
             try:
                 subprocess.run(['scoop', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
-                print_info("Scoop is available. Attempting to install Supabase CLI...")
+                print_info("Scoop is available.")
+                scoop_available_in_session = True
+            except (subprocess.SubprocessError, FileNotFoundError):
+                # Scoop is not found, attempt to install it
+                print_info("Scoop not found. Attempting to install Scoop...")
                 try:
-                    subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True)
+                    # Command to set execution policy and install Scoop
+                    scoop_install_command = 'powershell -ExecutionPolicy Bypass -Command "Set-ExecutionPolicy RemoteSigned -scope CurrentUser -Force; irm get.scoop.sh | iex"'
+                    print_info(f"Executing Scoop install: {scoop_install_command}")
+                    scoop_install_process = subprocess.run(
+                        scoop_install_command,
+                        shell=True, check=True, capture_output=True, text=True
+                    )
+                    print_success("Scoop installation script executed successfully.")
+                    # Showing stdout/stderr for scoop install can be very verbose, only show on error or if debug needed.
+                    # if scoop_install_process.stdout: print_info(f"Scoop install stdout:\n{scoop_install_process.stdout}")
+                    # if scoop_install_process.stderr: print_warning(f"Scoop install stderr:\n{scoop_install_process.stderr}")
+                    
+                    print_warning("Scoop installation attempted. This may require opening a new terminal for PATH changes to take full effect.")
+                    print_info("Attempting to verify Scoop installation in the current session...")
+                    try:
+                        # Try to run scoop --version again
+                        subprocess.run(['scoop', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                        print_success("Scoop successfully verified in current session after installation attempt.")
+                        scoop_available_in_session = True
+                    except (subprocess.SubprocessError, FileNotFoundError) as e_scoop_verify_after_install:
+                        print_error(f"Scoop was installed, but 'scoop --version' still fails in this session: {e_scoop_verify_after_install}")
+                        manual_install_message += " (Scoop installed, but PATH update likely needed. Please re-run setup in a new terminal)."
+                        print_info(manual_install_message)
+                        sys.exit(1) # Critical: if scoop was "installed" but isn't usable, user must intervene.
+                except subprocess.SubprocessError as e_scoop_install:
+                    print_error(f"Failed to install Scoop automatically: {e_scoop_install}")
+                    # Provide more details from the failed process
+                    if hasattr(e_scoop_install, 'stdout') and e_scoop_install.stdout:
+                        print_error(f"Scoop install stdout:\n{e_scoop_install.stdout}")
+                    if hasattr(e_scoop_install, 'stderr') and e_scoop_install.stderr:
+                        print_error(f"Scoop install stderr:\n{e_scoop_install.stderr}")
+                    manual_install_message += " (Automated Scoop installation failed)."
+                    # Fall through, scoop_available_in_session remains False
+                except FileNotFoundError: # powershell.exe not found
+                    print_error("PowerShell not found. Cannot attempt Scoop installation.")
+                    manual_install_message += " (PowerShell not found, so Scoop could not be installed automatically)."
+                    # Fall through, scoop_available_in_session remains False
+
+            if scoop_available_in_session:
+                print_info("Attempting to install Supabase CLI using Scoop...")
+                try:
+                    subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True, capture_output=True, text=True)
                     print_success("Supabase CLI installation via Scoop initiated.")
                     installation_attempted = True
-                except subprocess.SubprocessError:
-                    print_warning("Failed to install Supabase CLI with 'scoop install supabase'.")
+                except subprocess.SubprocessError as e_supabase_scoop:
+                    print_warning(f"Failed to install Supabase CLI with 'scoop install supabase': {e_supabase_scoop.stderr if e_supabase_scoop.stderr else e_supabase_scoop}")
                     print_info("Attempting to add Supabase bucket and retry...")
                     try:
-                        subprocess.run(['scoop', 'bucket', 'add', 'supabase', 'https://github.com/supabase/scoop-bucket.git'], check=True, shell=True)
+                        subprocess.run(['scoop', 'bucket', 'add', 'supabase', 'https://github.com/supabase/scoop-bucket.git'], check=True, shell=True, capture_output=True, text=True)
                         print_success("Supabase Scoop bucket added.")
-                        subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True)
+                        subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True, capture_output=True, text=True)
                         print_success("Supabase CLI installation via Scoop (after adding bucket) initiated.")
                         installation_attempted = True
                     except subprocess.SubprocessError as e_scoop_retry:
-                        print_error(f"Failed to install Supabase CLI via Scoop even after adding bucket: {e_scoop_retry}")
-                        manual_install_message += " (Scoop install failed. You can download the Windows binary or use WSL with other package managers)."
+                        print_error(f"Failed to install Supabase CLI via Scoop even after adding bucket: {e_scoop_retry.stderr if hasattr(e_scoop_retry, 'stderr') and e_scoop_retry.stderr else str(e_scoop_retry)}")
+                        manual_install_message += " (Scoop available, but Supabase CLI install via Scoop failed)."
+            # If scoop_available_in_session is False (either initially or because auto-install failed/wasn't usable):
+            # The manual_install_message should have been updated in the clauses above.
+            # The script will then proceed to the 'if not installation_attempted:' block later.
 
-            except (subprocess.SubprocessError, FileNotFoundError):
-                print_warning("Scoop not found or not working. Scoop is a recommended way to install Supabase CLI on Windows.")
-                manual_install_message += " (Scoop not found. Consider installing Scoop, or download the Windows binary, or use WSL)."
-        
         elif platform.system() == 'Darwin' or platform.system() == 'Linux':
             system_name = "macOS" if platform.system() == 'Darwin' else "Linux"
             print_info(f"Attempting to install Supabase CLI using Homebrew for {system_name}...")
@@ -1419,12 +1464,17 @@ def setup_supabase():
             except (subprocess.SubprocessError, FileNotFoundError):
                 print_error("Supabase CLI was reportedly installed, but 'supabase --version' still fails.")
                 print_info("This could be a PATH issue. Please open a new terminal/command prompt and re-run this setup script.")
-                print_info(manual_install_message) # Provide specific manual install message
-                sys.exit(1)
-        else: # No installation method was successful or applicable
+                print_info(manual_install_message)
+                sys.exit(1) # Exit if Supabase CLI verification fails after an attempt
+        
+        # This block is reached if:
+        # 1. IS_WINDOWS was true, but scoop_available_in_session ended up false AND installation_attempted (for Supabase CLI) remained false.
+        # 2. Or, if it wasn't Windows/macOS/Linux.
+        # 3. Or, if an installation method for other OS was attempted but failed, and installation_attempted is still false.
+        if not installation_attempted: # If no installation path was successfully completed for Supabase CLI
             print_error("Supabase CLI is not installed and no automated installation method succeeded or was applicable for your OS.")
-            print_info(manual_install_message)
-            print_info("After installing, please re-run this setup script.")
+            print_info(manual_install_message) # This message should now contain context about Scoop/Brew attempts if any.
+            print_info("After installing Supabase CLI manually, please re-run this setup script.")
             sys.exit(1)
 
     # Extract project reference from Supabase URL
