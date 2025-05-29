@@ -1493,6 +1493,15 @@ def setup_supabase(existing_config={}, setup_completed=False):
                     # Showing stdout/stderr for scoop install can be very verbose, only show on error or if debug needed.
                     # if scoop_install_process.stdout: print_info(f"Scoop install stdout:\n{scoop_install_process.stdout}")
                     # if scoop_install_process.stderr: print_warning(f"Scoop install stderr:\n{scoop_install_process.stderr}")
+
+                    print_info("Attempting to locate Scoop shims directory to update PATH for current session...")
+                    user_home = os.path.expanduser("~")
+                    scoop_shims_path = os.path.join(user_home, "scoop", "shims")
+                    if os.path.isdir(scoop_shims_path):
+                        print_info(f"Found Scoop shims at {scoop_shims_path}. Prepending to PATH for this session.")
+                        os.environ["PATH"] = scoop_shims_path + os.pathsep + os.environ.get("PATH", "")
+                    else:
+                        print_warning(f"Scoop shims directory not found at expected location: {scoop_shims_path}. PATH not modified.")
                     
                     print_warning("Scoop installation attempted. This may require opening a new terminal for PATH changes to take full effect.")
                     print_info("Attempting to verify Scoop installation in the current session...")
@@ -1507,13 +1516,13 @@ def setup_supabase(existing_config={}, setup_completed=False):
                         print_info(manual_install_message)
                         sys.exit(1) # Critical: if scoop was "installed" but isn't usable, user must intervene.
                 except subprocess.SubprocessError as e_scoop_install:
-                    print_error(f"Failed to install Scoop automatically: {e_scoop_install}")
-                    # Provide more details from the failed process
-                    if hasattr(e_scoop_install, 'stdout') and e_scoop_install.stdout:
-                        print_error(f"Scoop install stdout:\n{e_scoop_install.stdout}")
-                    if hasattr(e_scoop_install, 'stderr') and e_scoop_install.stderr:
-                        print_error(f"Scoop install stderr:\n{e_scoop_install.stderr}")
-                    manual_install_message += " (Automated Scoop installation failed)."
+                    print_error(f"Automated Scoop installation via PowerShell failed: {e_scoop_install}")
+                    if hasattr(e_scoop_install, 'stdout') and e_scoop_install.stdout and e_scoop_install.stdout.strip():
+                        print_error(f"Scoop PowerShell install stdout:\n{e_scoop_install.stdout.strip()}")
+                    if hasattr(e_scoop_install, 'stderr') and e_scoop_install.stderr and e_scoop_install.stderr.strip():
+                        print_error(f"Scoop PowerShell install stderr:\n{e_scoop_install.stderr.strip()}")
+                    print_info("This might be due to PowerShell execution policies or other system restrictions.")
+                    manual_install_message += " (Automated Scoop installation via PowerShell failed)."
                     # Fall through, scoop_available_in_session remains False
                 except FileNotFoundError: # powershell.exe not found
                     print_error("PowerShell not found. Cannot attempt Scoop installation.")
@@ -1527,17 +1536,26 @@ def setup_supabase(existing_config={}, setup_completed=False):
                     print_success("Supabase CLI installation via Scoop initiated.")
                     installation_attempted = True
                 except subprocess.SubprocessError as e_supabase_scoop:
-                    print_warning(f"Failed to install Supabase CLI with 'scoop install supabase': {e_supabase_scoop.stderr if e_supabase_scoop.stderr else e_supabase_scoop}")
-                    print_info("Attempting to add Supabase bucket and retry...")
+                    print_warning(f"Initial 'scoop install supabase' failed: {e_supabase_scoop}")
+                    if hasattr(e_supabase_scoop, 'stdout') and e_supabase_scoop.stdout and e_supabase_scoop.stdout.strip():
+                        print_warning(f"Scoop install (1st attempt) stdout:\n{e_supabase_scoop.stdout.strip()}")
+                    if hasattr(e_supabase_scoop, 'stderr') and e_supabase_scoop.stderr and e_supabase_scoop.stderr.strip():
+                        print_warning(f"Scoop install (1st attempt) stderr:\n{e_supabase_scoop.stderr.strip()}")
+                    print_info("This can happen if the Supabase bucket isn't added to Scoop. Attempting to add bucket and retry...")
                     try:
                         subprocess.run(['scoop', 'bucket', 'add', 'supabase', 'https://github.com/supabase/scoop-bucket.git'], check=True, shell=True, capture_output=True, text=True)
-                        print_success("Supabase Scoop bucket added.")
+                        print_success("Supabase Scoop bucket added successfully.")
+                        print_info("Retrying 'scoop install supabase'...")
                         subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True, capture_output=True, text=True)
-                        print_success("Supabase CLI installation via Scoop (after adding bucket) initiated.")
+                        print_success("Supabase CLI installation via Scoop (after adding bucket) initiated successfully.")
                         installation_attempted = True
                     except subprocess.SubprocessError as e_scoop_retry:
-                        print_error(f"Failed to install Supabase CLI via Scoop even after adding bucket: {e_scoop_retry.stderr if hasattr(e_scoop_retry, 'stderr') and e_scoop_retry.stderr else str(e_scoop_retry)}")
-                        manual_install_message += " (Scoop available, but Supabase CLI install via Scoop failed)."
+                        print_error(f"Failed to install Supabase CLI via Scoop even after adding bucket: {e_scoop_retry}")
+                        if hasattr(e_scoop_retry, 'stdout') and e_scoop_retry.stdout and e_scoop_retry.stdout.strip():
+                            print_error(f"Scoop install (2nd attempt) stdout:\n{e_scoop_retry.stdout.strip()}")
+                        if hasattr(e_scoop_retry, 'stderr') and e_scoop_retry.stderr and e_scoop_retry.stderr.strip():
+                            print_error(f"Scoop install (2nd attempt) stderr:\n{e_scoop_retry.stderr.strip()}")
+                        manual_install_message += " (Scoop available, but Supabase CLI install via Scoop failed even after bucket add)."
             # If scoop_available_in_session is False (either initially or because auto-install failed/wasn't usable):
             # The manual_install_message should have been updated in the clauses above.
             # The script will then proceed to the 'if not installation_attempted:' block later.
@@ -1570,9 +1588,20 @@ def setup_supabase(existing_config={}, setup_completed=False):
                 )
                 print_success("Supabase CLI successfully installed and verified.")
             except (subprocess.SubprocessError, FileNotFoundError):
-                print_error("Supabase CLI was reportedly installed, but 'supabase --version' still fails.")
-                print_info("This could be a PATH issue. Please open a new terminal/command prompt and re-run this setup script.")
-                print_info(manual_install_message)
+                print_error("Supabase CLI was reportedly installed (e.g., via Scoop or Homebrew), but 'supabase --version' still fails in this session.")
+                print_info("This could be due to PATH environment variable issues not fully resolved in the current session, or an incomplete installation.")
+                if IS_WINDOWS and scoop_available_in_session : # More specific guidance if Scoop was involved
+                    print_info("Since Scoop was used on Windows, please try the following in a NEW PowerShell terminal:")
+                    print_info("  1. Run 'scoop --version'.")
+                    print_info("     - If this fails, Scoop is not correctly installed or its shims directory (usually C:\\Users\\YourUser\\scoop\\shims) is not in your PATH. Please verify your Scoop installation and PATH.")
+                    print_info("  2. If 'scoop --version' works, run 'scoop install supabase' (it might say it's already installed, which is fine).")
+                    print_info("  3. Then, run 'supabase --version'.")
+                    print_info("  4. If all these manual steps succeed in the new terminal, please re-run this setup script (`python setup.py`).")
+                else: # General guidance for other OS or if Scoop wasn't the method
+                    print_info("Please open a new terminal/command prompt and try running 'supabase --version' there.")
+                    print_info("If it works in the new terminal, re-run this setup script from that new terminal.")
+                    print_info("If it still fails, you may need to troubleshoot your Supabase CLI installation or PATH configuration manually.")
+                print_info(f"Original installation guidance if needed: {manual_install_message}")
                 sys.exit(1) # Exit if Supabase CLI verification fails after an attempt
         
         # This block is reached if:
