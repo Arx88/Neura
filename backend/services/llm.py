@@ -105,6 +105,7 @@ def prepare_params(
     reasoning_effort: Optional[str] = 'low'
 ) -> Dict[str, Any]:
     """Prepare parameters for the API call."""
+    logger.debug(f"prepare_params: Received model_name: '{model_name}'")
     params = {
         "model": model_name,
         "messages": messages,
@@ -151,6 +152,7 @@ def prepare_params(
     # Add OpenRouter-specific parameters
     if model_name.startswith("openrouter/"):
         logger.debug(f"Preparing OpenRouter parameters for model: {model_name}")
+        logger.info(f"prepare_params: OpenRouter model detected. OPENROUTER_API_KEY from env: {'Present' if os.environ.get('OPENROUTER_API_KEY') else 'Not Set'}")
 
         # Add optional site URL and app name from config
         site_url = config.OR_SITE_URL
@@ -170,6 +172,8 @@ def prepare_params(
             logger.debug(f"Set Ollama API base to: {config.OLLAMA_API_BASE}")
         else:
             logger.debug("No OLLAMA_API_BASE configured, Ollama will use default.")
+        
+        logger.info(f"prepare_params: Ollama model detected. Using OLLAMA_API_BASE: '{params.get('api_base', 'LiteLLM default')}'")
 
         # Ensure api_key is None for Ollama if it's not a non-empty string
         if config.OLLAMA_API_KEY and config.OLLAMA_API_KEY.strip(): # Checks if key exists and is not just whitespace
@@ -178,6 +182,8 @@ def prepare_params(
         else:
             params["api_key"] = None
             logger.debug("No OLLAMA_API_KEY provided or key is empty. Setting api_key to None for Ollama to ensure no authentication is attempted.")
+        
+        logger.info(f"prepare_params: Ollama API key status: {'Provided in config' if params.get('api_key') else 'Not provided or empty, using None'}")
 
         # Prevent OpenRouter interference for Ollama calls
         if params.get("extra_headers"):
@@ -280,6 +286,14 @@ def prepare_params(
         params["temperature"] = 1.0 # Required by Anthropic when reasoning_effort is used
         logger.info(f"Anthropic thinking enabled with reasoning_effort='{effort_level}'")
 
+    log_params_summary = {
+        "model": params.get("model"),
+        "api_base": params.get("api_base"),
+        "api_key_present": bool(params.get("api_key")),
+        "stream": params.get("stream"),
+        "tools_present": bool(params.get("tools"))
+    }
+    logger.debug(f"prepare_params: Returning parameters: {log_params_summary}")
     return params
 
 async def make_llm_api_call(
@@ -347,22 +361,51 @@ async def make_llm_api_call(
     for attempt in range(MAX_RETRIES):
         try:
             logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES}")
+            logger.info(f"make_llm_api_call: Attempting litellm.acompletion with model: '{params['model']}', api_base: '{params.get('api_base')}', api_key_present: {bool(params.get('api_key'))}, stream: {params['stream']}")
             # logger.debug(f"API request parameters: {json.dumps(params, indent=2)}")
 
             response = await litellm.acompletion(**params)
-            logger.debug(f"Successfully received API response from {model_name}")
+            logger.info(f"make_llm_api_call: litellm.acompletion call successful for model '{params['model']}' on attempt {attempt + 1}")
+            # logger.debug(f"Successfully received API response from {model_name}") # Reemplazado por el de arriba
             logger.debug(f"Response: {response}")
             return response
 
-        except (litellm.exceptions.RateLimitError, OpenAIError, json.JSONDecodeError) as e:
+        except litellm.exceptions.APIConnectionError as e:
             last_error = e
+            logger.error(f"make_llm_api_call: LiteLLM APIConnectionError on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}' with api_base '{params.get('api_base')}'. Error: {e}", exc_info=True)
+            await handle_error(e, attempt, MAX_RETRIES)
+
+        except litellm.exceptions.AuthenticationError as e:
+            last_error = e
+            api_key_env_var_name = params['model'].split('/')[0].upper() + '_API_KEY' if '/' in params['model'] else "LITELLM_API_KEY" # Heurística para el nombre de la variable de entorno
+            logger.error(f"make_llm_api_call: LiteLLM AuthenticationError on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}'. API key in params: {bool(params.get('api_key'))}, API key in env ({api_key_env_var_name}): {bool(os.environ.get(api_key_env_var_name))}. Error: {e}", exc_info=True)
+            await handle_error(e, attempt, MAX_RETRIES)
+
+        except litellm.exceptions.RateLimitError as e:
+            last_error = e
+            logger.warning(f"make_llm_api_call: LiteLLM RateLimitError on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}'. Error: {e}", exc_info=True)
+            await handle_error(e, attempt, MAX_RETRIES)
+        
+        except litellm.exceptions.APIError as e: 
+            last_error = e
+            logger.error(f"make_llm_api_call: LiteLLM APIError on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}'. Error: {e}", exc_info=True)
+            await handle_error(e, attempt, MAX_RETRIES)
+
+        except OpenAIError as e: 
+            last_error = e
+            logger.error(f"make_llm_api_call: OpenAIError (possibly from litellm) on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}'. Error: {e}", exc_info=True)
+            await handle_error(e, attempt, MAX_RETRIES)
+        
+        except json.JSONDecodeError as e: 
+            last_error = e
+            logger.error(f"make_llm_api_call: JSONDecodeError on attempt {attempt + 1}/{MAX_RETRIES} for model '{params['model']}'. Error: {e}", exc_info=True)
             await handle_error(e, attempt, MAX_RETRIES)
 
         except Exception as e:
-            logger.error(f"Unexpected error during API call: {str(e)}", exc_info=True)
-            raise LLMError(f"API call failed: {str(e)}")
+            logger.error(f"Unexpected error during API call for model '{params['model']}': {str(e)}", exc_info=True)
+            raise LLMError(f"API call failed for model '{params['model']}': {str(e)}")
 
-    error_msg = f"Failed to make API call after {MAX_RETRIES} attempts"
+    error_msg = f"Failed to make API call to model '{params['model']}' after {MAX_RETRIES} attempts"
     if last_error:
         error_msg += f". Last error: {str(last_error)}"
     logger.error(error_msg, exc_info=True)
