@@ -1698,7 +1698,7 @@ def install_dependencies(dependencies_installed=False):
             print_warning("This might use a global Poetry installation or rely on 'python -m poetry' if 'poetry' is not in PATH.")
             poetry_base_command = ['poetry']
         
-        lock_command = poetry_base_command + ['lock', '--no-update']
+        lock_command = poetry_base_command + ['lock']
         print_info(f"Executing: {' '.join(lock_command)} in backend directory")
         # Determine shell mode for the primary attempt
         # Use shell=True on Windows only if poetry_base_command is just ['poetry']
@@ -1719,7 +1719,7 @@ def install_dependencies(dependencies_installed=False):
             if IS_WINDOWS and poetry_base_command[0] == poetry_exe_in_venv:
                 print_info("Retrying poetry lock with direct 'poetry' command...")
                 try:
-                    subprocess.run(['poetry', 'lock', '--no-update'], cwd='backend', check=True, shell=IS_WINDOWS)
+                    subprocess.run(['poetry', 'lock'], cwd='backend', check=True, shell=IS_WINDOWS)
                     print_success("Poetry lock successful with direct 'poetry' command.")
                 except subprocess.SubprocessError as e_lock_direct:
                     print_error(f"Direct 'poetry lock' also failed: {e_lock_direct}")
@@ -1730,7 +1730,7 @@ def install_dependencies(dependencies_installed=False):
             elif not IS_WINDOWS and poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
                 print_info("Retrying poetry lock with direct 'poetry' command...")
                 try:
-                    subprocess.run(['poetry', 'lock', '--no-update'], cwd='backend', check=True, shell=IS_WINDOWS) # shell=IS_WINDOWS is fine here too
+                    subprocess.run(['poetry', 'lock'], cwd='backend', check=True, shell=IS_WINDOWS) # shell=IS_WINDOWS is fine here too
                     print_success("Poetry lock successful with direct 'poetry' command.")
                 except subprocess.SubprocessError as e_lock_direct_non_win:
                     print_error(f"Direct 'poetry lock' also failed on non-Windows: {e_lock_direct_non_win}")
