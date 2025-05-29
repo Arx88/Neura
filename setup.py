@@ -888,8 +888,25 @@ def validate_api_key(api_key, allow_empty=False):
     # Basic check: not empty and at least 10 chars
     return bool(api_key)
 
-def collect_supabase_info():
-    """Collect Supabase information"""
+def collect_supabase_info(existing_info={}):
+    """Collect Supabase information, allowing use of existing info if available."""
+    if existing_info and \
+       existing_info.get('SUPABASE_URL') and \
+       existing_info.get('SUPABASE_ANON_KEY') and \
+       existing_info.get('SUPABASE_SERVICE_ROLE_KEY'):
+        
+        print_info("Found existing Supabase configuration:")
+        print_info(f"  Supabase Project URL: {mask_url(existing_info['SUPABASE_URL'])}")
+        print_info(f"  Supabase anon key: {mask_api_key(existing_info['SUPABASE_ANON_KEY'])}")
+        print_info(f"  Supabase service role key: {mask_api_key(existing_info['SUPABASE_SERVICE_ROLE_KEY'])}")
+        
+        use_existing = input(f"{Colors.YELLOW}Do you want to use this saved information? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+        if use_existing in ['', 'yes', 'y']:
+            print_info("Using saved Supabase information.")
+            return existing_info
+        else:
+            print_info("Proceeding to collect new Supabase information.")
+
     print_info("You'll need to create a Supabase project before continuing")
     print_info("Visit https://supabase.com/dashboard/projects to create one")
     print_info("After creating your project, visit the project settings -> Data API and you'll need to get the following information:")
@@ -922,8 +939,24 @@ def collect_supabase_info():
         'SUPABASE_SERVICE_ROLE_KEY': supabase_service_role_key,
     }
 
-def collect_daytona_info():
-    """Collect Daytona API key"""
+def collect_daytona_info(existing_info={}):
+    """Collect Daytona API key, allowing use of existing info if available."""
+    if existing_info and existing_info.get('DAYTONA_API_KEY'):
+        print_info("Found existing Daytona configuration:")
+        print_info(f"  Daytona API Key: {mask_api_key(existing_info['DAYTONA_API_KEY'])}")
+        
+        use_existing = input(f"{Colors.YELLOW}Do you want to use this saved API key? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+        if use_existing in ['', 'yes', 'y']:
+            print_info("Using saved Daytona API key.")
+            # Ensure all expected keys are present, even if just defaults from original function
+            return {
+                'DAYTONA_API_KEY': existing_info['DAYTONA_API_KEY'],
+                'DAYTONA_SERVER_URL': existing_info.get('DAYTONA_SERVER_URL', "https://app.daytona.io/api"),
+                'DAYTONA_TARGET': existing_info.get('DAYTONA_TARGET', "us"),
+            }
+        else:
+            print_info("Proceeding to collect new Daytona API key.")
+
     print_info("You'll need to create a Daytona account before continuing")
     print_info("Visit https://app.daytona.io/ to create one")
     print_info("Then, generate an API key from 'Keys' menu")
@@ -946,8 +979,40 @@ def collect_daytona_info():
         'DAYTONA_TARGET': "us",
     }
 
-def collect_llm_api_keys():
-    """Collect LLM API keys for various providers"""
+def collect_llm_api_keys(existing_info={}):
+    """Collect LLM API keys, allowing use of existing configuration if available."""
+    has_existing_llm_config = False
+    if existing_info:
+        providers_configured = []
+        if existing_info.get('OPENAI_API_KEY'):
+            providers_configured.append(f"OpenAI (Key: {mask_api_key(existing_info['OPENAI_API_KEY'])})")
+        if existing_info.get('ANTHROPIC_API_KEY'):
+            providers_configured.append(f"Anthropic (Key: {mask_api_key(existing_info['ANTHROPIC_API_KEY'])})")
+        if existing_info.get('OPENROUTER_API_KEY'):
+            providers_configured.append(f"OpenRouter (Key: {mask_api_key(existing_info['OPENROUTER_API_KEY'])})")
+        if existing_info.get('OLLAMA_API_BASE'):
+            providers_configured.append(f"Ollama (Base URL: {existing_info['OLLAMA_API_BASE']})")
+        
+        default_model = existing_info.get('MODEL_TO_USE')
+
+        if providers_configured or default_model:
+            has_existing_llm_config = True
+            print_info("Found existing LLM configuration:")
+            if providers_configured:
+                for p_info in providers_configured:
+                    print_info(f"  - {p_info}")
+            if default_model:
+                print_info(f"  Default Model: {default_model}")
+            else:
+                print_info("  Default Model: Not set")
+
+            use_existing = input(f"{Colors.YELLOW}Do you want to use this saved LLM configuration? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+            if use_existing in ['', 'yes', 'y']:
+                print_info("Using saved LLM configuration.")
+                return existing_info # Return all of existing_info as it might contain other relevant keys like OR_SITE_URL
+            else:
+                print_info("Proceeding to re-configure LLM API keys.")
+    
     print_info("You need at least one LLM provider API key to use Suna")
     print_info("Available LLM providers: OpenAI, Anthropic, OpenRouter")
     
@@ -1146,8 +1211,26 @@ def collect_llm_api_keys():
     
     return api_keys
 
-def collect_search_api_keys():
-    """Collect search API keys (now required, not optional)"""
+def collect_search_api_keys(existing_info={}):
+    """Collect search API keys, allowing use of existing info if available."""
+    if existing_info and \
+       existing_info.get('TAVILY_API_KEY') and \
+       existing_info.get('FIRECRAWL_API_KEY'):
+        # FIRECRAWL_URL is also important, even if it's the default
+        
+        print_info("Found existing Search/Scrape API Key configuration:")
+        print_info(f"  Tavily API Key: {mask_api_key(existing_info['TAVILY_API_KEY'])}")
+        print_info(f"  Firecrawl API Key: {mask_api_key(existing_info['FIRECRAWL_API_KEY'])}")
+        firecrawl_url = existing_info.get('FIRECRAWL_URL', "https://api.firecrawl.dev") # Default if not set
+        print_info(f"  Firecrawl URL: {mask_url(firecrawl_url) if firecrawl_url != 'https://api.firecrawl.dev' else firecrawl_url}")
+
+        use_existing = input(f"{Colors.YELLOW}Do you want to use this saved configuration? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+        if use_existing in ['', 'yes', 'y']:
+            print_info("Using saved Search/Scrape API Key configuration.")
+            return existing_info
+        else:
+            print_info("Proceeding to collect new Search/Scrape API Key information.")
+
     print_info("You'll need to obtain API keys for search and web scraping")
     print_info("Visit https://tavily.com/ to get a Tavily API key")
     print_info("Visit https://firecrawl.dev/ to get a Firecrawl API key")
@@ -1182,8 +1265,23 @@ def collect_search_api_keys():
         'FIRECRAWL_URL': firecrawl_url,
     }
 
-def collect_rapidapi_keys():
-    """Collect RapidAPI key (optional)"""
+def collect_rapidapi_keys(existing_info={}):
+    """Collect RapidAPI key (optional), allowing use of existing info if available."""
+    if existing_info and 'RAPID_API_KEY' in existing_info: # Key exists, even if empty
+        print_info("Found existing RapidAPI Key configuration:")
+        rapid_api_key_value = existing_info['RAPID_API_KEY']
+        if rapid_api_key_value:
+            print_info(f"  RapidAPI Key: {mask_api_key(rapid_api_key_value)}")
+        else:
+            print_info("  RapidAPI Key: Not set (optional)")
+            
+        use_existing = input(f"{Colors.YELLOW}Do you want to use this saved configuration? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+        if use_existing in ['', 'yes', 'y']:
+            print_info("Using saved RapidAPI Key configuration.")
+            return existing_info
+        else:
+            print_info("Proceeding to collect new RapidAPI Key information (or skip).")
+
     print_info("To enable API services like LinkedIn, and others, you'll need a RapidAPI key")
     print_info("Each service requires individual activation in your RapidAPI account:")
     print_info("1. Locate the service's `base_url` in its corresponding file (e.g., https://linkedin-data-scraper.p.rapidapi.com in backend/agent/tools/data_providers/LinkedinProvider.py)")
@@ -1344,9 +1442,19 @@ def configure_frontend_env(env_vars, use_docker=True):
     print_success(f"Frontend .env.local file created at {env_path}")
     print_info(f"Backend URL is set to: {backend_url}")
 
-def setup_supabase():
-    """Setup Supabase database"""
+def setup_supabase(existing_config={}, setup_completed=False):
+    """Setup Supabase database, allowing skipping if previously completed."""
+    if setup_completed:
+        print_info("Supabase setup was previously completed. Skipping.")
+        return
+
     print_info("Setting up Supabase database...")
+    
+    supabase_url = existing_config.get('SUPABASE_URL')
+    if not supabase_url:
+        print_error("Supabase URL not found in the provided configuration. This is required for Supabase setup.")
+        print_info("Please ensure Supabase information is collected correctly before this step.")
+        sys.exit(1)
     
     # Check if the Supabase CLI is installed
     try:
@@ -1477,32 +1585,22 @@ def setup_supabase():
             print_info("After installing Supabase CLI manually, please re-run this setup script.")
             sys.exit(1)
 
-    # Extract project reference from Supabase URL
-    supabase_url = os.environ.get('SUPABASE_URL')
-    if not supabase_url:
-        # Get from main function if environment variable not set
-        env_path = os.path.join('backend', '.env')
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                for line in f:
-                    if line.startswith('SUPABASE_URL='):
-                        supabase_url = line.strip().split('=', 1)[1]
-                        break
-
+    # Extract project reference from Supabase URL (already fetched from existing_config)
     project_ref = None
-    if supabase_url:
-        # Extract project reference from URL (format: https://[project_ref].supabase.co)
-        match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url)
+    if supabase_url: # supabase_url is now from existing_config
+        match = re.search(r'https://([^.]+)\.supabase\.co', supabase_url) # supabase_url is from existing_config
         if match:
             project_ref = match.group(1)
-            print_success(f"Extracted project reference '{project_ref}' from your Supabase URL")
+            print_success(f"Extracted project reference '{project_ref}' from Supabase URL: {mask_url(supabase_url)}")
     
-    # If extraction failed, ask the user
+    # If extraction failed, ask the user (should be rare if config is good)
     if not project_ref:
-        print_info("Could not extract project reference from Supabase URL")
-        print_info("Get your Supabase project reference from the Supabase dashboard")
-        print_info("It's the portion after 'https://' and before '.supabase.co' in your project URL")
-        project_ref = input("Enter your Supabase project reference: ")
+        print_warning("Could not automatically extract project reference from the provided Supabase URL.")
+        print_info("You can find your project reference in your Supabase project's settings, usually part of the URL (e.g., 'your-project-ref' in 'https://your-project-ref.supabase.co').")
+        project_ref = input("Please enter your Supabase project reference: ").strip()
+        if not project_ref:
+            print_error("Supabase project reference is required. Exiting.")
+            sys.exit(1)
     
     # Change the working directory to backend
     backend_dir = os.path.join(os.getcwd(), 'backend')
@@ -1543,8 +1641,12 @@ def setup_supabase():
         print_error(f"Failed to setup Supabase: {e}")
         sys.exit(1)
 
-def install_dependencies():
-    """Install frontend and backend dependencies"""
+def install_dependencies(dependencies_installed=False):
+    """Install frontend and backend dependencies, allowing skipping if previously completed."""
+    if dependencies_installed:
+        print_info("Dependencies were previously installed. Skipping.")
+        return True # Indicate success as they are already installed
+
     print_info("Installing required dependencies...")
     
     try:
@@ -1937,6 +2039,9 @@ def main():
     # This function will handle re-launching if necessary.
     ensure_python_311_and_venv()
 
+    state = load_state()
+    env_vars = state.get('env_vars', {})
+
     total_steps = 8
     current_step = 1
     
@@ -1956,52 +2061,80 @@ def main():
     
     # Steps below assume we are now running in the correct Python 3.11 venv
     print_step(current_step, total_steps, "Collecting Supabase information")
-    supabase_info = collect_supabase_info()
-    # Set Supabase URL in environment for later use
-    os.environ['SUPABASE_URL'] = supabase_info['SUPABASE_URL']
+    supabase_info = collect_supabase_info(env_vars.get('supabase', {}))
+    env_vars['supabase'] = supabase_info
+    if 'SUPABASE_URL' in supabase_info: # Keep this for setup_supabase dependency
+        os.environ['SUPABASE_URL'] = supabase_info['SUPABASE_URL']
+    save_state({'env_vars': env_vars})
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting Daytona information")
-    daytona_info = collect_daytona_info()
+    daytona_info = collect_daytona_info(env_vars.get('daytona', {}))
+    env_vars['daytona'] = daytona_info
+    save_state({'env_vars': env_vars})
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting LLM API keys")
-    llm_api_keys = collect_llm_api_keys()
+    llm_api_keys = collect_llm_api_keys(env_vars.get('llm', {}))
+    env_vars['llm'] = llm_api_keys
+    save_state({'env_vars': env_vars})
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting search and web scraping API keys")
-    search_api_keys = collect_search_api_keys()
+    search_api_keys = collect_search_api_keys(env_vars.get('search', {}))
+    env_vars['search'] = search_api_keys
+    save_state({'env_vars': env_vars})
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting RapidAPI key")
-    rapidapi_keys = collect_rapidapi_keys()
+    rapidapi_keys = collect_rapidapi_keys(env_vars.get('rapidapi', {}))
+    env_vars['rapidapi'] = rapidapi_keys
+    save_state({'env_vars': env_vars})
     current_step += 1
     
-    # Combine all environment variables
-    env_vars = {
-        'supabase': supabase_info,
-        'daytona': daytona_info,
-        'llm': llm_api_keys,
-        'search': search_api_keys,
-        'rapidapi': rapidapi_keys,
-    }
-    
     # Setup Supabase database
-    setup_supabase()
+    supabase_config_to_use = env_vars.get('supabase', {})
+    supabase_previously_completed = env_vars.get('supabase_setup_completed', False)
+    # setup_supabase will print if skipped and sys.exit on error if not skipped
+    setup_supabase(supabase_config_to_use, supabase_previously_completed) 
+    
+    if not supabase_previously_completed:
+        # If setup_supabase ran (wasn't skipped) and didn't exit, it means it succeeded.
+        print_info("Marking Supabase setup as completed in state.")
+        env_vars['supabase_setup_completed'] = True
+        save_state({'env_vars': env_vars})
     current_step += 1
     
     # Install dependencies before starting Suna
     print_step(current_step, total_steps, "Installing dependencies")
-    install_dependencies()
+    dependencies_previously_installed = env_vars.get('dependencies_installed', False)
+    installation_succeeded = install_dependencies(dependencies_previously_installed)
+
+    if not dependencies_previously_installed:
+        if installation_succeeded:
+            env_vars['dependencies_installed'] = True
+            print_info("Marking dependencies as installed in state.")
+            save_state({'env_vars': env_vars})
+        else:
+            print_error("Dependency installation failed. Exiting setup.")
+            save_state({'env_vars': env_vars}) # Save other collected info before exiting
+            sys.exit(1)
+    elif installation_succeeded: # Was skipped and returned True
+         print_info("Dependencies installation was skipped as it was previously completed.")
+    else: # Skipped but returned False - should not happen
+        print_warning("install_dependencies was skipped but did not return True. Check logic.")
+        # Still save state as a precaution
+        save_state({'env_vars': env_vars})
     
     # Configure environment files with the correct settings before starting
+    # env_vars is already populated and saved throughout the steps above.
     print_info("Configuring environment files...")
     configure_backend_env(env_vars, True)  # Always create for Docker first
     configure_frontend_env(env_vars, True)
     
     # Now ask how to start Suna
     print_step(current_step, total_steps, "Starting Suna")
-    use_docker = start_suna()
+    use_docker = start_suna() # This function might also benefit from env_vars in the future
     
     # Update environment files if needed for non-Docker setup
     if not use_docker:
