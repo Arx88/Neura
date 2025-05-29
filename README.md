@@ -46,7 +46,7 @@ Next.js/React application providing a responsive UI with chat interface, dashboa
 
 ### Agent Docker
 
-Isolated execution environment for every agent - with browser automation, code interpreter, file system access, tool integration, and security features.
+Isolated execution environment for every agent - with browser automation, code interpreter, file system access, tool integration (including Python code execution), and security features.
 
 ### Supabase Database
 

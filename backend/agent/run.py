@@ -17,6 +17,7 @@ from agentpress.response_processor import ProcessorConfig
 from agent.tools.sb_shell_tool import SandboxShellTool
 from agent.tools.sb_files_tool import SandboxFilesTool
 from agent.tools.sb_browser_tool import SandboxBrowserTool
+from agent.tools.python_tool import PythonTool # Import PythonTool
 from agent.tools.data_providers_tool import DataProvidersTool
 from agent.prompt import get_system_prompt
 from utils.logger import logger
@@ -88,6 +89,7 @@ async def run_agent(
         thread_manager.add_tool(MessageTool) 
         thread_manager.add_tool(SandboxWebSearchTool, project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(SandboxVisionTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
+        thread_manager.add_tool(PythonTool, project_id=project_id, thread_manager=thread_manager) # Register PythonTool
         if config.RAPID_API_KEY:
             logger.debug("RAPID_API_KEY found, adding DataProvidersTool.")
             thread_manager.add_tool(DataProvidersTool)
