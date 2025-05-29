@@ -877,7 +877,8 @@ def collect_llm_api_keys():
     print(f"{Colors.CYAN}[1] {Colors.GREEN}OpenAI{Colors.ENDC}")
     print(f"{Colors.CYAN}[2] {Colors.GREEN}Anthropic{Colors.ENDC}")
     print(f"{Colors.CYAN}[3] {Colors.GREEN}OpenRouter{Colors.ENDC} {Colors.CYAN}(access to multiple models){Colors.ENDC}")
-    print(f"{Colors.CYAN}Enter numbers separated by commas (e.g., 1,2,3){Colors.ENDC}\n")
+    print(f"{Colors.CYAN}[4] {Colors.GREEN}Ollama{Colors.ENDC} {Colors.CYAN}(local models, ensure Ollama server is running){Colors.ENDC}")
+    print(f"{Colors.CYAN}Enter numbers separated by commas (e.g., 1,2,3,4){Colors.ENDC}\n")
 
     while True:
         providers_input = input("Select providers (required, at least one): ")
@@ -894,6 +895,8 @@ def collect_llm_api_keys():
                     selected_providers.append('ANTHROPIC')
                 elif num == 3:
                     selected_providers.append('OPENROUTER')
+                elif num == 4:
+                    selected_providers.append('OLLAMA')
             
             if selected_providers:
                 break
@@ -911,6 +914,7 @@ def collect_llm_api_keys():
         'OPENAI': ['openai/gpt-4o', 'openai/gpt-4o-mini'],
         'ANTHROPIC': ['anthropic/claude-3-7-sonnet-latest', 'anthropic/claude-3-5-sonnet-latest'],
         'OPENROUTER': ['openrouter/google/gemini-2.5-pro-preview', 'openrouter/deepseek/deepseek-chat-v3-0324:free', 'openrouter/openai/gpt-4o-2024-11-20'],
+        'OLLAMA': ['ollama/llama3', 'ollama/llama2', 'ollama/codellama', 'ollama/mistral'],
     }
     
     for provider in selected_providers:
@@ -982,17 +986,81 @@ def collect_llm_api_keys():
                         print_warning(f"Invalid selection, using default: openrouter/google/gemini-2.5-flash-preview")
                     break
                 print_error("Invalid API key format. It should be at least 10 characters long.")
-        
-    # If no default model has been set, check which provider was selected and set an appropriate default
-    if 'default_model' not in model_info:
-        if 'ANTHROPIC_API_KEY' in api_keys:
+
+        elif provider == 'OLLAMA':
+            print_info("Configuring Ollama (local models)")
+            while True:
+                ollama_base_url = input(f"Enter your Ollama API Base URL (default: http://localhost:11434): ").strip()
+                if not ollama_base_url:
+                    ollama_base_url = "http://localhost:11434"
+                
+                if validate_url(ollama_base_url):
+                    api_keys['OLLAMA_API_BASE'] = ollama_base_url
+                    break
+                print_error("Invalid URL format. Please enter a valid URL (e.g., http://localhost:11434).")
+
+            ollama_api_key = input("Enter your Ollama API Key (optional, usually not needed for local instances, press Enter to skip): ").strip()
+            if ollama_api_key:
+                api_keys['OLLAMA_API_KEY'] = ollama_api_key
+            
+            print_info("Ensure your Ollama server is running and you have pulled the desired models (e.g., 'ollama pull llama3').")
+            
+            # Default model for Ollama if it's the only one selected or if user is prompted
+            if len(selected_providers) == 1 and provider == 'OLLAMA': # Ollama is the only provider
+                 print(f"\n{Colors.CYAN}Available example Ollama models (ensure you have them pulled):{Colors.ENDC}")
+                 for i, model in enumerate(model_aliases['OLLAMA'], 1):
+                     print(f"{Colors.CYAN}[{i}] {Colors.GREEN}{model}{Colors.ENDC}")
+                 ollama_model_choice = input(f"Select default Ollama model to use (e.g., ollama/llama3) or press Enter to skip: ").strip()
+                 if ollama_model_choice:
+                     # Check if input is a number corresponding to an alias
+                     if ollama_model_choice.isdigit() and 1 <= int(ollama_model_choice) <= len(model_aliases['OLLAMA']):
+                         model_info['default_model'] = model_aliases['OLLAMA'][int(ollama_model_choice) - 1]
+                     else: # Assume user entered a full model name
+                         model_info['default_model'] = ollama_model_choice
+                 else:
+                     print_warning("No default model specified for Ollama. You will need to configure MODEL_TO_USE in the .env file later.")
+
+
+    # Default model logic adjustments
+    if 'default_model' not in model_info: # If no model was set during provider-specific prompts
+        if 'OLLAMA_API_BASE' in api_keys and len(selected_providers) > 1: # Ollama is selected along with others, but no default yet
+            # If ollama is among selected, but no default model picked yet (e.g. user skipped for other providers)
+            # We prioritize other known providers first if they were selected.
+            # This logic might need refinement based on desired priority if multiple are selected.
+            if 'ANTHROPIC_API_KEY' in api_keys:
+                 model_info['default_model'] = 'anthropic/claude-3-7-sonnet-latest'
+            elif 'OPENAI_API_KEY' in api_keys:
+                 model_info['default_model'] = 'openai/gpt-4o'
+            elif 'OPENROUTER_API_KEY' in api_keys:
+                 model_info['default_model'] = 'openrouter/google/gemini-2.5-flash-preview'
+            else: # Only Ollama was selected, but user didn't pick a model in the OLLAMA block
+                print(f"\n{Colors.CYAN}Available example Ollama models (ensure you have them pulled):{Colors.ENDC}")
+                for i, model in enumerate(model_aliases['OLLAMA'], 1):
+                    print(f"{Colors.CYAN}[{i}] {Colors.GREEN}{model}{Colors.ENDC}")
+                ollama_model_choice = input(f"Select default Ollama model to use (e.g., ollama/llama3) or press Enter to skip: ").strip()
+                if ollama_model_choice:
+                    if ollama_model_choice.isdigit() and 1 <= int(ollama_model_choice) <= len(model_aliases['OLLAMA']):
+                        model_info['default_model'] = model_aliases['OLLAMA'][int(ollama_model_choice) - 1]
+                    else:
+                        model_info['default_model'] = ollama_model_choice
+                # If still no model, it will be handled by the final check below.
+
+        elif 'ANTHROPIC_API_KEY' in api_keys:
             model_info['default_model'] = 'anthropic/claude-3-7-sonnet-latest'
         elif 'OPENAI_API_KEY' in api_keys:
             model_info['default_model'] = 'openai/gpt-4o'
         elif 'OPENROUTER_API_KEY' in api_keys:
             model_info['default_model'] = 'openrouter/google/gemini-2.5-flash-preview'
-    
-    print_success(f"Using {model_info['default_model']} as the default model")
+        # If only Ollama was selected and default model was not set in its block, this will be caught below.
+
+    if 'default_model' in model_info:
+        print_success(f"Using {model_info['default_model']} as the default model")
+    else:
+        # This case should ideally only be hit if Ollama was the only provider and the user skipped selecting a model.
+        print_warning("No default model has been set. Please ensure MODEL_TO_USE is set in your .env file.")
+        # To prevent 'MODEL_TO_USE' from being empty and causing issues later, we can set it to an empty string here
+        # and rely on the user to fill it in the .env file.
+        model_info['default_model'] = '' # Explicitly set to empty if none chosen
     
     # Add the default model to the API keys dictionary
     api_keys['MODEL_TO_USE'] = model_info['default_model']
@@ -1111,7 +1179,7 @@ ENV_MODE=local
     # LLM section
     env_content += "\n# LLM Providers:\n"
     # Add empty values for all LLM providers we support
-    all_llm_keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'MODEL_TO_USE']
+    all_llm_keys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_API_BASE', 'OLLAMA_API_KEY', 'MODEL_TO_USE']
     # Add AWS keys separately
     aws_keys = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION_NAME']
     
