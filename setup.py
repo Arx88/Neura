@@ -6,10 +6,14 @@ import platform
 import subprocess
 from getpass import getpass
 import re
+import json
 
 IS_WINDOWS = platform.system() == 'Windows'
 if IS_WINDOWS:
     import winreg
+
+# State persistence file
+STATE_FILE = os.path.join(os.getcwd(), ".setup_state.json")
 
 # ANSI colors for pretty output
 class Colors:
@@ -24,6 +28,81 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 TESSERACT_OPT_OUT_FLAG_FILE = os.path.expanduser("~/.suna_skip_tesseract_check")
+
+# --- State Persistence Functions ---
+def load_state():
+    """Loads the setup state from STATE_FILE."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+                print_info(f"Loaded saved setup state from {STATE_FILE}")
+                return state
+        except (IOError, json.JSONDecodeError) as e:
+            print_warning(f"Could not load or parse state file {STATE_FILE}: {e}. Starting with a fresh state.")
+    return {}
+
+def save_state(state):
+    """Saves the setup state to STATE_FILE."""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=4)
+        # print_info(f"Saved setup state to {STATE_FILE}") # Can be too verbose if called often
+    except IOError as e:
+        print_warning(f"Could not save state file {STATE_FILE}: {e}")
+
+def mask_api_key(api_key):
+    """Masks an API key, showing first 4 and last 4 characters."""
+    if not api_key or len(api_key) < 8:
+        return "****"  # Too short to mask meaningfully
+    return f"{api_key[:4]}****{api_key[-4:]}"
+
+def mask_url(url):
+    """Masks a URL, showing scheme and parts of the domain."""
+    if not url:
+        return ""
+    try:
+        protocol_end = url.find("://")
+        if protocol_end == -1:
+            # No protocol, try to mask based on domain-like structure
+            parts = url.split('.')
+            if len(parts) > 1 and len(parts[-2]) > 3: # e.g. domain.com
+                 return f"{parts[-2][:2]}****.{parts[-1]}"
+            return "****" # Cannot mask meaningfully
+            
+        protocol = url[:protocol_end+3]
+        domain_part = url[protocol_end+3:]
+        
+        domain_parts = domain_part.split('.')
+        if len(domain_parts) > 1: # e.g. abcdefg.supabase.co or localhost:3000
+            host = domain_parts[0]
+            rest = '.'.join(domain_parts[1:])
+            if len(host) > 6:
+                masked_host = f"{host[:3]}****{host[-3:]}"
+            else:
+                masked_host = f"{host[:1]}****"
+            
+            # Check for port
+            port_match = re.search(r':\d+$', rest)
+            port_str = ""
+            if port_match:
+                port_str = port_match.group(0)
+                rest = rest[:port_match.start()]
+
+            if rest: # If there are TLDs like .co, .io
+                return f"{protocol}{masked_host}.{rest}{port_str}"
+            else: # Likely just 'localhost' or similar without a TLD in domain_parts
+                return f"{protocol}{masked_host}{port_str}"
+        else: # Simple domain like 'localhost'
+            if len(domain_part) > 4:
+                return f"{protocol}{domain_part[:2]}****{domain_part[-2:]}"
+            return f"{protocol}****"
+            
+    except Exception: # General catch-all if URL parsing is tricky
+        return "****" # Fallback for complex or unexpected URL formats
+
+# --- End State Persistence Functions ---
+
 
 # Helper function to run winget install
 def run_winget_install(package_id, package_name):
@@ -1281,62 +1360,73 @@ def setup_supabase():
         print_success("Supabase CLI is installed.")
     except (subprocess.SubprocessError, FileNotFoundError):
         print_error("Supabase CLI is not initially detected.")
+        manual_install_message = "Please install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started"
+        installation_attempted = False
+
         if IS_WINDOWS:
-            print_info("Attempting to install Supabase CLI globally using npm...")
+            print_info("Attempting to install Supabase CLI using Scoop for Windows...")
             try:
-                # Check if npm is installed (as it's a prerequisite for this step)
-                subprocess.run(['npm', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                
-                # Attempt to install Supabase CLI via npm
-                npm_install_command = ['npm', 'install', '-g', 'supabase']
-                print_info(f"Running command: {' '.join(npm_install_command)}")
-                npm_install_process = subprocess.run(
-                    npm_install_command,
-                    capture_output=True, text=True, check=True, shell=IS_WINDOWS
-                )
-                print_info("npm install stdout:\n" + npm_install_process.stdout)
-                if npm_install_process.stderr:
-                    print_warning("npm install stderr:\n" + npm_install_process.stderr) # Some warnings might not be fatal
-
-                print_success("Supabase CLI installed successfully via npm.")
-                
-                # Re-verify installation
+                subprocess.run(['scoop', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                print_info("Scoop is available. Attempting to install Supabase CLI...")
                 try:
-                    subprocess.run(
-                        ['supabase', '--version'],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        check=True,
-                        shell=IS_WINDOWS
-                    )
-                    print_success("Supabase CLI successfully verified after npm installation.")
-                    # If successful, we can proceed with the rest of setup_supabase()
-                except (subprocess.SubprocessError, FileNotFoundError):
-                    print_warning("Supabase CLI was reportedly installed by npm, but 'supabase --version' still fails.")
-                    print_info("This is often a PATH issue. Please open a new terminal/command prompt and re-run this setup script.")
-                    print_info("If the issue persists, you may need to manually add the global npm packages directory to your PATH or follow the manual Supabase CLI installation instructions.")
-                    print_info("Manual installation instructions: https://supabase.com/docs/guides/cli/getting-started")
-                    sys.exit(1) # Exit because Supabase CLI is critical at this stage
+                    subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True)
+                    print_success("Supabase CLI installation via Scoop initiated.")
+                    installation_attempted = True
+                except subprocess.SubprocessError:
+                    print_warning("Failed to install Supabase CLI with 'scoop install supabase'.")
+                    print_info("Attempting to add Supabase bucket and retry...")
+                    try:
+                        subprocess.run(['scoop', 'bucket', 'add', 'supabase', 'https://github.com/supabase/scoop-bucket.git'], check=True, shell=True)
+                        print_success("Supabase Scoop bucket added.")
+                        subprocess.run(['scoop', 'install', 'supabase'], check=True, shell=True)
+                        print_success("Supabase CLI installation via Scoop (after adding bucket) initiated.")
+                        installation_attempted = True
+                    except subprocess.SubprocessError as e_scoop_retry:
+                        print_error(f"Failed to install Supabase CLI via Scoop even after adding bucket: {e_scoop_retry}")
+                        manual_install_message += " (Scoop install failed. You can download the Windows binary or use WSL with other package managers)."
 
-            except FileNotFoundError: # If npm itself is not found
-                 print_error("npm command not found. Cannot attempt Supabase CLI installation via npm.")
-                 print_info("Please ensure Node.js and npm are correctly installed and in your PATH (this should have been checked in 'check_requirements').")
-                 print_info("Then, either re-run this script or install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
-                 sys.exit(1)
-            except subprocess.SubprocessError as e:
-                print_error(f"Failed to install Supabase CLI via npm: {e}")
-                if hasattr(e, 'stdout') and e.stdout:
-                    print_error("npm install stdout:\n" + e.stdout)
-                if hasattr(e, 'stderr') and e.stderr:
-                    print_error("npm install stderr:\n" + e.stderr)
-                print_info("Please install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
-                print_info("After installing, run this setup again.")
+            except (subprocess.SubprocessError, FileNotFoundError):
+                print_warning("Scoop not found or not working. Scoop is a recommended way to install Supabase CLI on Windows.")
+                manual_install_message += " (Scoop not found. Consider installing Scoop, or download the Windows binary, or use WSL)."
+        
+        elif platform.system() == 'Darwin' or platform.system() == 'Linux':
+            system_name = "macOS" if platform.system() == 'Darwin' else "Linux"
+            print_info(f"Attempting to install Supabase CLI using Homebrew for {system_name}...")
+            try:
+                subprocess.run(['brew', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                print_info("Homebrew is available. Attempting to install Supabase CLI...")
+                subprocess.run(['brew', 'install', 'supabase/tap/supabase'], check=True, shell=True)
+                print_success("Supabase CLI installation via Homebrew initiated.")
+                installation_attempted = True
+            except (subprocess.SubprocessError, FileNotFoundError) as e_brew:
+                print_error(f"Failed to install Supabase CLI via Homebrew: {e_brew}")
+                manual_install_message += f" (Homebrew install failed on {system_name})."
+        
+        else: # Other operating systems
+            print_warning(f"Unsupported OS for automatic Supabase CLI installation: {platform.system()}")
+
+        if installation_attempted:
+            print_info("Verifying Supabase CLI installation...")
+            try:
+                subprocess.run(
+                    ['supabase', '--version'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                    shell=IS_WINDOWS # Use IS_WINDOWS for shell=True consistency
+                )
+                print_success("Supabase CLI successfully installed and verified.")
+            except (subprocess.SubprocessError, FileNotFoundError):
+                print_error("Supabase CLI was reportedly installed, but 'supabase --version' still fails.")
+                print_info("This could be a PATH issue. Please open a new terminal/command prompt and re-run this setup script.")
+                print_info(manual_install_message) # Provide specific manual install message
                 sys.exit(1)
-        else: # Not Windows, or npm attempt was skipped/failed previously
-            print_info("Please install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
-            print_info("After installing, run this setup again.")
+        else: # No installation method was successful or applicable
+            print_error("Supabase CLI is not installed and no automated installation method succeeded or was applicable for your OS.")
+            print_info(manual_install_message)
+            print_info("After installing, please re-run this setup script.")
             sys.exit(1)
-            
+
     # Extract project reference from Supabase URL
     supabase_url = os.environ.get('SUPABASE_URL')
     if not supabase_url:
