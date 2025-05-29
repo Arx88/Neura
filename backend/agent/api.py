@@ -236,6 +236,20 @@ async def start_agent(
         # Update model_name to use the resolved version
         model_name = resolved_model
 
+        # New logic to insert for Ollama model prefixing
+        if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
+            has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
+            if not has_known_provider_prefix:
+                logger.info(f"OLLAMA_API_BASE is set ('{config.OLLAMA_API_BASE}') and resolved model '{model_name}' has no explicit provider prefix. Defaulting to 'ollama/' prefix.")
+                model_name = f"ollama/{model_name}"
+                logger.info(f"Final model name for LLM call: {model_name}")
+            elif model_name.startswith("ollama/"):
+                logger.info(f"Model '{model_name}' is already specified as an Ollama model. Using with OLLAMA_API_BASE: '{config.OLLAMA_API_BASE}'.")
+            else:
+                logger.info(f"Model '{model_name}' has a prefix for a different provider or OLLAMA_API_BASE is not set. Not prepending 'ollama/'.")
+        else:
+            logger.info(f"OLLAMA_API_BASE is not configured. Not attempting to default to Ollama for model '{model_name}'.")
+
         logger.info(f"Starting new agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager} (Instance: {instance_id})")
         client = await db.client
 
@@ -608,6 +622,20 @@ async def initiate_agent_with_files(
 
     # Update model_name to use the resolved version
     model_name = resolved_model
+
+    # New logic to insert for Ollama model prefixing
+    if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
+        has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
+        if not has_known_provider_prefix:
+            logger.info(f"OLLAMA_API_BASE is set ('{config.OLLAMA_API_BASE}') and resolved model '{model_name}' has no explicit provider prefix. Defaulting to 'ollama/' prefix.")
+            model_name = f"ollama/{model_name}"
+            logger.info(f"Final model name for LLM call: {model_name}")
+        elif model_name.startswith("ollama/"):
+            logger.info(f"Model '{model_name}' is already specified as an Ollama model. Using with OLLAMA_API_BASE: '{config.OLLAMA_API_BASE}'.")
+        else:
+            logger.info(f"Model '{model_name}' has a prefix for a different provider or OLLAMA_API_BASE is not set. Not prepending 'ollama/'.")
+    else:
+        logger.info(f"OLLAMA_API_BASE is not configured. Not attempting to default to Ollama for model '{model_name}'.")
 
     logger.info(f"[\033[91mDEBUG\033[0m] Initiating new agent with prompt and {len(files)} files (Instance: {instance_id}), model: {model_name}, enable_thinking: {enable_thinking}")
     client = await db.client
