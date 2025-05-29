@@ -155,14 +155,27 @@ def prepare_params(
         else:
             logger.debug("No OLLAMA_API_BASE configured, Ollama will use default.")
 
-        # Explicitly set api_key to None for Ollama if no key is provided
-        # to prevent litellm from potentially using other provider keys.
-        params["api_key"] = None
-        if config.OLLAMA_API_KEY:
+        # Ensure api_key is None for Ollama if it's not a non-empty string
+        if config.OLLAMA_API_KEY and config.OLLAMA_API_KEY.strip(): # Checks if key exists and is not just whitespace
             params["api_key"] = config.OLLAMA_API_KEY
-            logger.debug("Set Ollama API key.")
+            logger.debug("Using provided OLLAMA_API_KEY for Ollama.")
         else:
-            logger.debug("No OLLAMA_API_KEY configured. Setting api_key to None for Ollama.")
+            params["api_key"] = None
+            logger.debug("No OLLAMA_API_KEY provided or key is empty. Setting api_key to None for Ollama to ensure no authentication is attempted.")
+
+        # Prevent OpenRouter interference for Ollama calls
+        if params.get("extra_headers"):
+            params["extra_headers"].pop("HTTP-Referer", None)
+            params["extra_headers"].pop("X-Title", None)
+            if not params["extra_headers"]: # If empty after popping, remove the key
+                params.pop("extra_headers")
+            logger.debug("Cleared OpenRouter specific headers for Ollama call, if they existed.")
+        
+        # Ensure that if this is an Ollama call, we are not accidentally using OpenRouter's base.
+        # This is already handled by setting params["api_base"] = config.OLLAMA_API_BASE earlier in this block,
+        # but we can double-check that it's not overridden by a general OpenRouter config later.
+        # However, the order of `prepare_params` seems to set provider-specific things after general ones.
+        # The main protection is that params["api_base"] is explicitly Ollama's.
 
     # Add Bedrock-specific parameters
     if model_name.startswith("bedrock/"):
@@ -482,30 +495,37 @@ async def test_ollama():
 
 if __name__ == "__main__":
     import asyncio
+    from utils.config import config # Ensure config is loaded for the test
+    from utils.logger import logger # Ensure logger is available
 
-    # Test Bedrock
-    # print("\n--- Testing Bedrock ---")
-    # bedrock_test_success = asyncio.run(test_bedrock())
-    # if bedrock_test_success:
-    #     print("\n✅ Bedrock integration test completed successfully!")
-    # else:
-    #     print("\n❌ Bedrock integration test failed!")
+    print("----------------------------------------------------------------------")
+    print("Starting Ollama Connection Test")
+    print("----------------------------------------------------------------------")
+    print(f"This test will attempt to connect to an Ollama model.")
+    print(f"Using OLLAMA_API_BASE from config: {config.OLLAMA_API_BASE or 'http://localhost:11434 (default assumed by test)'}")
+    print(f"Using OLLAMA_API_KEY from config: {'Not set (Correct for Ollama)' if not config.OLLAMA_API_KEY else 'Set (will be overridden to None by test logic if empty)'}")
+    print(f"Target test model inside test_ollama(): ollama/llama2 (ensure this model is pulled: `ollama pull llama2`)")
+    print("Your configured MODEL_TO_USE is: " + config.MODEL_TO_USE)
+    print("If MODEL_TO_USE is an ollama model, this test should reflect its connectivity if llama2 is also available.")
+    print("----------------------------------------------------------------------")
+    
+    # The test_ollama() function internally mocks OLLAMA_API_KEY to None and OLLAMA_API_BASE to http://localhost:11434
+    # for the duration of the test call. This is to specifically test the no-auth scenario.
+    # If you want to test with your actual .env settings, you would call make_llm_api_call directly.
+    # However, the purpose of this test in llm.py is to validate the direct Ollama call logic within litellm.
 
-    # Test OpenRouter
-    # print("\n--- Testing OpenRouter ---")
-    # openrouter_test_success = asyncio.run(test_openrouter())
-    # if openrouter_test_success:
-    #    print("\n✅ OpenRouter integration test completed successfully!")
-    # else:
-    #    print("\n❌ OpenRouter integration test failed!")
-
-    # Test Ollama
-    # Note: To run this test, ensure your local Ollama server is running
-    # and has the 'llama2' model available (e.g., run `ollama pull llama2`).
-    # Also, set OLLAMA_API_BASE in your .env if it's not the default http://localhost:11434
-    print("\n--- Testing Ollama ---")
     ollama_test_success = asyncio.run(test_ollama())
+
+    print("----------------------------------------------------------------------")
     if ollama_test_success:
-        print("\n✅ Ollama integration test completed successfully!")
+        print("✅ Ollama integration test completed successfully!")
+        print("This means the test was able to make a call via LiteLLM to the specified Ollama model without authentication errors.")
     else:
-        print("\n❌ Ollama integration test failed!")
+        print("❌ Ollama integration test failed!")
+        print("This could be due to several reasons:")
+        print("  1. Ollama server is not running or not accessible at the API base (default test: http://localhost:11434).")
+        print("  2. The 'ollama/llama2' model is not available on your Ollama server (run `ollama pull llama2`).")
+        print("  3. A firewall is blocking the connection.")
+        print("  4. An unexpected issue with LiteLLM or the script itself (check logs above).")
+        print("  5. The 'OpenrouterException' might still be occurring if the fix was not effective.")
+    print("----------------------------------------------------------------------")
