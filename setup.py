@@ -7,6 +7,7 @@ import subprocess
 from getpass import getpass
 import re
 import json
+import shutil
 
 IS_WINDOWS = platform.system() == 'Windows'
 if IS_WINDOWS:
@@ -1669,6 +1670,49 @@ def install_dependencies(dependencies_installed=False):
         return True # Indicate success as they are already installed
 
     print_info("Installing required dependencies...")
+    # START DEBUG BLOCK
+    print(f"{Colors.YELLOW}DEBUG: Current sys.executable (in setup.py): {sys.executable}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}DEBUG: Current os.getcwd(): {os.getcwd()}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}DEBUG: Current PATH (in setup.py): {os.environ.get('PATH')}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}DEBUG: VENV_PATH variable: {VENV_PATH}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}DEBUG: VENV_ACTIVATION_MARKER ('_SUNA_SETUP_IN_VENV_') is set: {os.environ.get(VENV_ACTIVATION_MARKER) == '1'}{Colors.ENDC}")
+
+    print(f"{Colors.YELLOW}DEBUG: Running '{sys.executable} -m pip --version' from setup.py...{Colors.ENDC}")
+    try:
+        pip_version_process = subprocess.run(
+            [sys.executable, '-m', 'pip', '--version'],
+            capture_output=True, text=True, check=False, shell=False
+        )
+        print(f"{Colors.YELLOW}DEBUG: pip --version stdout:\n{pip_version_process.stdout}{Colors.ENDC}") # Escaped newline for clarity in agent log
+        if pip_version_process.stderr:
+            print(f"{Colors.RED}DEBUG: pip --version stderr:\n{pip_version_process.stderr}{Colors.ENDC}") # Escaped newline
+    except Exception as e_pip_version:
+        print(f"{Colors.RED}DEBUG: Error running pip --version: {e_pip_version}{Colors.ENDC}")
+
+    # Using triple quotes for the script to avoid escaping issues with quotes inside
+    py_path_details_script = """
+import sys, os, shutil
+print(f'DEBUG_SUBPROCESS: sys.executable: {sys.executable}')
+print(f'DEBUG_SUBPROCESS: sys.prefix: {sys.prefix}')
+print(f'DEBUG_SUBPROCESS: sys.base_prefix: {sys.base_prefix}')
+print(f'DEBUG_SUBPROCESS: os.getcwd(): {os.getcwd()}')
+print(f'DEBUG_SUBPROCESS: sys.path: {sys.path}')
+print(f'DEBUG_SUBPROCESS: shutil.which("poetry"): {shutil.which("poetry")}')
+print(f'DEBUG_SUBPROCESS: shutil.which("pip"): {shutil.which("pip")}')
+"""
+    print(f"{Colors.YELLOW}DEBUG: Running '{sys.executable} -c \"<see script below>\"' from setup.py...{Colors.ENDC}")
+    # For logging, it's hard to show the exact multiline script, so indicate it's complex.
+    try:
+        py_details_process = subprocess.run(
+            [sys.executable, '-c', py_path_details_script],
+            capture_output=True, text=True, check=False, shell=False
+        )
+        print(f"{Colors.YELLOW}DEBUG: Python path details stdout:\n{py_details_process.stdout}{Colors.ENDC}") # Escaped newline
+        if py_details_process.stderr:
+            print(f"{Colors.RED}DEBUG: Python path details stderr:\n{py_details_process.stderr}{Colors.ENDC}") # Escaped newline
+    except Exception as e_py_details:
+        print(f"{Colors.RED}DEBUG: Error running Python path details: {e_py_details}{Colors.ENDC}")
+    # END DEBUG BLOCK
     
     try:
         # Install frontend dependencies
@@ -1686,18 +1730,21 @@ def install_dependencies(dependencies_installed=False):
 
         poetry_exe_in_venv = os.path.join(VENV_PATH, 'Scripts', 'poetry.exe') # For Windows
 
-        # Check if the venv poetry executable exists
-        if IS_WINDOWS and os.path.isfile(poetry_exe_in_venv): # Only check this specific path on Windows
+        # Determine the base command for poetry
+        if os.environ.get(VENV_ACTIVATION_MARKER) == "1":
+            poetry_base_command = [sys.executable, '-m', 'poetry']
+            print_info(f"Using Suna venv activated Python for Poetry: '{sys.executable} -m poetry'")
+        # Fallback logic if not in the marked Suna venv (should be less common for primary setup path)
+        elif IS_WINDOWS and os.path.isfile(poetry_exe_in_venv):
             poetry_base_command = [poetry_exe_in_venv]
-            print_info(f"Using Poetry executable from venv: {poetry_exe_in_venv}")
-        elif os.environ.get(VENV_ACTIVATION_MARKER) == "1" and not IS_WINDOWS: # Non-Windows, in venv
-             poetry_base_command = [sys.executable, '-m', 'poetry']
-             print_info(f"Using '{sys.executable} -m poetry' for Poetry in activated venv.")
-        else: # Fallback for non-Windows not in venv, or Windows if poetry.exe not in venv Scripts
-            print_warning(f"Poetry executable not found at {poetry_exe_in_venv} (or not on Windows). Falling back to 'poetry' command directly.")
-            print_warning("This might use a global Poetry installation or rely on 'python -m poetry' if 'poetry' is not in PATH.")
+            print_info(f"Using Poetry executable from venv (Windows specific path): {poetry_exe_in_venv}")
+        else: 
             poetry_base_command = ['poetry']
-        
+            print_warning(f"Falling back to direct 'poetry' command. This might use a global Poetry installation.")
+            if IS_WINDOWS and not os.path.isfile(poetry_exe_in_venv):
+                print_warning(f"Poetry executable not found at the expected venv path: {poetry_exe_in_venv}")
+            print_warning("If issues arise, ensure Poetry is correctly installed and accessible, or that the Suna venv is active.")
+
         lock_command = poetry_base_command + ['lock']
         print_info(f"Executing: {' '.join(lock_command)} in backend directory")
         # Determine shell mode for the primary attempt
@@ -1726,28 +1773,25 @@ def install_dependencies(dependencies_installed=False):
                     print_info("Please ensure Poetry is installed and accessible. If you installed it via pip in the venv, it might not be in PATH.")
                     print_info("You might need to activate the venv manually or add Poetry's script directory to PATH.")
                     return False # Exit install_dependencies due to failure
-            # If the initial attempt was with 'python -m poetry' (non-Windows venv)
-            elif not IS_WINDOWS and poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
-                print_info("Retrying poetry lock with direct 'poetry' command...")
+            # If the initial attempt was with '[sys.executable, "-m", "poetry"]' (preferred for venv)
+            elif poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
+                print_info("Retrying poetry lock with direct 'poetry' command as fallback...")
                 try:
-                    subprocess.run(['poetry', 'lock'], cwd='backend', check=True, shell=IS_WINDOWS) # shell=IS_WINDOWS is fine here too
-                    print_success("Poetry lock successful with direct 'poetry' command.")
-                except subprocess.SubprocessError as e_lock_direct_non_win:
-                    print_error(f"Direct 'poetry lock' also failed on non-Windows: {e_lock_direct_non_win}")
-                    print_info("Please ensure Poetry is installed and in your PATH.")
+                    subprocess.run(['poetry', 'lock'], cwd='backend', check=True, shell=IS_WINDOWS)
+                    print_success("Poetry lock successful with direct 'poetry' command (fallback).")
+                    # Update poetry_base_command for the install step if this fallback succeeded
+                    poetry_base_command = ['poetry'] 
+                except subprocess.SubprocessError as e_lock_direct:
+                    print_error(f"Direct 'poetry lock' (fallback) also failed: {e_lock_direct}")
+                    print_info("Please ensure Poetry is installed and accessible, either via python -m poetry in venv or directly in PATH.")
                     return False
-            else: # Direct poetry (the fallback) already failed, or some other unhandled case
+            else: # Direct poetry (the initial command) already failed, or some other unhandled case
                  print_info("Poetry lock failed. Please ensure Poetry is installed and accessible.")
                  return False
 
         # Install backend dependencies
         print_info("Installing backend dependencies using poetry...")
-        # poetry_base_command is already defined and potentially updated by successful fallback in lock
-        # However, we should re-evaluate poetry_base_command for install, in case lock succeeded with a fallback
-        # and we want to use that successful command for install too.
-        # For simplicity, the original logic just reuses the initially determined poetry_base_command.
-        # The provided refactor plan implies the same.
-
+        # poetry_base_command might have been updated to ['poetry'] if the lock step used a fallback.
         install_command = poetry_base_command + ['install']
         print_info(f"Executing: {' '.join(install_command)} in backend directory")
         # Determine shell mode for the primary attempt (can reuse poetry_base_command logic)
@@ -1771,25 +1815,35 @@ def install_dependencies(dependencies_installed=False):
                     print_error(f"Direct 'poetry install' also failed: {e_install_direct}")
                     print_info("Please ensure Poetry is installed and accessible.")
                     return False
-            elif not IS_WINDOWS and poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
-                 print_info("Retrying poetry install with direct 'poetry' command...")
+            # If the initial attempt was with '[sys.executable, "-m", "poetry"]' (preferred for venv)
+            elif poetry_base_command[0] == sys.executable and poetry_base_command[1] == '-m':
+                 print_info("Retrying poetry install with direct 'poetry' command as fallback...")
                  try:
                     subprocess.run(['poetry', 'install'], cwd='backend', check=True, shell=IS_WINDOWS)
-                    print_success("Poetry install successful with direct 'poetry' command.")
-                 except subprocess.SubprocessError as e_install_direct_non_win:
-                    print_error(f"Direct 'poetry install' also failed on non-Windows: {e_install_direct_non_win}")
-                    print_info("Please ensure Poetry is installed and in your PATH.")
+                    print_success("Poetry install successful with direct 'poetry' command (fallback).")
+                 except subprocess.SubprocessError as e_install_direct:
+                    print_error(f"Direct 'poetry install' (fallback) also failed: {e_install_direct}")
+                    print_info("Please ensure Poetry is installed and accessible, either via python -m poetry in venv or directly in PATH.")
                     return False
-            else:
+            else: # Direct poetry (the initial command) already failed
                 print_info("Poetry install failed. Please ensure Poetry is installed and accessible.")
                 return False
             
-        print_success("Backend dependencies installed successfully") # This line seems redundant if previous try/except handles all paths
+        # If we reached here, one of the install attempts succeeded.
+        # The print_success("Backend dependencies installed successfully.") was inside the try block
+        # and might not be reached if a fallback was used. Let's ensure it's printed if successful.
+        # However, the original structure had it after the except block, implying it's a general success message.
+        # For clarity, let's assume if no 'return False' was hit, it's a success.
+        # The original print_success is fine.
         
         return True
-    except subprocess.SubprocessError as e: # This top-level except might be for npm install?
-        print_error(f"Failed to install dependencies: {e}") # More specific message if possible
-        print_info("You may need to install them manually.")
+    except subprocess.SubprocessError as e: # This top-level except is primarily for npm install or unhandled poetry errors
+        print_error(f"Failed to install dependencies: {e}") 
+        if 'npm' in str(e).lower():
+            print_error("The error seems related to 'npm install' for frontend dependencies.")
+        else:
+            print_error("The error seems related to backend 'poetry' commands or another setup step within install_dependencies.")
+        print_info("You may need to install them manually or check specific error messages above.")
         return False
 
 def start_suna():
@@ -1936,15 +1990,52 @@ PYTHON_IN_VENV = os.path.join(VENV_PATH, 'Scripts', 'python.exe') if IS_WINDOWS 
 VENV_ACTIVATION_MARKER = "_SUNA_SETUP_IN_VENV_" # Environment variable to prevent re-launch loop
 
 def get_python_version(python_exe='python'):
-    """Gets the version of the specified python executable."""
+    print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Attempting with: {python_exe}{Colors.ENDC}")
     try:
-        process = subprocess.run([python_exe, '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
-        version_output = process.stdout.strip() + process.stderr.strip() # stderr for some python versions like system python on mac
+        cmd_to_run = []
+        if ' ' in python_exe and IS_WINDOWS:
+            # For commands like "py -3.11" on Windows with shell=True,
+            # pass as a single string.
+            cmd_to_run = f"{python_exe} --version"
+            print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Running as string (shell=True): {cmd_to_run}{Colors.ENDC}")
+        else:
+            # For commands without spaces in python_exe, or non-Windows,
+            # or if intending shell=False (though current is shell=IS_WINDOWS)
+            # construct list. If python_exe itself has parts, split it.
+            cmd_parts = python_exe.split()
+            cmd_to_run = cmd_parts + ['--version']
+            print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Running as list: {cmd_to_run}{Colors.ENDC}")
+
+        process = subprocess.run(
+            cmd_to_run,
+            capture_output=True,
+            text=True,
+            shell=IS_WINDOWS # This remains shell=IS_WINDOWS
+        )
+        # It's important to check process.returncode if not using check=True,
+        # but for version parsing, sometimes programs output version to stderr and exit with error.
+        # We will proceed to parse output regardless of return code for now,
+        # relying on regex to find version.
+        
+        raw_stdout = process.stdout.strip() if process.stdout else ''
+        raw_stderr = process.stderr.strip() if process.stderr else ''
+        
+        print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Return code: {process.returncode}{Colors.ENDC}")
+        print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Raw stdout: {raw_stdout}{Colors.ENDC}")
+        print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Raw stderr: {raw_stderr}{Colors.ENDC}")
+        
+        version_output = raw_stdout + raw_stderr # Combine both streams
+        
         match = re.search(r"Python (\d+\.\d+\.\d+)", version_output)
+        parsed_version = None
         if match:
-            return match.group(1)
-        return None
-    except (subprocess.SubprocessError, FileNotFoundError):
+            parsed_version = match.group(1)
+            
+        print(f"{Colors.YELLOW}DEBUG_GET_PY_VER: Parsed version: {parsed_version}{Colors.ENDC}")
+        return parsed_version # Return None if match failed, or the version string
+        
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        print(f"{Colors.RED}DEBUG_GET_PY_VER: Error during subprocess call for {python_exe}: {e}{Colors.ENDC}")
         return None
 
 def ensure_python_311_and_venv():
@@ -2011,8 +2102,18 @@ def ensure_python_311_and_venv():
     if not os.path.exists(VENV_PATH):
         print_info(f"Creating virtual environment at: {VENV_PATH} using {system_python_executable}")
         try:
+            # Logic to determine cmd_for_venv for venv creation
+            cmd_for_venv_str_or_list = []
+            if ' ' in system_python_executable and IS_WINDOWS:
+                cmd_for_venv_str_or_list = f"{system_python_executable} -m venv {VENV_PATH}"
+                print(f"{Colors.YELLOW}DEBUG_VENV_CREATE: Running as string (shell=True): {cmd_for_venv_str_or_list}{Colors.ENDC}")
+            else:
+                cmd_parts_venv = system_python_executable.split()
+                cmd_for_venv_str_or_list = cmd_parts_venv + ['-m', 'venv', VENV_PATH]
+                print(f"{Colors.YELLOW}DEBUG_VENV_CREATE: Running as list: {cmd_for_venv_str_or_list}{Colors.ENDC}")
+            
             # Use the confirmed Python 3.11 executable to create the venv
-            subprocess.run([system_python_executable, '-m', 'venv', VENV_PATH], check=True, shell=IS_WINDOWS)
+            subprocess.run(cmd_for_venv_str_or_list, check=True, shell=IS_WINDOWS)
             print_success("Virtual environment created successfully.")
         except subprocess.SubprocessError as e:
             print_error(f"Failed to create virtual environment: {e}")
@@ -2032,7 +2133,17 @@ def ensure_python_311_and_venv():
                     shutil.rmtree(VENV_PATH)
                     print_info(f"Removed existing .venv directory.")
                     print_info(f"Creating virtual environment at: {VENV_PATH} using {system_python_executable}")
-                    subprocess.run([system_python_executable, '-m', 'venv', VENV_PATH], check=True, shell=IS_WINDOWS)
+                    # Logic to determine cmd_for_venv for venv creation (again for recreation)
+                    cmd_for_venv_str_or_list_recreate = []
+                    if ' ' in system_python_executable and IS_WINDOWS:
+                        cmd_for_venv_str_or_list_recreate = f"{system_python_executable} -m venv {VENV_PATH}"
+                        print(f"{Colors.YELLOW}DEBUG_VENV_CREATE (recreate): Running as string (shell=True): {cmd_for_venv_str_or_list_recreate}{Colors.ENDC}")
+                    else:
+                        cmd_parts_venv_recreate = system_python_executable.split()
+                        cmd_for_venv_str_or_list_recreate = cmd_parts_venv_recreate + ['-m', 'venv', VENV_PATH]
+                        print(f"{Colors.YELLOW}DEBUG_VENV_CREATE (recreate): Running as list: {cmd_for_venv_str_or_list_recreate}{Colors.ENDC}")
+
+                    subprocess.run(cmd_for_venv_str_or_list_recreate, check=True, shell=IS_WINDOWS)
                     print_success("Virtual environment recreated successfully.")
                 except Exception as e:
                     print_error(f"Failed to recreate virtual environment: {e}. Please remove '.venv' manually and re-run.")
