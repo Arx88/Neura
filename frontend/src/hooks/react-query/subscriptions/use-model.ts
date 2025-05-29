@@ -19,15 +19,3 @@ export const useAvailableModels = createQueryHook<AvailableModelsResponse, Error
       },
     }
   );
-
-import { useQuery } from '@tanstack/react-query';
-import { getAllLlmModels, AllLlmModelsResponse } from '@/lib/api'; // Ensure this path is correct
-
-export const useAllLlmModels = () => {
-  return useQuery<AllLlmModelsResponse, Error>({
-    queryKey: ['allLlmModels'], // queryKeys.allLlmModels() could be added to keys.ts if preferred
-    queryFn: getAllLlmModels,
-    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
-    refetchOnWindowFocus: false, // Optional: prevent refetch on window focus
-  });
-};

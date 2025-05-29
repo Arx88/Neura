@@ -3,9 +3,7 @@
 import { useSubscription } from '@/hooks/react-query/subscriptions/use-subscriptions';
 import { useState, useEffect, useMemo } from 'react';
 import { isLocalMode } from '@/lib/config';
-// import { useAvailableModels } from '@/hooks/react-query/subscriptions/use-model'; // Replaced
-import { useAllLlmModels } from '@/hooks/react-query/subscriptions/use-model'; // Added
-import { AllLlmModelsResponse, ApiProviderModels, ApiModelInfo } from '@/lib/api'; // Added
+import { useAvailableModels } from '@/hooks/react-query/subscriptions/use-model';
 
 export const STORAGE_KEY_MODEL = 'suna-preferred-model';
 export const STORAGE_KEY_CUSTOM_MODELS = 'customModels';
@@ -22,8 +20,6 @@ export interface ModelOption {
   top?: boolean;
   isCustom?: boolean;
   priority?: number;
-  provider?: string; // Added
-  configured?: boolean; // Added
 }
 
 export interface CustomModel {
@@ -181,15 +177,15 @@ export const MODEL_TIERS = {
 };
 
 // Helper to check if a user can access a model based on subscription status
-// export const canAccessModel = ( // Renamed and replaced
-//   subscriptionStatus: SubscriptionStatus,
-//   requiresSubscription: boolean,
-// ): boolean => {
-//   if (isLocalMode()) {
-//     return true;
-//   }
-//   return subscriptionStatus === 'active' || !requiresSubscription;
-// };
+export const canAccessModel = (
+  subscriptionStatus: SubscriptionStatus,
+  requiresSubscription: boolean,
+): boolean => {
+  if (isLocalMode()) {
+    return true;
+  }
+  return subscriptionStatus === 'active' || !requiresSubscription;
+};
 
 // Helper to format a model name for display
 export const formatModelName = (name: string): string => {
@@ -243,10 +239,9 @@ export const useModelSelection = () => {
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
   
   const { data: subscriptionData } = useSubscription();
-  // const { data: modelsData, isLoading: isLoadingModels } = useAvailableModels({ // Replaced
-  //   refetchOnMount: false,
-  // });
-  const { data: allModelsData, isLoading: isLoadingAllModels } = useAllLlmModels(); // Added
+  const { data: modelsData, isLoading: isLoadingModels } = useAvailableModels({
+    refetchOnMount: false,
+  });
   
   const subscriptionStatus: SubscriptionStatus = subscriptionData?.status === 'active' 
     ? 'active' 
@@ -267,256 +262,164 @@ export const useModelSelection = () => {
 
   // Generate model options list with consistent structure
   const MODEL_OPTIONS = useMemo(() => {
-    const modelOptionsList: ModelOption[] = [];
-
-    if (isLoadingAllModels) {
-      // Return a minimal or empty list while loading, or a default loading state.
-      // For now, let's use the previous approach of default models if API is loading.
-      // This part can be refined later if a specific loading UI for models is needed.
-      return [
-        { 
-          id: DEFAULT_FREE_MODEL_ID, 
-          label: 'DeepSeek (Loading...)', 
-          requiresSubscription: false,
-          description: MODELS[DEFAULT_FREE_MODEL_ID]?.description || MODEL_TIERS.free.baseDescription,
-          priority: MODELS[DEFAULT_FREE_MODEL_ID]?.priority || 50,
-          provider: 'default',
-          configured: true,
-        },
-        { 
-          id: DEFAULT_PREMIUM_MODEL_ID, 
-          label: 'Claude Sonnet 4 (Loading...)', 
-          requiresSubscription: true, 
-          description: MODELS[DEFAULT_PREMIUM_MODEL_ID]?.description || MODEL_TIERS.premium.baseDescription,
-          priority: MODELS[DEFAULT_PREMIUM_MODEL_ID]?.priority || 100,
-          provider: 'default',
-          configured: true,
-        },
-      ];
-    }
-
-    if (allModelsData) {
-      // Define a preferred provider order for later sorting
-      const providerOrder = ["ollama", "openai", "anthropic", "openrouter", "groq", "bedrock", "custom"];
-
-      Object.entries(allModelsData).forEach(([providerKey, providerDetails]) => {
-        const currentProvider = providerDetails as ApiProviderModels | undefined; // Type assertion
-        if (currentProvider && currentProvider.models) {
-          currentProvider.models.forEach((apiModel: ApiModelInfo) => {
-            const modelMeta = MODELS[apiModel.id] || MODELS[apiModel.id.replace(/^openrouter\//, '')] || {}; // Check with and without openrouter prefix for MODELS match
-            
-            let reqSub = !['ollama', 'custom'].includes(providerKey); // Default based on provider type
-            // Override with specific tier info from MODELS constant if available
-            if (modelMeta.tier === 'free') reqSub = false;
-            if (modelMeta.tier === 'premium') reqSub = true;
-
-            modelOptionsList.push({
-              id: apiModel.id, // ID from backend is king
-              label: apiModel.name, // Name from backend is king
-              requiresSubscription: reqSub,
-              description: modelMeta.description || `Model from ${providerKey}`,
-              top: (modelMeta.priority || 0) >= 90,
-              priority: modelMeta.priority || 50, // Default priority
-              lowQuality: modelMeta.lowQuality || false,
-              recommended: modelMeta.recommended || false,
-              provider: providerKey,
-              configured: currentProvider.configured,
-              isCustom: false, // Will be set true for actual custom models later
-            });
-          });
-        }
-      });
-    } else if (!isLoadingAllModels) {
-      // Handle case where data is null and not loading (e.g., API error)
-      // Fallback to a minimal set of hardcoded models or show an error state.
-      // For now, using a similar default as loading state but without "(Loading...)"
-       modelOptionsList.push(
+    let models = [];
+    
+    // Default models if API data not available
+    if (!modelsData?.models || isLoadingModels) {
+      models = [
         { 
           id: DEFAULT_FREE_MODEL_ID, 
           label: 'DeepSeek', 
           requiresSubscription: false,
           description: MODELS[DEFAULT_FREE_MODEL_ID]?.description || MODEL_TIERS.free.baseDescription,
-          priority: MODELS[DEFAULT_FREE_MODEL_ID]?.priority || 50,
-          provider: 'fallback',
-          configured: true,
+          priority: MODELS[DEFAULT_FREE_MODEL_ID]?.priority || 50
         },
         { 
           id: DEFAULT_PREMIUM_MODEL_ID, 
           label: 'Claude Sonnet 4', 
           requiresSubscription: true, 
           description: MODELS[DEFAULT_PREMIUM_MODEL_ID]?.description || MODEL_TIERS.premium.baseDescription,
-          priority: MODELS[DEFAULT_PREMIUM_MODEL_ID]?.priority || 100,
-          provider: 'fallback',
-          configured: true,
+          priority: MODELS[DEFAULT_PREMIUM_MODEL_ID]?.priority || 100
+        },
+      ];
+    } else {
+      // Process API-provided models
+      models = modelsData.models.map(model => {
+        const shortName = model.short_name || model.id;
+        const displayName = model.display_name || shortName;
+        
+        // Format the display label
+        let cleanLabel = displayName;
+        if (cleanLabel.includes('/')) {
+          cleanLabel = cleanLabel.split('/').pop() || cleanLabel;
         }
-      );
+        
+        cleanLabel = cleanLabel
+          .replace(/-/g, ' ')
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        
+        // Get model data from our central MODELS constant
+        const modelData = MODELS[shortName] || {};
+        const isPremium = model?.requires_subscription || modelData.tier === 'premium' || false;
+        
+        return {
+          id: shortName,
+          label: cleanLabel,
+          requiresSubscription: isPremium,
+          description: modelData.description || 
+            (isPremium ? MODEL_TIERS.premium.baseDescription : MODEL_TIERS.free.baseDescription),
+          top: modelData.priority >= 90, // Mark high-priority models as "top"
+          priority: modelData.priority || 0,
+          lowQuality: modelData.lowQuality || false,
+          recommended: modelData.recommended || false
+        };
+      });
     }
     
     // Add custom models if in local mode
     if (isLocalMode() && customModels.length > 0) {
-      const customModelOptions = customModels.map(customModel => {
-        const modelMeta = MODELS[customModel.id] || MODELS[customModel.id.replace(/^openrouter\//, '')] || {}; // Match with or without openrouter/
-        return {
-          id: customModel.id, // Use the ID from custom model storage
-          label: customModel.label || formatModelName(customModel.id), // Use label or format ID
-          requiresSubscription: false, // Custom models are assumed free
-          description: modelMeta.description || MODEL_TIERS.custom.baseDescription,
-          top: false,
-          isCustom: true,
-          priority: modelMeta.priority || 30, // Default priority for custom
-          lowQuality: modelMeta.lowQuality || false,
-          recommended: modelMeta.recommended || false,
-          provider: 'custom', // Specific provider key for custom models
-          configured: true, // Custom models are always considered configured
-        };
-      });
-      modelOptionsList.push(...customModelOptions);
+      const customModelOptions = customModels.map(model => ({
+        id: model.id,
+        label: model.label || formatModelName(model.id),
+        requiresSubscription: false,
+        description: MODEL_TIERS.custom.baseDescription,
+        top: false,
+        isCustom: true,
+        priority: 30, // Low priority by default
+        lowQuality: false,
+        recommended: false
+      }));
+      
+      models = [...models, ...customModelOptions];
     }
-
-    // Define provider sort order
-    const providerSortOrder: { [key: string]: number } = {
-      ollama: 1,
-      openai: 2,
-      anthropic: 3,
-      openrouter: 4, // Keep OpenRouter models grouped
-      groq: 5,
-      bedrock: 6,
-      custom: 7, // Custom models last or as per preference
-      default: 8, // Loading state models
-      fallback: 9, // Fallback error state models
-    };
     
-    // Sort models:
-    // 1. Primary sort: `configured` (true first).
-    // 2. Secondary sort: `provider` (custom order).
-    // 3. Tertiary sort: `priority` (descending).
-    // 4. Quaternary sort: `label` (alphabetical).
-    return modelOptionsList.sort((a, b) => {
-      // Sort by configured (true first)
-      if ((a.configured ?? false) !== (b.configured ?? false)) {
-        return (a.configured ?? false) ? -1 : 1;
+    // Sort models consistently in one place:
+    // 1. First by free/premium (free first)
+    // 2. Then by priority (higher first)
+    // 3. Finally by name (alphabetical)
+    return models.sort((a, b) => {
+      // First by free/premium status
+      if (a.requiresSubscription !== b.requiresSubscription) {
+        return a.requiresSubscription ? 1 : -1;
       }
-      // Sort by provider order
-      const aProviderOrder = providerSortOrder[a.provider || 'custom'] || 99;
-      const bProviderOrder = providerSortOrder[b.provider || 'custom'] || 99;
-      if (aProviderOrder !== bProviderOrder) {
-        return aProviderOrder - bProviderOrder;
+      
+      // Then by priority (higher first)
+      if (a.priority !== b.priority) {
+        return b.priority - a.priority;
       }
-      // Sort by priority (descending)
-      if ((a.priority || 0) !== (b.priority || 0)) {
-        return (b.priority || 0) - (a.priority || 0);
-      }
-      // Sort by label (alphabetical)
-      return (a.label || '').localeCompare(b.label || '');
+      
+      // Finally by name
+      return a.label.localeCompare(b.label);
     });
+  }, [modelsData, isLoadingModels, customModels]);
 
-  }, [allModelsData, isLoadingAllModels, customModels]);
-
-  // Get filtered list of models the user can access
-  // This will be updated after MODEL_OPTIONS is fully refactored with sorting and custom models.
-  const canAccessModelCheck = (modelId: string, currentSubscriptionStatus: SubscriptionStatus, currentModelOptions: ModelOption[]): boolean => {
-    if (isLocalMode()) return true; // Local mode bypasses normal checks
-    
-    const model = currentModelOptions.find(m => m.id === modelId);
-    if (!model) return false;
-    if (!model.configured) return false; // Provider must be configured
-    
-    // Custom and Ollama models are accessible if their provider is configured (Ollama checked by API, custom is always true)
-    if (model.provider === 'custom' || model.provider === 'ollama') return true; 
-
-    // For other providers, check subscription status vs model's requirement
-    return currentSubscriptionStatus === 'active' || !model.requiresSubscription;
-  };
-  
+  // Get filtered list of models the user can access (no additional sorting)
   const availableModels = useMemo(() => {
-    return MODEL_OPTIONS.filter(model => canAccessModelCheck(model.id, subscriptionStatus, MODEL_OPTIONS));
+    return isLocalMode() 
+      ? MODEL_OPTIONS 
+      : MODEL_OPTIONS.filter(model => 
+          canAccessModel(subscriptionStatus, model.requiresSubscription)
+        );
   }, [MODEL_OPTIONS, subscriptionStatus]);
 
   // Initialize selected model from localStorage or defaults
   useEffect(() => {
-    if (typeof window === 'undefined' || MODEL_OPTIONS.length === 0) return;
-
+    if (typeof window === 'undefined') return;
+    
     try {
-      const savedModelId = localStorage.getItem(STORAGE_KEY_MODEL);
-      let newSelectedModelId = '';
-
-      // Check if saved model is valid and accessible
-      if (savedModelId && canAccessModelCheck(savedModelId, subscriptionStatus, MODEL_OPTIONS)) {
-        newSelectedModelId = savedModelId;
-      } else {
-        // Find a new default model based on priority
-        // 1. Try configured Ollama model
-        let defaultModel = MODEL_OPTIONS.find(m => m.provider === 'ollama' && m.configured);
-        if (defaultModel) {
-          newSelectedModelId = defaultModel.id;
+      const savedModel = localStorage.getItem(STORAGE_KEY_MODEL);
+      
+      // Local mode - allow any model
+      if (isLocalMode()) {
+        if (savedModel && MODEL_OPTIONS.find(option => option.id === savedModel)) {
+          setSelectedModel(savedModel);
         } else {
-          // 2. If subscription active, try configured, recommended, premium model
-          if (subscriptionStatus === 'active') {
-            defaultModel = MODEL_OPTIONS.find(m => 
-              m.configured && 
-              m.requiresSubscription && 
-              m.recommended &&
-              m.provider !== 'ollama' // exclude ollama as it was checked
-            );
-            if (defaultModel) newSelectedModelId = defaultModel.id;
-          }
-          
-          // 3. If no model yet, try configured, free, non-Ollama model
-          if (!newSelectedModelId) {
-            defaultModel = MODEL_OPTIONS.find(m => 
-              m.configured && 
-              !m.requiresSubscription && 
-              m.provider !== 'ollama'
-            );
-            if (defaultModel) newSelectedModelId = defaultModel.id;
-          }
-
-          // 4. Fallback to DEFAULT_FREE_MODEL_ID if accessible, then first available
-          if (!newSelectedModelId) {
-            if (canAccessModelCheck(DEFAULT_FREE_MODEL_ID, subscriptionStatus, MODEL_OPTIONS)) {
-              newSelectedModelId = DEFAULT_FREE_MODEL_ID;
-            } else {
-              const firstAvailable = MODEL_OPTIONS.find(m => canAccessModelCheck(m.id, subscriptionStatus, MODEL_OPTIONS));
-              if (firstAvailable) {
-                newSelectedModelId = firstAvailable.id;
-              } else {
-                // This case should ideally not happen if MODEL_OPTIONS has items
-                console.warn("No accessible models found. Defaulting to the first model in the list or empty.");
-                newSelectedModelId = MODEL_OPTIONS.length > 0 ? MODEL_OPTIONS[0].id : ''; 
-              }
-            }
-          }
+          setSelectedModel(DEFAULT_PREMIUM_MODEL_ID);
+          saveModelPreference(DEFAULT_PREMIUM_MODEL_ID);
         }
+        return;
       }
       
-      if (newSelectedModelId) {
-        setSelectedModel(newSelectedModelId);
-        saveModelPreference(newSelectedModelId);
-      } else if (MODEL_OPTIONS.length > 0) {
-        // If after all checks, newSelectedModelId is empty but options are available,
-        // default to the first one (could be a non-configured one if nothing else is available)
-        // This is a safeguard.
-        const fallbackDefault = MODEL_OPTIONS[0].id;
-        setSelectedModel(fallbackDefault);
-        saveModelPreference(fallbackDefault);
-        console.warn(`Default model selection fell back to the first model in the list: ${fallbackDefault}`);
-      } else {
-        // No models available at all (e.g. API error and no defaults loaded)
-        setSelectedModel(''); // Set to empty or a specific "no model available" ID
-        console.warn('No models available to select.');
+      // Premium subscription - ALWAYS use premium model
+      if (subscriptionStatus === 'active') {
+        // If they had a premium model saved and it's still valid, use it
+        const hasSavedPremiumModel = savedModel && 
+          MODEL_OPTIONS.find(option => 
+            option.id === savedModel && 
+            option.requiresSubscription && 
+            canAccessModel(subscriptionStatus, true)
+          );
+        
+        // Otherwise use the default premium model
+        if (hasSavedPremiumModel) {
+          setSelectedModel(savedModel!);
+        } else {
+          setSelectedModel(DEFAULT_PREMIUM_MODEL_ID);
+          saveModelPreference(DEFAULT_PREMIUM_MODEL_ID);
+        }
+        return;
       }
-
+      
+      // No subscription - use saved model if accessible (free tier), or default free
+      if (savedModel) {
+        const modelOption = MODEL_OPTIONS.find(option => option.id === savedModel);
+        if (modelOption && canAccessModel(subscriptionStatus, modelOption.requiresSubscription)) {
+          setSelectedModel(savedModel);
+        } else {
+          setSelectedModel(DEFAULT_FREE_MODEL_ID);
+          saveModelPreference(DEFAULT_FREE_MODEL_ID);
+        }
+      } else {
+        setSelectedModel(DEFAULT_FREE_MODEL_ID);
+        saveModelPreference(DEFAULT_FREE_MODEL_ID);
+      }
     } catch (error) {
-      console.warn('Failed to load model preferences from localStorage or initialize default:', error);
-      // Fallback to a hardcoded default if everything else fails
-      const ultimateFallback = MODEL_OPTIONS.find(m => m.id === DEFAULT_FREE_MODEL_ID && m.configured) 
-                               ? DEFAULT_FREE_MODEL_ID 
-                               : (MODEL_OPTIONS.length > 0 ? MODEL_OPTIONS[0].id : '');
-      setSelectedModel(ultimateFallback);
-      if (ultimateFallback) saveModelPreference(ultimateFallback);
+      console.warn('Failed to load preferences from localStorage:', error);
+      setSelectedModel(DEFAULT_FREE_MODEL_ID);
     }
-  }, [subscriptionStatus, MODEL_OPTIONS, isLoadingAllModels]); // Depend on isLoadingAllModels to re-run when models finish loading
-
+  }, [subscriptionStatus, MODEL_OPTIONS]);
 
   // Handle model selection change
   const handleModelChange = (modelId: string) => {
@@ -572,12 +475,11 @@ export const useModelSelection = () => {
     customModels,
     getActualModelId,
     refreshCustomModels,
-    // canAccessModel: (modelId: string) => { // Original canAccessModel replaced by canAccessModelCheck call below
-    //   if (isLocalMode()) return true;
-    //   const model = MODEL_OPTIONS.find(m => m.id === modelId);
-    //   return model ? canAccessModel(subscriptionStatus, model.requiresSubscription) : false;
-    // },
-    canAccessModel: (modelId: string) => canAccessModelCheck(modelId, subscriptionStatus, MODEL_OPTIONS), // Updated to use the new check
+    canAccessModel: (modelId: string) => {
+      if (isLocalMode()) return true;
+      const model = MODEL_OPTIONS.find(m => m.id === modelId);
+      return model ? canAccessModel(subscriptionStatus, model.requiresSubscription) : false;
+    },
     isSubscriptionRequired: (modelId: string) => {
       return MODEL_OPTIONS.find(m => m.id === modelId)?.requiresSubscription || false;
     }
