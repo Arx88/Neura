@@ -530,21 +530,21 @@ def check_requirements():
                             installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
                         else: # All automated attempts for this tool (including winget) failed
                             if cmd == 'tesseract':
-                            print_warning("All automated attempts to install Tesseract OCR have failed (PATH, common locations, registry, Chocolatey, winget).")
-                            user_choice = input(f"{Colors.YELLOW}Would you like to skip Tesseract OCR requirement for now and in future Suna setups? (yes/no): {Colors.ENDC}").strip().lower()
-                            if user_choice in ['yes', 'y']:
-                                try:
-                                    with open(TESSERACT_OPT_OUT_FLAG_FILE, 'w') as f:
-                                        f.write("User opted out of Tesseract OCR check.")
-                                    print_info(f"Tesseract OCR requirement will be skipped in future runs. Flag file created at: {TESSERACT_OPT_OUT_FLAG_FILE}")
-                                    continue # Skip adding to missing list and manual instructions for this run
-                                except IOError as e_io:
-                                    print_error(f"Could not create opt-out flag file at {TESSERACT_OPT_OUT_FLAG_FILE}: {e_io}")
-                                    print_info("Proceeding with manual installation instructions for Tesseract.")
-                            # If user says no, or if flag creation failed, proceed to print manual instructions and add to missing list.
-                        
-                        print_error(f"Automated installation of {winget_name} failed or winget is not available.")
-                        print_info(f"Please install {cmd} manually from {url}")
+                                print_warning("All automated attempts to install Tesseract OCR have failed (PATH, common locations, registry, Chocolatey, winget).")
+                                user_choice = input(f"{Colors.YELLOW}Would you like to skip Tesseract OCR requirement for now and in future Suna setups? (yes/no): {Colors.ENDC}").strip().lower()
+                                if user_choice in ['yes', 'y']:
+                                    try:
+                                        with open(TESSERACT_OPT_OUT_FLAG_FILE, 'w') as f:
+                                            f.write("User opted out of Tesseract OCR check.")
+                                        print_info(f"Tesseract OCR requirement will be skipped in future runs. Flag file created at: {TESSERACT_OPT_OUT_FLAG_FILE}")
+                                        continue # Skip adding to missing list and manual instructions for this run
+                                    except IOError as e_io:
+                                        print_error(f"Could not create opt-out flag file at {TESSERACT_OPT_OUT_FLAG_FILE}: {e_io}")
+                                        print_info("Proceeding with manual installation instructions for Tesseract.")
+                                # If user says no, or if flag creation failed, proceed to print manual instructions and add to missing list.
+                            
+                            print_error(f"Automated installation of {winget_name} failed or winget is not available.")
+                            print_info(f"Please install {cmd} manually from {url}")
                         if cmd == 'python3':
                              print_info("Download the Python 3.11 installer from the URL and run it. Ensure 'Add Python to PATH' is checked during installation.")
                         elif cmd == 'git':
