@@ -37,7 +37,7 @@ class LLMRetryError(LLMError):
 
 def setup_api_keys() -> None:
     """Set up API keys from environment variables."""
-    providers = ['OPENAI', 'ANTHROPIC', 'GROQ', 'OPENROUTER']
+    providers = ['OPENAI', 'ANTHROPIC', 'GROQ', 'OPENROUTER', 'OLLAMA']
     for provider in providers:
         key = getattr(config, f'{provider}_API_KEY')
         if key:
@@ -146,6 +146,14 @@ def prepare_params(
                 extra_headers["X-Title"] = app_name
             params["extra_headers"] = extra_headers
             logger.debug(f"Added OpenRouter site URL and app name to headers")
+    elif model_name.startswith("ollama/"):
+        logger.debug(f"Preparing Ollama parameters for model: {model_name}")
+        if config.OLLAMA_API_BASE:
+            params["api_base"] = config.OLLAMA_API_BASE
+            logger.debug(f"Set Ollama API base to: {config.OLLAMA_API_BASE}")
+        if config.OLLAMA_API_KEY: # Though often not required for local Ollama
+            params["api_key"] = config.OLLAMA_API_KEY
+            logger.debug("Set Ollama API key")
 
     # Add Bedrock-specific parameters
     if model_name.startswith("bedrock/"):
@@ -393,12 +401,57 @@ async def test_bedrock():
         print(f"Error testing Bedrock: {str(e)}")
         return False
 
+async def test_ollama():
+    """Test the Ollama integration with a simple query."""
+    print("\n--- Testing Ollama model ---")
+    print("Note: Ensure your Ollama server is running and the model (e.g., llama2) is downloaded.")
+    test_messages = [
+        {"role": "user", "content": "Hello, can you give me a quick test response? Why is the sky blue?"}
+    ]
+
+    try:
+        response = await make_llm_api_call(
+            model_name="ollama/llama2", # A common Ollama model
+            messages=test_messages,
+            temperature=0.7,
+            max_tokens=150
+        )
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            print(f"Response: {response.choices[0].message.content}")
+        else:
+            print(f"Received empty or unexpected response structure: {response}")
+        print(f"Model used: {response.model}") # LiteLLM might modify this
+        return True
+    except Exception as e:
+        print(f"Error testing Ollama: {str(e)}")
+        return False
+
 if __name__ == "__main__":
     import asyncio
 
-    test_success = asyncio.run(test_bedrock())
+    # Test Bedrock
+    # print("\n--- Testing Bedrock ---")
+    # bedrock_test_success = asyncio.run(test_bedrock())
+    # if bedrock_test_success:
+    #     print("\n✅ Bedrock integration test completed successfully!")
+    # else:
+    #     print("\n❌ Bedrock integration test failed!")
 
-    if test_success:
-        print("\n✅ integration test completed successfully!")
+    # Test OpenRouter
+    # print("\n--- Testing OpenRouter ---")
+    # openrouter_test_success = asyncio.run(test_openrouter())
+    # if openrouter_test_success:
+    #    print("\n✅ OpenRouter integration test completed successfully!")
+    # else:
+    #    print("\n❌ OpenRouter integration test failed!")
+
+    # Test Ollama
+    # Note: To run this test, ensure your local Ollama server is running
+    # and has the 'llama2' model available (e.g., run `ollama pull llama2`).
+    # Also, set OLLAMA_API_BASE in your .env if it's not the default http://localhost:11434
+    print("\n--- Testing Ollama ---")
+    ollama_test_success = asyncio.run(test_ollama())
+    if ollama_test_success:
+        print("\n✅ Ollama integration test completed successfully!")
     else:
-        print("\n❌ Bedrock integration test failed!")
+        print("\n❌ Ollama integration test failed!")
