@@ -47,6 +47,26 @@ export type Project = {
   [key: string]: any; // Allow additional properties to handle database fields
 };
 
+// LLM Models API Types
+export interface ApiModelInfo {
+  id: string;
+  name: string;
+}
+
+export interface ApiProviderModels {
+  configured: boolean;
+  models: ApiModelInfo[];
+}
+
+export interface AllLlmModelsResponse {
+  ollama?: ApiProviderModels; // Optional because it might not be configured
+  openai: ApiProviderModels;
+  anthropic: ApiProviderModels;
+  openrouter: ApiProviderModels;
+  groq: ApiProviderModels;
+  bedrock: ApiProviderModels;
+}
+
 export type Thread = {
   thread_id: string;
   account_id: string | null;
@@ -254,6 +274,42 @@ export const getProject = async (projectId: string): Promise<Project> => {
   } catch (error) {
     console.error(`Error fetching project ${projectId}:`, error);
     handleApiError(error, { operation: 'load project', resource: `project ${projectId}` });
+    throw error;
+  }
+};
+
+export const getAllLlmModels = async (): Promise<AllLlmModelsResponse> => {
+  try {
+    const supabase = createClient(); // Assuming supabase client for auth if needed, or adjust if public
+    const { data: { session } } = await supabase.auth.getSession();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (session?.access_token) {
+      headers['Authorization'] = `Bearer ${session.access_token}`;
+    }
+
+    // Ensure API_URL is defined (it's already at the top of the file)
+    if (!API_URL) {
+      throw new Error('Backend URL is not configured.');
+    }
+
+    const response = await fetch(`${API_URL}/api/llm/all-models`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'No error details available');
+      console.error(`Error getting all LLM models: ${response.status} ${response.statusText}`, errorText);
+      throw new Error(`Error getting all LLM models: ${response.statusText} (${response.status})`);
+    }
+    return response.json();
+  } catch (error) {
+    console.error('Failed to get all LLM models:', error);
+    // Use existing error handler if appropriate, or rethrow
+    handleApiError(error, { operation: 'load all LLM models', resource: 'AI models' });
     throw error;
   }
 };
