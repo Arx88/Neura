@@ -221,30 +221,31 @@ async def start_agent(
             # This specific check should probably remain as it's a precondition for the API itself
             raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
 
-        # New model selection logic (UI > Server Config > Hardcoded Default)
+        # Nueva lógica de determinación de model_name
         server_configured_model = config.MODEL_TO_USE
-        model_name_from_request = body.model_name # Specific to start_agent
+        model_name_from_request = body.model_name
         final_model_name_to_use = None
 
-        if model_name_from_request and model_name_from_request.strip():
+        if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip() and server_configured_model and server_configured_model.strip():
+            logger.info(f"OLLAMA_API_BASE ('{config.OLLAMA_API_BASE}') and MODEL_TO_USE ('{server_configured_model}') are set in server config. Prioritizing server config for main agent model.")
+            final_model_name_to_use = server_configured_model
+            if model_name_from_request:
+                logger.info(f"Ignoring 'model_name: {model_name_from_request}' from request body due to server-side OLLAMA configuration priority.")
+        elif model_name_from_request:
             logger.info(f"Using 'model_name: {model_name_from_request}' from request body.")
             final_model_name_to_use = model_name_from_request
-        elif server_configured_model and server_configured_model.strip():
-            logger.info(f"No model_name in request body or it was empty, using MODEL_TO_USE ('{server_configured_model}') from server config.")
-            final_model_name_to_use = server_configured_model
         else:
-            default_fallback_model = "gpt-3.5-turbo" 
-            logger.warning(f"No model specified in UI or server config. Falling back to hardcoded default: '{default_fallback_model}'.")
-            final_model_name_to_use = default_fallback_model
+            logger.info(f"No model_name in request body, using MODEL_TO_USE ('{server_configured_model}') from server config.")
+            final_model_name_to_use = server_configured_model
         
         logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
 
-        # Alias resolution
-        # The variable `model_name` will be used for subsequent logic like Ollama prefixing and the actual LLM call.
-        model_name = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+        # Log the model name after alias resolution
+        resolved_model = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+        model_name = resolved_model # Esta es la variable que se usará en el resto de la función
         logger.info(f"Model name after alias resolution: {model_name}")
 
-        # Ollama prefixing logic (existing, but now uses the model_name derived from new selection logic)
+        # New logic to insert for Ollama model prefixing
         if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
             has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
             if not has_known_provider_prefix:
@@ -646,30 +647,32 @@ async def initiate_agent_with_files(
     if not instance_id:
         raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
 
-    # New model selection logic (UI > Server Config > Hardcoded Default)
+    # Nueva lógica de determinación de model_name
     server_configured_model = config.MODEL_TO_USE
-    model_name_from_request = model_name # Specific to initiate_agent_with_files (from Form input)
+    # model_name_from_request se obtiene del parámetro de la función 'model_name'
+    model_name_from_request = model_name 
     final_model_name_to_use = None
 
-    if model_name_from_request and model_name_from_request.strip():
+    if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip() and server_configured_model and server_configured_model.strip():
+        logger.info(f"OLLAMA_API_BASE ('{config.OLLAMA_API_BASE}') and MODEL_TO_USE ('{server_configured_model}') are set in server config. Prioritizing server config for main agent model.")
+        final_model_name_to_use = server_configured_model
+        if model_name_from_request:
+            logger.info(f"Ignoring 'model_name: {model_name_from_request}' from request (Form value) due to server-side OLLAMA configuration priority.")
+    elif model_name_from_request:
         logger.info(f"Using 'model_name: {model_name_from_request}' from request (Form value).")
         final_model_name_to_use = model_name_from_request
-    elif server_configured_model and server_configured_model.strip():
-        logger.info(f"No model_name in request (Form value) or it was empty, using MODEL_TO_USE ('{server_configured_model}') from server config.")
-        final_model_name_to_use = server_configured_model
     else:
-        default_fallback_model = "gpt-3.5-turbo"
-        logger.warning(f"No model specified in UI or server config (Form value). Falling back to hardcoded default: '{default_fallback_model}'.")
-        final_model_name_to_use = default_fallback_model
-        
-    logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
+        logger.info(f"No model_name in request (Form value), using MODEL_TO_USE ('{server_configured_model}') from server config.")
+        final_model_name_to_use = server_configured_model
 
-    # Alias resolution
-    # The variable `model_name` (re-assigned here from the function parameter) will be used for subsequent logic.
-    model_name = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+    logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
+    
+    # Log the model name after alias resolution
+    resolved_model = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+    model_name = resolved_model # Esta es la variable que se usará en el resto de la función
     logger.info(f"Model name after alias resolution: {model_name}")
     
-    # Ollama prefixing logic (existing, but now uses the model_name derived from new selection logic)
+    # New logic to insert for Ollama model prefixing
     if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
         has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
         if not has_known_provider_prefix:
