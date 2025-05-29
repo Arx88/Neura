@@ -559,7 +559,7 @@ def check_requirements():
                             # Use sys.executable to ensure pip is called from the venv's Python
                             pip_install_cmd = [sys.executable, '-m', 'pip', 'install', 'poetry']
                             print_info(f"Attempting to install Poetry using: {' '.join(pip_install_cmd)}")
-                            subprocess.run(pip_install_cmd, check=True, shell=IS_WINDOWS)
+                            subprocess.run(pip_install_cmd, check=True, shell=False)
                             print_success("Poetry installed successfully using pip in the current environment.")
                             
                             # Verify the pip-installed Poetry using its direct path in the venv
@@ -567,7 +567,7 @@ def check_requirements():
                             print_info(f"Verifying Poetry at {poetry_in_venv_scripts}...")
                             # This subprocess.run will raise SubprocessError if it fails (due to check=True)
                             # and be caught by the outer `except subprocess.SubprocessError as poetry_pip_e`
-                            subprocess.run([poetry_in_venv_scripts, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                            subprocess.run([poetry_in_venv_scripts, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=False)
                             print_success(f"Poetry successfully verified at {poetry_in_venv_scripts} ('--version').")
                             continue # Successfully installed and verified via pip, skip to next requirement
 
@@ -1700,12 +1700,16 @@ def install_dependencies(dependencies_installed=False):
         
         lock_command = poetry_base_command + ['lock', '--no-update']
         print_info(f"Executing: {' '.join(lock_command)} in backend directory")
+        # Determine shell mode for the primary attempt
+        # Use shell=True on Windows only if poetry_base_command is just ['poetry']
+        # Otherwise (direct path or python -m poetry), use shell=False.
+        lock_shell_mode = IS_WINDOWS if poetry_base_command[0] == 'poetry' else False
         try:
             subprocess.run(
                 lock_command,
                 cwd='backend',
                 check=True,
-                shell=IS_WINDOWS # shell=True because poetry_base_command might be just 'poetry'
+                shell=lock_shell_mode
             )
             print_success("Poetry lock successful.")
         except subprocess.SubprocessError as e_lock:
@@ -1746,12 +1750,14 @@ def install_dependencies(dependencies_installed=False):
 
         install_command = poetry_base_command + ['install']
         print_info(f"Executing: {' '.join(install_command)} in backend directory")
+        # Determine shell mode for the primary attempt (can reuse poetry_base_command logic)
+        install_shell_mode = IS_WINDOWS if poetry_base_command[0] == 'poetry' else False
         try:
             subprocess.run(
                 install_command, 
                 cwd='backend',
                 check=True,
-                shell=IS_WINDOWS
+                shell=install_shell_mode
             )
             print_success("Backend dependencies installed successfully.")
         except subprocess.SubprocessError as e_install:
