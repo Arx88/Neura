@@ -104,6 +104,9 @@ cd suna
 ```bash
 python setup.py
 ```
+The `setup.py` wizard offers enhanced support for Windows users, attempting to automatically install missing prerequisites like Git, Python, Node.js, Tesseract OCR, and others using `winget` where available. It provides clear guidance if manual steps are needed.
+
+*Windows users: For the best experience, especially if prerequisites are missing, please run the `setup.py` script in a terminal with administrator privileges.*
 
 3. **Start or stop the containers**:
 
@@ -115,7 +118,7 @@ python start.py
 
 See the [Self-Hosting Guide](./docs/SELF-HOSTING.md) for detailed manual setup instructions.
 
-The wizard will guide you through all necessary steps to get your Suna instance up and running. For detailed instructions, troubleshooting tips, and advanced configuration options, see the [Self-Hosting Guide](./SELF-HOSTING.md).
+The wizard will guide you through all necessary steps to get your Suna instance up and running. For detailed instructions, troubleshooting tips, and advanced configuration options, see the [Self-Hosting Guide](./docs/SELF-HOSTING.md).
 
 ## Contributing
 
