@@ -80,7 +80,7 @@ Handles data persistence with authentication, user management, conversation hist
 
 ## Self-Hosting
 
-Suna can be self-hosted on your own infrastructure using our setup wizard. For a comprehensive guide to self-hosting Suna, please refer to our [Self-Hosting Guide](./docs/SELF-HOSTING.md).
+Suna can be self-hosted on your own infrastructure using our setup wizard. For a comprehensive guide to self-hosting Suna, please refer to our [Self-Hosting Guide](./docs/SELF-HOSTING.md). Para una guía detallada en español, consulta nuestra [Guía de Autoalojamiento en Español](./docs/SELF-HOSTING_es.md).
 
 The setup process includes:
 
@@ -90,35 +90,35 @@ The setup process includes:
 - Integrating with LLM providers (Anthropic, OpenAI, Groq, etc.)
 - Configuring web search and scraping capabilities
 
-### Quick Start
+### Inicio Rápido
 
-1. **Clone the repository**:
+1. **Clona el repositorio**:
 
 ```bash
 git clone https://github.com/kortix-ai/suna.git
 cd suna
 ```
 
-2. **Run the setup wizard**:
+2. **Ejecuta el asistente de configuración**:
 
 ```bash
 python setup.py
 ```
-The `setup.py` wizard offers enhanced support for Windows users, attempting to automatically install missing prerequisites like Git, Python, Node.js, Tesseract OCR, and others using `winget` where available. It provides clear guidance if manual steps are needed.
+El asistente `setup.py` ofrece soporte mejorado para usuarios de Windows, intentando instalar automáticamente prerrequisitos faltantes como Git, Python, Node.js, Tesseract OCR y otros usando `winget` cuando esté disponible. Proporciona una guía clara si se necesitan pasos manuales.
 
-*Windows users: For the best experience, especially if prerequisites are missing, please run the `setup.py` script in a terminal with administrator privileges.*
+*Usuarios de Windows: Para la mejor experiencia, especialmente si faltan prerrequisitos, por favor ejecuta el script `setup.py` en una terminal con privilegios de administrador.*
 
-3. **Start or stop the containers**:
+3. **Inicia o detén los contenedores**:
 
 ```bash
 python start.py
 ```
 
-### Manual Setup
+### Configuración Manual
 
-See the [Self-Hosting Guide](./docs/SELF-HOSTING.md) for detailed manual setup instructions.
+Consulta la [Guía de Autoalojamiento](./docs/SELF-HOSTING.md) (en inglés) o la [Guía de Autoalojamiento en Español](./docs/SELF-HOSTING_es.md) para instrucciones detalladas de configuración manual.
 
-The wizard will guide you through all necessary steps to get your Suna instance up and running. For detailed instructions, troubleshooting tips, and advanced configuration options, see the [Self-Hosting Guide](./docs/SELF-HOSTING.md).
+El asistente te guiará a través de todos los pasos necesarios para poner en marcha tu instancia de Suna. Para instrucciones detalladas, consejos de solución de problemas y opciones de configuración avanzadas, consulta la [Guía de Autoalojamiento](./docs/SELF-HOSTING.md) (en inglés) o la [Guía de Autoalojamiento en Español](./docs/SELF-HOSTING_es.md).
 
 ## Contributing
 
