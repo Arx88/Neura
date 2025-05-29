@@ -8,6 +8,8 @@ from getpass import getpass
 import re
 
 IS_WINDOWS = platform.system() == 'Windows'
+if IS_WINDOWS:
+    import winreg
 
 # ANSI colors for pretty output
 class Colors:
@@ -20,6 +22,8 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+TESSERACT_OPT_OUT_FLAG_FILE = os.path.expanduser("~/.suna_skip_tesseract_check")
 
 # Helper function to run winget install
 def run_winget_install(package_id, package_name):
@@ -48,22 +52,49 @@ def run_winget_install(package_id, package_name):
             '--accept-source-agreements',
             '--disable-interactivity'
         ]
-        process = subprocess.run(install_command, capture_output=True, text=True, check=True, shell=True)
-        print_info(f"winget install command output for {package_name}:\n{process.stdout}")
+        print_info(f"Executing winget command: {' '.join(install_command)}")
+        process = subprocess.run(install_command, capture_output=True, text=True, check=False, shell=True) # check=False to handle errors manually
+
         if process.returncode == 0:
+            print_info(f"winget install command output for {package_name}:\n{process.stdout}")
             print_success(f"{package_name} installation via winget seems successful.")
             return True
         else:
             print_error(f"winget installation of {package_name} failed with exit code {process.returncode}.")
-            print_error(f"Winget stderr: {process.stderr}")
-            return False
+            if process.stdout:
+                print_error(f"Winget stdout:\n{process.stdout}")
+            if process.stderr:
+                print_error(f"Winget stderr:\n{process.stderr}")
+            
+            if process.returncode == 2316632107: # 0x8A15002B
+                print_warning("Winget returned exit code 2316632107 (SCHED_E_TASK_TERMINATED).")
+                print_warning("This may indicate the task was stopped unexpectedly. Possible causes include system policy, resource limits, or external intervention.")
+                print_warning("Retrying without --disable-interactivity might help, or a manual install may be needed if it persists.")
+            # Fall through to the fallback mechanism below
+            
+            # Simulate SubprocessError to trigger fallback, but we've already printed details
+            # This ensures the existing fallback logic is used.
+            # We raise a generic one because the original 'check=True' would have raised it.
+            raise subprocess.SubprocessError("Winget initial install failed, triggering fallback.")
+
     except subprocess.SubprocessError as e:
-        print_error(f"Failed to install {package_name} using winget: {e}")
-        if e.stderr:
-            print_error(f"Winget stderr: {e.stderr}")
-        if "0x80070005" in str(e.stderr) or "Access is denied" in str(e.stderr):
+        # This block now primarily catches the simulated error above, or genuine SubprocessError if shell=True fails catastrophically
+        # before even running winget (e.g. winget command not found after initial check - though unlikely here)
+        # or if check=True was used and an error occurred.
+        # If we raised our custom SubprocessError, e.stdout/stderr might not be populated from the process directly.
+        # The actual process.stdout/stderr was already printed if process.returncode !=0.
+        # So we only print e.stdout/e.stderr if they exist on 'e' and weren't from our manual raise.
+        if not (isinstance(e, subprocess.SubprocessError) and e.args[0] == "Winget initial install failed, triggering fallback."):
+            print_error(f"Failed to install {package_name} using winget: {e}")
+            if hasattr(e, 'stdout') and e.stdout:
+                print_error(f"Winget stdout: {e.stdout}")
+            if hasattr(e, 'stderr') and e.stderr:
+                print_error(f"Winget stderr: {e.stderr}")
+
+        if hasattr(e, 'stderr') and e.stderr and ("0x80070005" in str(e.stderr) or "Access is denied" in str(e.stderr)):
             print_warning("Winget may require administrator privileges. Try running this script in an administrator terminal.")
-        # Try without --disable-interactivity as a fallback for some winget versions/configurations
+        
+        # Try without --disable-interactivity as a fallback
         try:
             print_info(f"Retrying winget install for {package_name} without --disable-interactivity...")
             install_command_fallback = [
@@ -72,21 +103,32 @@ def run_winget_install(package_id, package_name):
                 '--accept-package-agreements',
                 '--accept-source-agreements'
             ]
-            process = subprocess.run(install_command_fallback, capture_output=True, text=True, check=True, shell=True)
-            print_info(f"winget install command output for {package_name} (fallback):\n{process.stdout}")
-            if process.returncode == 0:
+            print_info(f"Executing winget command (fallback): {' '.join(install_command_fallback)}")
+            process_fallback = subprocess.run(install_command_fallback, capture_output=True, text=True, check=False, shell=True)
+            
+            if process_fallback.returncode == 0:
+                print_info(f"winget install command output for {package_name} (fallback):\n{process_fallback.stdout}")
                 print_success(f"{package_name} installation via winget (fallback) seems successful.")
                 return True
             else:
-                print_error(f"winget installation of {package_name} (fallback) failed with exit code {process.returncode}.")
-                print_error(f"Winget stderr: {process.stderr}")
+                print_error(f"winget installation of {package_name} (fallback) failed with exit code {process_fallback.returncode}.")
+                if process_fallback.stdout:
+                    print_error(f"Winget stdout (fallback):\n{process_fallback.stdout}")
+                if process_fallback.stderr:
+                    print_error(f"Winget stderr (fallback):\n{process_fallback.stderr}")
+
+                if process_fallback.returncode == 2316632107: # 0x8A15002B
+                    print_warning("Winget (fallback) returned exit code 2316632107 (SCHED_E_TASK_TERMINATED).")
+                    print_warning("This may indicate the task was stopped unexpectedly. Manual install may be needed if this persists.")
                 return False
         except subprocess.SubprocessError as e_fallback:
-            print_error(f"Fallback winget install for {package_name} also failed: {e_fallback}")
-            if e_fallback.stderr:
-                print_error(f"Winget stderr (fallback): {e_fallback.stderr}")
+            print_error(f"Fallback winget install for {package_name} also failed critically: {e_fallback}")
+            if hasattr(e_fallback, 'stdout') and e_fallback.stdout:
+                print_error(f"Winget stdout (fallback critical): {e_fallback.stdout}")
+            if hasattr(e_fallback, 'stderr') and e_fallback.stderr:
+                print_error(f"Winget stderr (fallback critical): {e_fallback.stderr}")
             return False
-    except Exception as e:
+    except Exception as e: # Catches other unexpected errors
         print_error(f"An unexpected error occurred during winget installation of {package_name}: {e}")
         return False
 
@@ -143,9 +185,15 @@ def check_requirements():
     missing = []
     installed_via_winget_needs_path_check = []
 
+    # Tesseract opt-out flag file is defined globally as TESSERACT_OPT_OUT_FLAG_FILE
+
     for cmd, details in requirements.items():
         url, winget_id, winget_name, specific_version_check = details
         cmd_to_check = cmd.replace('3', '') if IS_WINDOWS and cmd in ['python3', 'pip3'] else cmd
+
+        if cmd == 'tesseract' and os.path.exists(TESSERACT_OPT_OUT_FLAG_FILE):
+            print_info(f"Tesseract OCR check/installation is skipped due to user opt-out flag: {TESSERACT_OPT_OUT_FLAG_FILE}")
+            continue # Skip all processing for Tesseract
 
         try:
             version_check_cmd = [cmd_to_check, '--version']
@@ -185,6 +233,168 @@ def check_requirements():
             print_error(original_error_msg)
 
             if IS_WINDOWS:
+                # Enhanced Tesseract detection for Windows
+                if cmd == 'tesseract':
+                    tesseract_exe_path = None
+                    detection_method = None
+
+                    # 1. Check TESSDATA_PREFIX environment variable
+                    tessdata_prefix = os.environ.get('TESSDATA_PREFIX')
+                    if tessdata_prefix:
+                        print_info(f"TESSDATA_PREFIX found: {tessdata_prefix}")
+                        # Assume Tesseract is one level above tessdata
+                        potential_path = os.path.abspath(os.path.join(tessdata_prefix, '..'))
+                        search_paths = [potential_path, os.path.join(potential_path, 'bin')]
+                        for path in search_paths:
+                            test_exe = os.path.join(path, 'tesseract.exe')
+                            if os.path.isfile(test_exe):
+                                try:
+                                    subprocess.run([test_exe, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                    tesseract_exe_path = test_exe
+                                    detection_method = f"TESSDATA_PREFIX environment variable ({tessdata_prefix})"
+                                    break
+                                except (subprocess.SubprocessError, FileNotFoundError):
+                                    pass
+                        if tesseract_exe_path:
+                            print_success(f"Tesseract found via {detection_method}")
+                            # Update cmd_to_check to use the full path
+                            requirements[cmd] = (url, winget_id, winget_name, [tesseract_exe_path, '--version'])
+                            # Re-run the check with the full path
+                            try:
+                                subprocess.run([tesseract_exe_path, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                print_success(f"{cmd} is installed (verified via {detection_method})")
+                                continue # Skip to next requirement
+                            except (subprocess.SubprocessError, FileNotFoundError):
+                                print_error(f"Failed to verify Tesseract at {tesseract_exe_path} even after finding it.")
+                                # Proceed to other methods or winget
+
+                    # 2. Check common installation paths
+                    if not tesseract_exe_path:
+                        common_paths = [
+                            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'Tesseract-OCR'),
+                            os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'Tesseract-OCR')
+                        ]
+                        for base_path in common_paths:
+                            search_paths = [base_path, os.path.join(base_path, 'bin')]
+                            for path in search_paths:
+                                test_exe = os.path.join(path, 'tesseract.exe')
+                                if os.path.isfile(test_exe):
+                                    try:
+                                        subprocess.run([test_exe, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                        tesseract_exe_path = test_exe
+                                        detection_method = f"common installation path ({path})"
+                                        break
+                                    except (subprocess.SubprocessError, FileNotFoundError):
+                                        pass
+                            if tesseract_exe_path:
+                                break
+                        if tesseract_exe_path:
+                            print_success(f"Tesseract found via {detection_method}")
+                            requirements[cmd] = (url, winget_id, winget_name, [tesseract_exe_path, '--version'])
+                            try:
+                                subprocess.run([tesseract_exe_path, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                print_success(f"{cmd} is installed (verified via {detection_method})")
+                                continue
+                            except (subprocess.SubprocessError, FileNotFoundError):
+                                print_error(f"Failed to verify Tesseract at {tesseract_exe_path} even after finding it.")
+
+                    # 3. Check Windows Registry
+                    if not tesseract_exe_path:
+                        registry_keys = [
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\tesseract.exe', ''),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\DigiObjects\TesseractOCR', 'Path'),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\DigiObjects\TesseractOCR', 'InstallationPath'),
+                            (winreg.HKEY_CURRENT_USER, r'SOFTWARE\DigiObjects\TesseractOCR', 'Path'),
+                            (winreg.HKEY_CURRENT_USER, r'SOFTWARE\DigiObjects\TesseractOCR', 'InstallationPath'),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Tesseract-OCR', 'Path'),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Tesseract-OCR', 'InstallationPath'),
+                            (winreg.HKEY_CURRENT_USER, r'SOFTWARE\Tesseract-OCR', 'Path'),
+                            (winreg.HKEY_CURRENT_USER, r'SOFTWARE\Tesseract-OCR', 'InstallationPath'),
+                        ]
+                        for hive, key_path, value_name in registry_keys:
+                            try:
+                                with winreg.OpenKey(hive, key_path) as key:
+                                    reg_path, _ = winreg.QueryValueEx(key, value_name)
+                                    if reg_path:
+                                        # If value_name is empty, reg_path is the tesseract.exe itself for App Paths
+                                        # Otherwise, reg_path is a directory.
+                                        potential_exe_path = reg_path if not value_name else os.path.join(reg_path, 'tesseract.exe')
+                                        
+                                        # Normalize path and check if it's a file directly
+                                        if os.path.isfile(potential_exe_path):
+                                            test_exe = potential_exe_path
+                                        else: # Check in bin subdirectory if the registry path was a directory
+                                            if value_name: # Only if reg_path was a directory
+                                                test_exe = os.path.join(reg_path, 'bin', 'tesseract.exe')
+                                            else: # if value_name was empty, potential_exe_path was already the full path
+                                                test_exe = None
+
+                                        if test_exe and os.path.isfile(test_exe):
+                                            print_info(f"Testing Tesseract from registry: {test_exe} (Key: {key_path}\\{value_name})")
+                                            try:
+                                                subprocess.run([test_exe, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                                tesseract_exe_path = test_exe
+                                                detection_method = f"Windows Registry ({key_path}\\{value_name})"
+                                                break
+                                            except (subprocess.SubprocessError, FileNotFoundError):
+                                                print_warning(f"Found Tesseract via registry at {test_exe}, but '--version' check failed.")
+                                                pass # Try next registry key
+                            except FileNotFoundError:
+                                pass # Key or value not found
+                            except OSError as oe:
+                                print_warning(f"Error accessing registry key {key_path}: {oe}") # Permissions or other OS error
+                            if tesseract_exe_path:
+                                break
+                        if tesseract_exe_path:
+                            print_success(f"Tesseract found via {detection_method}")
+                            requirements[cmd] = (url, winget_id, winget_name, [tesseract_exe_path, '--version'])
+                            try:
+                                subprocess.run([tesseract_exe_path, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                                print_success(f"{cmd} is installed (verified via {detection_method})")
+                                continue
+                            except (subprocess.SubprocessError, FileNotFoundError):
+                                print_error(f"Failed to verify Tesseract at {tesseract_exe_path} even after finding it.")
+                    
+                    # If Tesseract is still not found by custom methods, try Chocolatey
+                    if not tesseract_exe_path:
+                        try:
+                            # Check if choco is available
+                            subprocess.run(['choco', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+                            print_info("Chocolatey found. Attempting to install Tesseract OCR using Chocolatey...")
+                            choco_install_command = [
+                                'choco', 'install', 'tesseract-ocr', '-y',
+                                '--params', '"/InstallDir=C:\\Program Files\\Tesseract-OCR /Path"' # Ensure quotes for params
+                            ]
+                            # Note: Chocolatey installs to machine PATH by default, so a new terminal is usually needed.
+                            # The /Path parameter for tesseract-ocr package specifically tries to ensure it.
+                            # The /InstallDir is a suggestion; package maintainer decides if it's respected.
+                            
+                            process = subprocess.run(choco_install_command, capture_output=True, text=True, shell=True) # shell=True for choco
+                            
+                            if process.returncode == 0:
+                                print_success("Tesseract OCR installation via Chocolatey seems successful.")
+                                print_info(f"Chocolatey output:\n{process.stdout}")
+                                # Add to re-check list, similar to winget installs
+                                installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
+                                continue # Skip to next requirement (and skip winget)
+                            else:
+                                print_error(f"Chocolatey install of Tesseract OCR failed. Exit code: {process.returncode}")
+                                if process.stdout:
+                                    print_error(f"Choco stdout:\n{process.stdout}")
+                                if process.stderr:
+                                    print_error(f"Choco stderr:\n{process.stderr}")
+                                # Proceed to winget as a further fallback
+                        except (subprocess.SubprocessError, FileNotFoundError) as choco_e:
+                            if isinstance(choco_e, FileNotFoundError):
+                                print_info("Chocolatey (choco) not found. Skipping Chocolatey installation attempt.")
+                            else:
+                                print_warning(f"Error during Chocolatey check or install: {choco_e}. Proceeding to other methods.")
+                    
+                    # If Tesseract is still not found (after custom checks and choco attempt), then proceed with original logic (winget, etc.)
+                    if tesseract_exe_path: # Should have 'continue'd if successful earlier
+                        print_warning("Tesseract was found by custom detection but could not be verified. Proceeding with standard installation checks.")
+
+
                 if cmd == 'docker':
                     print_error("Docker installation cannot be automated by this script.")
                     print_info("Please install Docker Desktop for Windows manually.")
@@ -225,7 +435,21 @@ def check_requirements():
                     elif run_winget_install(winget_id, winget_name):
                         # Add to a list to re-check after loop, in case PATH needs update
                         installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
-                    else:
+                    else: # All automated attempts for this tool (including winget) failed
+                        if cmd == 'tesseract':
+                            print_warning("All automated attempts to install Tesseract OCR have failed (PATH, common locations, registry, Chocolatey, winget).")
+                            user_choice = input(f"{Colors.YELLOW}Would you like to skip Tesseract OCR requirement for now and in future Suna setups? (yes/no): {Colors.ENDC}").strip().lower()
+                            if user_choice in ['yes', 'y']:
+                                try:
+                                    with open(TESSERACT_OPT_OUT_FLAG_FILE, 'w') as f:
+                                        f.write("User opted out of Tesseract OCR check.")
+                                    print_info(f"Tesseract OCR requirement will be skipped in future runs. Flag file created at: {TESSERACT_OPT_OUT_FLAG_FILE}")
+                                    continue # Skip adding to missing list and manual instructions for this run
+                                except IOError as e_io:
+                                    print_error(f"Could not create opt-out flag file at {TESSERACT_OPT_OUT_FLAG_FILE}: {e_io}")
+                                    print_info("Proceeding with manual installation instructions for Tesseract.")
+                            # If user says no, or if flag creation failed, proceed to print manual instructions and add to missing list.
+                        
                         print_error(f"Automated installation of {winget_name} failed or winget is not available.")
                         print_info(f"Please install {cmd} manually from {url}")
                         if cmd == 'python3':
@@ -234,8 +458,11 @@ def check_requirements():
                              print_info("Download the Git installer from the URL and run it, accepting default options is usually fine.")
                         elif cmd == 'node':
                              print_info("Download the Node.js LTS installer from the URL and run it. This will also install npm.")
-                        elif cmd == 'tesseract':
-                            print_error("Tesseract OCR is not installed or not found in PATH. This is required for some features.")
+                        elif cmd == 'tesseract': 
+                            # This block is now reached if:
+                            # 1. All automated attempts failed (PATH, custom, choco, winget)
+                            # 2. AND the user chose NOT to opt-out, or opt-out file creation failed.
+                            print_error("Tesseract OCR is not installed or not found in PATH. This is required for some features unless opted out.")
                             print_info("Please install it manually:")
                             print_info("1. Download the installer from: https://github.com/UB-Mannheim/tesseract/wiki (look for Windows installers).")
                             print_info("2. Run the installer.")
@@ -249,24 +476,42 @@ def check_requirements():
                 elif cmd == 'npm' and any(m[0] == 'node' for m in missing):
                      print_info("npm installation depends on Node.js. Node.js is not yet installed.")
                      missing.append((cmd,url))
-                elif cmd == 'tesseract': # Already handled by specific tesseract message above for failed winget
-                    pass
+                # elif cmd == 'tesseract': # Already handled by specific tesseract message above for failed winget
+                #    pass # This is now handled by the more specific message above
                 else: # No winget ID for this tool, or not docker
                     print_info(f"No automated Windows installation configured for {cmd}. Please install manually from {url}.")
                     missing.append((cmd, url))
             else: # Not windows
                 if cmd == 'docker':
                      print_info(f"For Docker on non-Windows, please follow instructions at {url}")
-                elif cmd == 'tesseract':
+                elif cmd == 'tesseract': # This is for non-Windows systems
+                    print_warning("Tesseract OCR installation via system package manager or PATH check failed on this non-Windows system.")
+                    user_choice = input(f"{Colors.YELLOW}Would you like to skip Tesseract OCR requirement for now and in future Suna setups? (yes/no): {Colors.ENDC}").strip().lower()
+                    if user_choice in ['yes', 'y']:
+                        try:
+                            with open(TESSERACT_OPT_OUT_FLAG_FILE, 'w') as f:
+                                f.write("User opted out of Tesseract OCR check.")
+                            print_info(f"Tesseract OCR requirement will be skipped in future runs. Flag file created at: {TESSERACT_OPT_OUT_FLAG_FILE}")
+                            continue # Skip adding to missing list and manual instructions
+                        except IOError as e_io:
+                            print_error(f"Could not create opt-out flag file at {TESSERACT_OPT_OUT_FLAG_FILE}: {e_io}")
+                            print_info("Proceeding with manual installation instructions for Tesseract.")
+                    
+                    # If user did not opt-out or flag creation failed:
                     print_error("Tesseract OCR is not installed or not found in PATH.")
                     print_info("Please install Tesseract OCR for your OS from: https://github.com/UB-Mannheim/tesseract/wiki")
                     print_info("Ensure it's added to your system PATH.")
-                missing.append((cmd, url))
+                    missing.append((cmd, url))
+                else: # Other non-Windows tools that were not found
+                    missing.append((cmd, url))
 
-    # Re-check tools that were installed via winget, as PATH might not have updated immediately
-    if installed_via_winget_needs_path_check:
-        print_info("\nRe-checking tools installed via winget as PATH environment variable changes might require a new terminal session...")
+    # Re-check tools that were installed via package managers, as PATH might not have updated immediately
+    if installed_via_winget_needs_path_check: # This list is used for Chocolatey installs too
+        print_info("\nRe-checking tools installed via automated methods as PATH environment variable changes might require a new terminal session...")
         for cmd, url, cmd_to_check_again in installed_via_winget_needs_path_check:
+            if cmd == 'tesseract' and os.path.exists(TESSERACT_OPT_OUT_FLAG_FILE):
+                print_info(f"Skipping re-check for Tesseract due to opt-out flag: {TESSERACT_OPT_OUT_FLAG_FILE}")
+                continue
             try:
                 version_check_cmd = [cmd_to_check_again, '--version']
                 if cmd == 'python3': # Ensure we check 'python --version'
@@ -288,20 +533,44 @@ def check_requirements():
                 elif cmd == 'tesseract' and IS_WINDOWS:
                     try:
                         subprocess.run([cmd_to_check_again, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                        print_success(f"{cmd} successfully verified after winget installation.")
+                        print_success(f"{cmd} successfully verified after automated installation.")
                     except (subprocess.SubprocessError, FileNotFoundError):
-                        print_error(f"{cmd} was reportedly installed by winget, but is still not found in PATH.")
+                        print_warning(f"{cmd} ('{cmd_to_check_again}') not immediately found in PATH after installation attempt.")
+                        # Attempt temporary PATH modification for Tesseract
+                        if cmd == 'tesseract':
+                            default_tesseract_path = r"C:\Program Files\Tesseract-OCR"
+                            if os.path.exists(default_tesseract_path):
+                                print_info(f"Attempting to verify Tesseract by temporarily adding '{default_tesseract_path}' to PATH...")
+                                temp_env = os.environ.copy()
+                                temp_env['PATH'] = f"{default_tesseract_path}{os.pathsep}{temp_env.get('PATH', '')}"
+                                try:
+                                    subprocess.run([cmd_to_check_again, '--version'], env=temp_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                                    print_success(f"Tesseract successfully verified using temporary PATH modification with '{default_tesseract_path}'.")
+                                    print_info("This indicates Tesseract is likely installed correctly. Please open a new terminal for the PATH changes to take full effect system-wide.")
+                                    # If successful here, we don't add to missing list for Tesseract
+                                    continue # Move to the next item in installed_via_winget_needs_path_check
+                                except (subprocess.SubprocessError, FileNotFoundError):
+                                    print_error(f"Tesseract verification still failed even after temporarily adding '{default_tesseract_path}' to PATH.")
+                                    # Fall through to add to missing list below
+                            else:
+                                print_info(f"Default Tesseract installation path '{default_tesseract_path}' not found. Skipping temporary PATH modification.")
+                        
+                        # Original messaging if temporary PATH check wasn't done or also failed
+                        print_error(f"{cmd} was reportedly installed by an automated method, but is still not found in PATH.")
                         print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
                         print_info(f"Please open a new terminal/command prompt and re-run this setup script.")
-                        print_info(f"If the problem persists, ensure Tesseract OCR's installation directory (e.g., 'C:\\Program Files\\Tesseract-OCR') is in your system PATH.")
+                        if cmd == 'tesseract':
+                             print_info(f"If the problem persists, ensure Tesseract OCR's installation directory (e.g., '{default_tesseract_path or 'C:\\Program Files\\Tesseract-OCR'}') is in your system PATH.")
                         missing.append((cmd, url))
-                else:
+                else: # For other tools, not tesseract
                     subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
-                    print_success(f"{cmd} successfully verified after winget installation.")
+                    print_success(f"{cmd} successfully verified after automated installation.")
             except (subprocess.SubprocessError, FileNotFoundError) as e:
-                final_error_msg = f"{cmd} was reportedly installed by winget, but is still not found or the correct version is not active."
-                if isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e):
-                    final_error_msg = "Python 3.11 was reportedly installed by winget, but is still not the active version."
+                # This outer except block catches failures from the initial try for non-Tesseract tools,
+                # or if the Tesseract temporary PATH logic itself had an unexpected issue (though unlikely for SubprocessError).
+                final_error_msg = f"{cmd} was reportedly installed by an automated method, but is still not found or the correct version is not active."
+                if isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e): # This specific check might be less relevant here if Python isn't typically installed via this list
+                    final_error_msg = "Python 3.11 was reportedly installed by an automated method, but is still not the active version."
                 
                 print_error(final_error_msg)
                 print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
