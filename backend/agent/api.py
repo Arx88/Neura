@@ -221,20 +221,29 @@ async def start_agent(
             # This specific check should probably remain as it's a precondition for the API itself
             raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
 
-        # Use model from config if not specified in the request
-        model_name = body.model_name
-        logger.info(f"Original model_name from request: {model_name}")
+        # Nueva lógica de determinación de model_name
+        server_configured_model = config.MODEL_TO_USE
+        model_name_from_request = body.model_name
+        final_model_name_to_use = None
 
-        if model_name is None:
-            model_name = config.MODEL_TO_USE
-            logger.info(f"Using model from config: {model_name}")
+        if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip() and server_configured_model and server_configured_model.strip():
+            logger.info(f"OLLAMA_API_BASE ('{config.OLLAMA_API_BASE}') and MODEL_TO_USE ('{server_configured_model}') are set in server config. Prioritizing server config for main agent model.")
+            final_model_name_to_use = server_configured_model
+            if model_name_from_request:
+                logger.info(f"Ignoring 'model_name: {model_name_from_request}' from request body due to server-side OLLAMA configuration priority.")
+        elif model_name_from_request:
+            logger.info(f"Using 'model_name: {model_name_from_request}' from request body.")
+            final_model_name_to_use = model_name_from_request
+        else:
+            logger.info(f"No model_name in request body, using MODEL_TO_USE ('{server_configured_model}') from server config.")
+            final_model_name_to_use = server_configured_model
+        
+        logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
 
         # Log the model name after alias resolution
-        resolved_model = MODEL_NAME_ALIASES.get(model_name, model_name)
-        logger.info(f"Resolved model name: {resolved_model}")
-
-        # Update model_name to use the resolved version
-        model_name = resolved_model
+        resolved_model = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+        model_name = resolved_model # Esta es la variable que se usará en el resto de la función
+        logger.info(f"Model name after alias resolution: {model_name}")
 
         # New logic to insert for Ollama model prefixing
         if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
@@ -242,13 +251,15 @@ async def start_agent(
             if not has_known_provider_prefix:
                 logger.info(f"OLLAMA_API_BASE is set ('{config.OLLAMA_API_BASE}') and resolved model '{model_name}' has no explicit provider prefix. Defaulting to 'ollama/' prefix.")
                 model_name = f"ollama/{model_name}"
-                logger.info(f"Final model name for LLM call: {model_name}")
+                # logger.info(f"Final model name for LLM call: {model_name}") # Log duplicado, se loguea más abajo
             elif model_name.startswith("ollama/"):
                 logger.info(f"Model '{model_name}' is already specified as an Ollama model. Using with OLLAMA_API_BASE: '{config.OLLAMA_API_BASE}'.")
             else:
-                logger.info(f"Model '{model_name}' has a prefix for a different provider or OLLAMA_API_BASE is not set. Not prepending 'ollama/'.")
+                logger.info(f"Model '{model_name}' has a prefix for a different provider. Not prepending 'ollama/'.") # Ajustado el log
         else:
             logger.info(f"OLLAMA_API_BASE is not configured. Not attempting to default to Ollama for model '{model_name}'.")
+        
+        logger.info(f"Final model name for LLM call (after ollama prefixing if any): {model_name}")
 
         logger.info(f"Starting new agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager} (Instance: {instance_id})")
         client = await db.client
@@ -549,16 +560,43 @@ async def generate_and_update_project_name(project_id: str, prompt: str):
         client = await db_conn.client
 
         # Determine model for project naming
-        project_naming_model = config.MODEL_TO_USE
-        if not project_naming_model or not project_naming_model.startswith("ollama/"):
-            logger.info(f"config.MODEL_TO_USE ('{project_naming_model}') is not an Ollama model. Falling back to 'ollama/llama2' for project naming.")
-            project_naming_model = "ollama/llama2" # Default Ollama model for this task
-            # As an alternative to falling back, one could add a specific config variable like config.OLLAMA_NAMING_MODEL
-            # Or, one could skip LLM naming if the primary model is not Ollama:
-            # generated_name = None 
-            # skip_llm_call = True
-            # However, for this subtask, we implement the fallback.
+        model_for_naming = config.MODEL_TO_USE
+        logger.info(f"Project naming: Initial model from config.MODEL_TO_USE: '{model_for_naming}'")
 
+        project_naming_model = "ollama/llama2" # Default fallback
+
+        if model_for_naming:
+            # Resolver alias
+            aliased_model_for_naming = MODEL_NAME_ALIASES.get(model_for_naming, model_for_naming)
+            if aliased_model_for_naming != model_for_naming:
+                logger.info(f"Project naming: Model after alias resolution: '{aliased_model_for_naming}'")
+            model_for_naming = aliased_model_for_naming
+
+            # Verificar si es un modelo de un proveedor específico o si se puede asumir Ollama
+            if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
+                is_explicit_ollama = model_for_naming.startswith("ollama/")
+                is_other_provider = any(model_for_naming.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/"])
+
+                if is_explicit_ollama:
+                    project_naming_model = model_for_naming
+                    logger.info(f"Project naming: Using explicitly configured Ollama model: '{project_naming_model}'")
+                elif not is_other_provider: # No es de otro proveedor y no tiene prefijo ollama/, asumir ollama
+                    project_naming_model = f"ollama/{model_for_naming}"
+                    logger.info(f"Project naming: Assuming Ollama for unprefixed model from config.MODEL_TO_USE. Using: '{project_naming_model}'")
+                else: # Es de otro proveedor (e.g., openrouter/)
+                    logger.warning(f"Project naming: config.MODEL_TO_USE ('{model_for_naming}') is configured for a non-Ollama provider. Falling back to 'ollama/llama2' for project naming.")
+                    # project_naming_model remains "ollama/llama2" (default fallback)
+            elif model_for_naming.startswith("ollama/"): # OLLAMA_API_BASE no está, pero el modelo es ollama/
+                 project_naming_model = model_for_naming
+                 logger.info(f"Project naming: Using Ollama model '{project_naming_model}' but OLLAMA_API_BASE is not configured. This might fail if not default http://localhost:11434")
+            else: # No OLLAMA_API_BASE y no es un modelo ollama/ explícito
+                logger.warning(f"Project naming: OLLAMA_API_BASE not configured and config.MODEL_TO_USE ('{model_for_naming}') is not an explicit Ollama model. Falling back to 'ollama/llama2'.")
+                # project_naming_model remains "ollama/llama2" (default fallback)
+        else: # config.MODEL_TO_USE no está definido
+            logger.warning("Project naming: config.MODEL_TO_USE is not defined. Falling back to 'ollama/llama2'.")
+            # project_naming_model remains "ollama/llama2" (default fallback)
+        
+        # `project_naming_model` es el que se usará para make_llm_api_call
         system_prompt = "You are a helpful assistant that generates extremely concise titles (2-4 words maximum) for chat threads based on the user's message. Respond with only the title, no other text or punctuation."
         user_message = f"Generate an extremely brief title (2-4 words only) for a chat thread that starts with this message: \"{prompt}\""
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
@@ -609,33 +647,46 @@ async def initiate_agent_with_files(
     if not instance_id:
         raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
 
-    # Use model from config if not specified in the request
-    logger.info(f"Original model_name from request: {model_name}")
+    # Nueva lógica de determinación de model_name
+    server_configured_model = config.MODEL_TO_USE
+    # model_name_from_request se obtiene del parámetro de la función 'model_name'
+    model_name_from_request = model_name 
+    final_model_name_to_use = None
 
-    if model_name is None:
-        model_name = config.MODEL_TO_USE
-        logger.info(f"Using model from config: {model_name}")
+    if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip() and server_configured_model and server_configured_model.strip():
+        logger.info(f"OLLAMA_API_BASE ('{config.OLLAMA_API_BASE}') and MODEL_TO_USE ('{server_configured_model}') are set in server config. Prioritizing server config for main agent model.")
+        final_model_name_to_use = server_configured_model
+        if model_name_from_request:
+            logger.info(f"Ignoring 'model_name: {model_name_from_request}' from request (Form value) due to server-side OLLAMA configuration priority.")
+    elif model_name_from_request:
+        logger.info(f"Using 'model_name: {model_name_from_request}' from request (Form value).")
+        final_model_name_to_use = model_name_from_request
+    else:
+        logger.info(f"No model_name in request (Form value), using MODEL_TO_USE ('{server_configured_model}') from server config.")
+        final_model_name_to_use = server_configured_model
 
+    logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
+    
     # Log the model name after alias resolution
-    resolved_model = MODEL_NAME_ALIASES.get(model_name, model_name)
-    logger.info(f"Resolved model name: {resolved_model}")
-
-    # Update model_name to use the resolved version
-    model_name = resolved_model
-
+    resolved_model = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+    model_name = resolved_model # Esta es la variable que se usará en el resto de la función
+    logger.info(f"Model name after alias resolution: {model_name}")
+    
     # New logic to insert for Ollama model prefixing
     if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
         has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
         if not has_known_provider_prefix:
             logger.info(f"OLLAMA_API_BASE is set ('{config.OLLAMA_API_BASE}') and resolved model '{model_name}' has no explicit provider prefix. Defaulting to 'ollama/' prefix.")
             model_name = f"ollama/{model_name}"
-            logger.info(f"Final model name for LLM call: {model_name}")
+            # logger.info(f"Final model name for LLM call: {model_name}") # Log duplicado, se loguea más abajo
         elif model_name.startswith("ollama/"):
             logger.info(f"Model '{model_name}' is already specified as an Ollama model. Using with OLLAMA_API_BASE: '{config.OLLAMA_API_BASE}'.")
         else:
-            logger.info(f"Model '{model_name}' has a prefix for a different provider or OLLAMA_API_BASE is not set. Not prepending 'ollama/'.")
+            logger.info(f"Model '{model_name}' has a prefix for a different provider. Not prepending 'ollama/'.") # Ajustado el log
     else:
         logger.info(f"OLLAMA_API_BASE is not configured. Not attempting to default to Ollama for model '{model_name}'.")
+
+    logger.info(f"Final model name for LLM call (after ollama prefixing if any): {model_name}")
 
     logger.info(f"[\033[91mDEBUG\033[0m] Initiating new agent with prompt and {len(files)} files (Instance: {instance_id}), model: {model_name}, enable_thinking: {enable_thinking}")
     client = await db.client
