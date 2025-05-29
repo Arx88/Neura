@@ -534,14 +534,24 @@ async def generate_and_update_project_name(project_id: str, prompt: str):
         db_conn = DBConnection()
         client = await db_conn.client
 
-        model_name = "openai/gpt-4o-mini"
+        # Determine model for project naming
+        project_naming_model = config.MODEL_TO_USE
+        if not project_naming_model or not project_naming_model.startswith("ollama/"):
+            logger.info(f"config.MODEL_TO_USE ('{project_naming_model}') is not an Ollama model. Falling back to 'ollama/llama2' for project naming.")
+            project_naming_model = "ollama/llama2" # Default Ollama model for this task
+            # As an alternative to falling back, one could add a specific config variable like config.OLLAMA_NAMING_MODEL
+            # Or, one could skip LLM naming if the primary model is not Ollama:
+            # generated_name = None 
+            # skip_llm_call = True
+            # However, for this subtask, we implement the fallback.
+
         system_prompt = "You are a helpful assistant that generates extremely concise titles (2-4 words maximum) for chat threads based on the user's message. Respond with only the title, no other text or punctuation."
         user_message = f"Generate an extremely brief title (2-4 words only) for a chat thread that starts with this message: \"{prompt}\""
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}]
 
-        logger.debug(f"Calling LLM ({model_name}) for project {project_id} naming.")
-        response = await make_llm_api_call(messages=messages, model_name=model_name, max_tokens=20, temperature=0.7)
-
+        logger.debug(f"Calling LLM ({project_naming_model}) for project {project_id} naming.")
+        response = await make_llm_api_call(messages=messages, model_name=project_naming_model, max_tokens=20, temperature=0.7)
+        
         generated_name = None
         if response and response.get('choices') and response['choices'][0].get('message'):
             raw_name = response['choices'][0]['message'].get('content', '').strip()
