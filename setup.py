@@ -1559,12 +1559,21 @@ def ensure_python_311_and_venv():
                 print_warning("System Python is not 3.11. Attempting to install Python 3.11 using winget...")
                 success, already_installed = run_winget_install("Python.Python.3.11", "Python 3.11")
                 if success:
-                    if already_installed:
-                        print_info("Python 3.11 was already installed (as reported by winget).")
+                    print_info("Winget operation complete. Attempting to locate and use Python 3.11 to proceed automatically...")
+                    # Try to determine the Python 3.11 executable path again, specifically trying `py -3.11`.
+                    python_version_after_winget = get_python_version('py -3.11')
+                    if python_version_after_winget and "3.11" in python_version_after_winget:
+                        system_python_executable = 'py -3.11' # Update to use this for venv creation
+                        print_success(f"Successfully found Python 3.11 via 'py -3.11' ({python_version_after_winget}). Proceeding with venv creation.")
+                        # Allow the function to continue to venv creation without exiting
                     else:
-                        print_success("Python 3.11 installed successfully via winget.")
-                    print_info("Please re-run this script in a new terminal for changes to take effect and for Python 3.11 to be detected.")
-                    sys.exit(0) # Exit for user to re-run in new terminal
+                        if already_installed:
+                            print_info("Python 3.11 was already installed (as reported by winget), but 'py -3.11' is not pointing to it or it's not found immediately.")
+                        else:
+                            print_success("Python 3.11 installation via winget seems to have succeeded.")
+                        print_info("However, 'py -3.11' did not immediately resolve to Python 3.11.")
+                        print_info("Please re-run this script in a new terminal for changes to take effect and for Python 3.11 to be detected.")
+                        sys.exit(0) # Exit for user to re-run in new terminal
                 else:
                     print_error("Failed to install Python 3.11 using winget.")
                     print_info("Please install Python 3.11 manually from https://www.python.org/downloads/ and ensure it's in your PATH.")
