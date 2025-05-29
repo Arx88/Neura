@@ -179,6 +179,11 @@ OPENAI_API_KEY=TU_CLAVE_DE_OPENAI
 # Elige qué modelo usar por defecto. Ejemplo: anthropic/claude-3-opus-20240229
 MODEL_TO_USE=anthropic/claude-3-haiku-20240307 # Un modelo rápido para empezar
 
+# Configuración de Ollama (Ejemplo para instalación local)
+# OLLAMA_API_BASE=http://localhost:11434  # Requerido: Establece la URL de tu servidor Ollama.
+# OLLAMA_API_KEY=                       # Opcional: Generalmente se deja en blanco o se omite para Ollama local.
+                                       # Solo configúralo si tu instancia de Ollama requiere específicamente una clave.
+
 # --- Búsqueda Web ---
 TAVILY_API_KEY=TU_CLAVE_DE_TAVILY
 

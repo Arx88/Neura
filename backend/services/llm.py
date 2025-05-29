@@ -14,6 +14,7 @@ from typing import Union, Dict, Any, Optional, AsyncGenerator, List
 import os
 import json
 import asyncio
+from unittest.mock import patch
 from openai import OpenAIError
 import litellm
 from utils.logger import logger
@@ -151,9 +152,17 @@ def prepare_params(
         if config.OLLAMA_API_BASE:
             params["api_base"] = config.OLLAMA_API_BASE
             logger.debug(f"Set Ollama API base to: {config.OLLAMA_API_BASE}")
-        if config.OLLAMA_API_KEY: # Though often not required for local Ollama
+        else:
+            logger.debug("No OLLAMA_API_BASE configured, Ollama will use default.")
+
+        # Explicitly set api_key to None for Ollama if no key is provided
+        # to prevent litellm from potentially using other provider keys.
+        params["api_key"] = None
+        if config.OLLAMA_API_KEY:
             params["api_key"] = config.OLLAMA_API_KEY
-            logger.debug("Set Ollama API key")
+            logger.debug("Set Ollama API key.")
+        else:
+            logger.debug("No OLLAMA_API_KEY configured. Setting api_key to None for Ollama.")
 
     # Add Bedrock-specific parameters
     if model_name.startswith("bedrock/"):
@@ -402,29 +411,74 @@ async def test_bedrock():
         return False
 
 async def test_ollama():
-    """Test the Ollama integration with a simple query."""
-    print("\n--- Testing Ollama model ---")
-    print("Note: Ensure your Ollama server is running and the model (e.g., llama2) is downloaded.")
+    """Test the Ollama integration, especially the no-API-key scenario."""
+    print("\n--- Testing Ollama model (No API Key Scenario) ---")
+    logger.info("Starting Ollama test: No API Key scenario.")
+    # The note about setting OLLAMA_API_BASE in .env is less critical here
+    # as we are mocking it, but good for general knowledge.
+    print("Note: For this specific test, OLLAMA_API_KEY and OLLAMA_API_BASE are mocked.")
+    print("For general manual testing, ensure your Ollama server is running and accessible.")
+
     test_messages = [
         {"role": "user", "content": "Hello, can you give me a quick test response? Why is the sky blue?"}
     ]
 
-    try:
-        response = await make_llm_api_call(
-            model_name="ollama/llama2", # A common Ollama model
-            messages=test_messages,
-            temperature=0.7,
-            max_tokens=150
-        )
-        if response.choices and response.choices[0].message and response.choices[0].message.content:
-            print(f"Response: {response.choices[0].message.content}")
-        else:
-            print(f"Received empty or unexpected response structure: {response}")
-        print(f"Model used: {response.model}") # LiteLLM might modify this
-        return True
-    except Exception as e:
-        print(f"Error testing Ollama: {str(e)}")
-        return False
+    # Mock config attributes for this specific test duration
+    # This ensures we test the scenario where no API key is provided in the config
+    # and that api_base is correctly picked up (or defaulted by litellm if not set by prepare_params from config).
+    with patch.object(config, 'OLLAMA_API_KEY', None), \
+         patch.object(config, 'OLLAMA_API_BASE', 'http://localhost:11434') as mock_api_base:
+
+        # This log confirms the values *within* the patched context
+        logger.info(f"Mocked config for test: OLLAMA_API_KEY='{config.OLLAMA_API_KEY}', OLLAMA_API_BASE='{config.OLLAMA_API_BASE}'")
+        # The following print statement helps confirm mocking in test output
+        print(f"Mocked config during test: OLLAMA_API_KEY='{config.OLLAMA_API_KEY}', OLLAMA_API_BASE='{config.OLLAMA_API_BASE}'")
+
+        try:
+            # We do not pass api_key or api_base to make_llm_api_call directly.
+            # The prepare_params function should pick them up from the (mocked) config.
+            # Specifically, prepare_params should set params["api_key"] = None
+            # and params["api_base"] = "http://localhost:11434"
+            response = await make_llm_api_call(
+                model_name="ollama/llama2", # A common Ollama model
+                messages=test_messages,
+                temperature=0.7,
+                max_tokens=150
+            )
+
+            # Check for a valid response structure
+            if response and response.choices and response.choices[0].message and response.choices[0].message.content:
+                print(f"Response: {response.choices[0].message.content}")
+                logger.info("Ollama test (No API Key) successful with valid response.")
+            else:
+                print(f"Received empty or unexpected response structure: {response}")
+                logger.warning(f"Ollama test (No API Key) received empty/unexpected response: {response}")
+                # Depending on strictness, this could be a failure.
+                # For now, a non-error completion is the primary check against auth errors.
+
+            print(f"Model used: {response.model}") # LiteLLM might modify this
+            return True
+        except litellm.exceptions.AuthenticationError as e:
+            # This would be a direct indication that prepare_params didn't prevent an auth issue.
+            logger.error(f"Ollama test (No API Key) FAILED directly with AuthenticationError: {e}", exc_info=True)
+            print(f"Error testing Ollama (AuthenticationError): {str(e)}")
+            return False
+        except LLMRetryError as e:
+            # This is a likely error if there's an underlying auth issue not caught by prepare_params,
+            # or if the Ollama server is not reachable at the mocked address.
+            logger.error(f"Ollama test (No API Key) FAILED due to LLMRetryError: {e}", exc_info=True)
+            print(f"Error testing Ollama (LLMRetryError): {str(e)}")
+            # Specifically check if the error message indicates an authentication problem
+            if "authentication" in str(e).lower() or "auth" in str(e).lower() or "key" in str(e).lower():
+                print("The LLMRetryError seems related to authentication, which this test aims to prevent.")
+            elif "connection refused" in str(e).lower():
+                print("The LLMRetryError seems related to a connection issue. Ensure Ollama server is running at the mocked address (http://localhost:11434).")
+            return False
+        except Exception as e:
+            # Catch any other unexpected errors
+            logger.error(f"Ollama test (No API Key) FAILED with unexpected error: {e}", exc_info=True)
+            print(f"Error testing Ollama (Unexpected Error): {str(e)}")
+            return False
 
 if __name__ == "__main__":
     import asyncio
