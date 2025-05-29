@@ -44,55 +44,82 @@ async def run_agent(
     trace: Optional[StatefulTraceClient] = None
 ):
     """Run the development agent with specified configuration."""
-    logger.info(f"🚀 Starting agent with model: {model_name}")
+    try:
+        logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
 
-    if not trace:
-        trace = langfuse.trace(name="run_agent", session_id=thread_id, metadata={"project_id": project_id})
-    thread_manager = ThreadManager(trace=trace)
-
-    client = await thread_manager.db.client
-
-    # Get account ID from thread for billing checks
-    account_id = await get_account_id_from_thread(client, thread_id)
-    if not account_id:
-        raise ValueError("Could not determine account ID for thread")
-
-    # Get sandbox info from project
-    project = await client.table('projects').select('*').eq('project_id', project_id).execute()
-    if not project.data or len(project.data) == 0:
-        raise ValueError(f"Project {project_id} not found")
-
-    project_data = project.data[0]
-    sandbox_info = project_data.get('sandbox', {})
-    if not sandbox_info.get('id'):
-        raise ValueError(f"No sandbox found for project {project_id}")
-
-    # Initialize tools with project_id instead of sandbox object
-    # This ensures each tool independently verifies it's operating on the correct project
-    thread_manager.add_tool(SandboxShellTool, project_id=project_id, thread_manager=thread_manager)
-    thread_manager.add_tool(SandboxFilesTool, project_id=project_id, thread_manager=thread_manager)
-    thread_manager.add_tool(SandboxBrowserTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-    thread_manager.add_tool(SandboxDeployTool, project_id=project_id, thread_manager=thread_manager)
-    thread_manager.add_tool(SandboxExposeTool, project_id=project_id, thread_manager=thread_manager)
-    thread_manager.add_tool(MessageTool) # we are just doing this via prompt as there is no need to call it as a tool
-    thread_manager.add_tool(SandboxWebSearchTool, project_id=project_id, thread_manager=thread_manager)
-    thread_manager.add_tool(SandboxVisionTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-    # Add data providers tool if RapidAPI key is available
-    if config.RAPID_API_KEY:
-        thread_manager.add_tool(DataProvidersTool)
-
-
-    if "gemini-2.5-flash" in model_name.lower():
-        system_message = { "role": "system", "content": get_gemini_system_prompt() } # example included
-    elif "anthropic" not in model_name.lower():
-        # Only include sample response if the model name does not contain "anthropic"
-        sample_response_path = os.path.join(os.path.dirname(__file__), 'sample_responses/1.txt')
-        with open(sample_response_path, 'r') as file:
-            sample_response = file.read()
+        if not trace:
+            logger.debug("No existing trace found, creating new trace for run_agent.")
+            trace = langfuse.trace(name="run_agent", session_id=thread_id, metadata={"project_id": project_id})
+        else:
+            logger.debug("Using existing trace for run_agent.")
         
-        system_message = { "role": "system", "content": get_system_prompt() + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>" }
-    else:
-        system_message = { "role": "system", "content": get_system_prompt() }
+        logger.debug("Initializing ThreadManager...")
+        thread_manager = ThreadManager(trace=trace)
+        client = await thread_manager.db.client
+        logger.debug("ThreadManager initialized and database client obtained.")
+
+        logger.debug(f"Attempting to get account ID for thread_id: {thread_id}...")
+        account_id = await get_account_id_from_thread(client, thread_id)
+        if not account_id:
+            logger.error(f"Could not determine account ID for thread_id: {thread_id}")
+            raise ValueError(f"Could not determine account ID for thread {thread_id}")
+        logger.debug(f"Account ID {account_id} retrieved for thread_id: {thread_id}.")
+
+        logger.debug(f"Attempting to get project {project_id}...")
+        project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
+        if not project_result.data or len(project_result.data) == 0:
+            logger.error(f"Project {project_id} not found.")
+            raise ValueError(f"Project {project_id} not found")
+        logger.debug(f"Project {project_id} retrieved successfully.")
+
+        project_data = project_result.data[0]
+        sandbox_info = project_data.get('sandbox', {})
+        if not sandbox_info.get('id'):
+            logger.error(f"No sandbox ID found in project_data for project {project_id}.")
+            raise ValueError(f"No sandbox found for project {project_id}")
+        logger.debug(f"Sandbox ID {sandbox_info.get('id')} retrieved for project {project_id}.")
+
+        logger.debug("Initializing tools...")
+        thread_manager.add_tool(SandboxShellTool, project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(SandboxFilesTool, project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(SandboxBrowserTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
+        thread_manager.add_tool(SandboxDeployTool, project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(SandboxExposeTool, project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(MessageTool) 
+        thread_manager.add_tool(SandboxWebSearchTool, project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(SandboxVisionTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
+        if config.RAPID_API_KEY:
+            logger.debug("RAPID_API_KEY found, adding DataProvidersTool.")
+            thread_manager.add_tool(DataProvidersTool)
+        else:
+            logger.debug("No RAPID_API_KEY found, skipping DataProvidersTool.")
+        logger.debug("Tools initialized.")
+
+        logger.debug(f"Generating system prompt for model: {model_name}...")
+        if "gemini-2.5-flash" in model_name.lower():
+            system_message = { "role": "system", "content": get_gemini_system_prompt() }
+            logger.debug("Using Gemini system prompt.")
+        elif "anthropic" not in model_name.lower():
+            sample_response_path = os.path.join(os.path.dirname(__file__), 'sample_responses/1.txt')
+            with open(sample_response_path, 'r') as file:
+                sample_response = file.read()
+            system_message = { "role": "system", "content": get_system_prompt() + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>" }
+            logger.debug("Using default system prompt with sample response.")
+        else:
+            system_message = { "role": "system", "content": get_system_prompt() }
+            logger.debug("Using Anthropic system prompt (no sample response).")
+        logger.debug("System prompt generated.")
+
+        logger.debug(f"Performing initial billing check for account {account_id}...")
+        can_run_initial, message_initial, _ = await check_billing_status(client, account_id)
+        if not can_run_initial:
+            logger.error(f"Initial billing check failed for account {account_id}: {message_initial}")
+            raise ValueError(f"Billing limit reached before agent start: {message_initial}")
+        logger.debug("Initial billing check passed.")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize agent setup for thread_id {thread_id}, project_id {project_id}", exc_info=True)
+        raise
 
     iteration_count = 0
     continue_execution = True
