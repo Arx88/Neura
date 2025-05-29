@@ -61,14 +61,17 @@ Obtain the following API keys:
 
 ### 3. Required Software
 
-Ensure the following tools are installed on your system:
+Ensure the following tools are installed on your system. The `setup.py` wizard will attempt to automatically install many of these on Windows if they are missing, using tools like `winget` or `npm`. Manual installation is always an option.
 
-- **[Git](https://git-scm.com/downloads)**
-- **[Docker](https://docs.docker.com/get-docker/)**
-- **[Python 3.11](https://www.python.org/downloads/)**
-- **[Poetry](https://python-poetry.org/docs/#installation)**
-- **[Node.js & npm](https://nodejs.org/en/download/)**
-- **[Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)**
+*Windows users: It's recommended to run `python setup.py` in a terminal with administrator privileges, as this can help with the automated installation of missing software.*
+
+- **[Git](https://git-scm.com/downloads)**: Essential for version control. The `setup.py` wizard will attempt to automatically install this on Windows using `winget` if it's missing. Manual installation is also an option.
+- **[Docker](https://docs.docker.com/get-docker/)**: For containerizing Suna services and agent execution. For Docker on Windows, manual installation of Docker Desktop is required. The `setup.py` script will provide detailed instructions, including guidance on enabling WSL2 and hardware virtualization.
+- **[Python 3.11](https://www.python.org/downloads/)**: The core programming language for the backend. The `setup.py` wizard will attempt to automatically install Python 3.11 on Windows using `winget` if it's missing. Manual installation is also an option.
+- **[Poetry](https://python-poetry.org/docs/#installation)**: For Python dependency management. The `setup.py` wizard will attempt to automatically install this on Windows if it's missing (typically via pip or winget). Manual installation is also an option.
+- **[Node.js & npm](https://nodejs.org/en/download/)**: For the frontend application. Node.js includes npm (Node Package Manager). The `setup.py` wizard will attempt to automatically install Node.js (which includes npm) on Windows using `winget` if it's missing. Manual installation is also an option.
+- **[Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)**: For managing your Supabase project migrations. The `setup.py` wizard will attempt to automatically install this on Windows via `npm install -g supabase` if it's missing. Manual installation is also an option.
+- **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)**: Required for Optical Character Recognition (OCR) functionalities (e.g., extracting text from images if you intend to use features relying on `pytesseract`). The `setup.py` script will attempt to install Tesseract OCR on Windows via `winget` and guide you through manual installation if needed, emphasizing the critical step of adding Tesseract's installation directory to your system PATH.
 
 ## Installation Steps
 
@@ -86,6 +89,7 @@ The setup wizard will guide you through the installation process:
 ```bash
 python setup.py
 ```
+The wizard now includes more robust checks and automated installation attempts for prerequisites on Windows (using `winget`, `npm`, etc.). If any tools are installed automatically by the script, and you encounter issues with them not being found immediately after the setup completes (e.g., a command like `poetry` or `supabase` not recognized), please try opening a new terminal window and re-running the setup script, or just proceed with the manual commands. This is because your system's PATH environment variable may need refreshing for the newly installed software to be recognized in the current session.
 
 The wizard will:
 

@@ -21,6 +21,75 @@ class Colors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+# Helper function to run winget install
+def run_winget_install(package_id, package_name):
+    """Attempts to install a package using winget."""
+    if not IS_WINDOWS:
+        return False
+
+    try:
+        # Check if winget is available
+        subprocess.run(['winget', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
+        print_info(f"winget is available. Attempting to install {package_name}...")
+    except (subprocess.SubprocessError, FileNotFoundError):
+        print_warning("winget command not found. Please install winget or install the tool manually.")
+        return False
+
+    try:
+        # Attempt to install the package
+        # Standard flags: --accept-source-agreements --accept-package-agreements
+        # --disable-interactivity is used for a more silent install
+        # --force can be added if needed but might have unintended consequences. Starting without it.
+        # Using -s winget to specify the source explicitly.
+        install_command = [
+            'winget', 'install', package_id,
+            '-s', 'winget',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        ]
+        process = subprocess.run(install_command, capture_output=True, text=True, check=True, shell=True)
+        print_info(f"winget install command output for {package_name}:\n{process.stdout}")
+        if process.returncode == 0:
+            print_success(f"{package_name} installation via winget seems successful.")
+            return True
+        else:
+            print_error(f"winget installation of {package_name} failed with exit code {process.returncode}.")
+            print_error(f"Winget stderr: {process.stderr}")
+            return False
+    except subprocess.SubprocessError as e:
+        print_error(f"Failed to install {package_name} using winget: {e}")
+        if e.stderr:
+            print_error(f"Winget stderr: {e.stderr}")
+        if "0x80070005" in str(e.stderr) or "Access is denied" in str(e.stderr):
+            print_warning("Winget may require administrator privileges. Try running this script in an administrator terminal.")
+        # Try without --disable-interactivity as a fallback for some winget versions/configurations
+        try:
+            print_info(f"Retrying winget install for {package_name} without --disable-interactivity...")
+            install_command_fallback = [
+                'winget', 'install', package_id,
+                '-s', 'winget',
+                '--accept-package-agreements',
+                '--accept-source-agreements'
+            ]
+            process = subprocess.run(install_command_fallback, capture_output=True, text=True, check=True, shell=True)
+            print_info(f"winget install command output for {package_name} (fallback):\n{process.stdout}")
+            if process.returncode == 0:
+                print_success(f"{package_name} installation via winget (fallback) seems successful.")
+                return True
+            else:
+                print_error(f"winget installation of {package_name} (fallback) failed with exit code {process.returncode}.")
+                print_error(f"Winget stderr: {process.stderr}")
+                return False
+        except subprocess.SubprocessError as e_fallback:
+            print_error(f"Fallback winget install for {package_name} also failed: {e_fallback}")
+            if e_fallback.stderr:
+                print_error(f"Winget stderr (fallback): {e_fallback.stderr}")
+            return False
+    except Exception as e:
+        print_error(f"An unexpected error occurred during winget installation of {package_name}: {e}")
+        return False
+
 def print_banner():
     """Print Suna setup banner"""
     print(f"""
@@ -60,39 +129,205 @@ def print_error(message):
 def check_requirements():
     """Check if all required tools are installed"""
     requirements = {
-        'git': 'https://git-scm.com/downloads',
-        'docker': 'https://docs.docker.com/get-docker/',
-        'python3': 'https://www.python.org/downloads/',
-        'poetry': 'https://python-poetry.org/docs/#installation',
-        'pip3': 'https://pip.pypa.io/en/stable/installation/',
-        'node': 'https://nodejs.org/en/download/',
-        'npm': 'https://docs.npmjs.com/downloading-and-installing-node-js-and-npm',
+        # Tool name: (URL, winget_package_id, winget_package_name, specific_version_check_command (optional))
+        'git': ('https://git-scm.com/downloads', 'Git.Git', 'Git', None),
+        'python3': ('https://www.python.org/downloads/', 'Python.Python.3.11', 'Python 3.11', ['python', '--version']), # Check for 3.11
+        'pip3': ('https://pip.pypa.io/en/stable/installation/', None, 'pip3', None), # pip should come with python
+        'node': ('https://nodejs.org/en/download/', 'OpenJS.NodeJS', 'Node.js (includes npm)', None), # Node includes npm
+        'npm': ('https://docs.npmjs.com/downloading-and-installing-node-js-and-npm', None, 'npm', None), # npm check, but installed with Node
+        'poetry': ('https://python-poetry.org/docs/#installation', 'PythonPoetry.Poetry', 'Poetry', None),
+        'docker': ('https://docs.docker.com/get-docker/', None, 'Docker', None), # Docker handled separately
+        'tesseract': ('https://github.com/UB-Mannheim/tesseract/wiki', 'UB-Mannheim.TesseractOCR', 'Tesseract OCR', None),
     }
     
     missing = []
-    
-    for cmd, url in requirements.items():
+    installed_via_winget_needs_path_check = []
+
+    for cmd, details in requirements.items():
+        url, winget_id, winget_name, specific_version_check = details
+        cmd_to_check = cmd.replace('3', '') if IS_WINDOWS and cmd in ['python3', 'pip3'] else cmd
+
         try:
-            # Check if python3/pip3 for Windows
-            if platform.system() == 'Windows' and cmd in ['python3', 'pip3']:
-                cmd_to_check = cmd.replace('3', '')
+            version_check_cmd = [cmd_to_check, '--version']
+            if cmd == 'python3' and IS_WINDOWS: # Special handling for python3.11 check
+                py_version_proc = subprocess.run(['python', '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
+                py_version_output = py_version_proc.stdout.strip() + py_version_proc.stderr.strip()
+                print_info(f"Found Python version: {py_version_output}")
+                if "3.11" not in py_version_output:
+                    raise FileNotFoundError("Python 3.11 not found") # Trigger winget install for 3.11
+                # If 3.11 is found, then pip3 should also be checked/available.
+            elif specific_version_check:
+                subprocess.run(specific_version_check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
             else:
-                cmd_to_check = cmd
-                
-            subprocess.run(
-                [cmd_to_check, '--version'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-                shell=IS_WINDOWS
-            )
+                subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+            
             print_success(f"{cmd} is installed")
-        except (subprocess.SubprocessError, FileNotFoundError):
-            missing.append((cmd, url))
-            print_error(f"{cmd} is not installed")
-    
+
+            # If node is installed, assume npm is too, but verify npm separately if it's its own entry.
+            if cmd == 'node' and 'npm' in requirements and not any(m[0] == 'npm' for m in missing):
+                try:
+                    subprocess.run(['npm', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                    print_success("npm is installed (comes with Node.js)")
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    print_error("npm is not found, though Node.js seems installed. This is unexpected.")
+                    if IS_WINDOWS:
+                        print_info("Node.js installer should include npm. A PATH issue or incomplete installation might be the cause.")
+                    missing.append(('npm', requirements['npm'][0]))
+
+
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            original_error_msg = f"{cmd} is not installed or not found in PATH."
+            if isinstance(e, subprocess.SubprocessError) and e.stderr:
+                original_error_msg += f" Error: {e.stderr.strip()}"
+            elif isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e):
+                original_error_msg = "Python 3.11 is specifically required but not found."
+            
+            print_error(original_error_msg)
+
+            if IS_WINDOWS:
+                if cmd == 'docker':
+                    print_error("Docker installation cannot be automated by this script.")
+                    print_info("Please install Docker Desktop for Windows manually.")
+                    print_info("  - Download from: https://www.docker.com/products/docker-desktop/")
+                    print_info("  - Ensure WSL2 (Windows Subsystem for Linux 2) is enabled.")
+                    print_info("    To enable WSL2, open PowerShell as Administrator and run: ")
+                    print_info("    dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart")
+                    print_info("    dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart")
+                    print_info("    Then restart your computer and set WSL2 as default: wsl --set-default-version 2")
+                    print_info("  - Enable hardware virtualization (VT-x or AMD-V) in your computer's BIOS/UEFI settings.")
+                    print_info("After installing and starting Docker Desktop, please re-run this setup script.")
+                    missing.append((cmd, url))
+                elif winget_id:
+                    print_info(f"Attempting to install {winget_name} using winget...")
+                    if cmd == 'poetry': # Poetry special handling
+                        # First, try pip install if python is available
+                        try:
+                            subprocess.run(['python', '-m', 'pip', 'install', 'poetry'], check=True, shell=IS_WINDOWS)
+                            print_success("Poetry installed successfully using pip.")
+                            # Re-check poetry
+                            try:
+                                subprocess.run(['poetry', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                                print_success("Poetry successfully verified after pip installation.")
+                                continue # Installed, so skip to next requirement
+                            except (subprocess.SubprocessError, FileNotFoundError):
+                                print_warning("Poetry installed via pip, but 'poetry --version' still fails. This might be a PATH issue.")
+                                installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
+                                continue # Assume installed for now, will be checked later
+                        except subprocess.SubprocessError:
+                            print_warning("pip install poetry failed. Attempting winget install for Poetry...")
+                            if run_winget_install(winget_id, winget_name):
+                                installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
+                            else:
+                                print_error(f"Automated installation of {winget_name} via winget also failed.")
+                                print_info(f"Please install {cmd} manually from {url}")
+                                print_info("For Poetry, the recommended method is often via pip or their official install script.")
+                                missing.append((cmd, url))
+                    elif run_winget_install(winget_id, winget_name):
+                        # Add to a list to re-check after loop, in case PATH needs update
+                        installed_via_winget_needs_path_check.append((cmd, url, cmd_to_check))
+                    else:
+                        print_error(f"Automated installation of {winget_name} failed or winget is not available.")
+                        print_info(f"Please install {cmd} manually from {url}")
+                        if cmd == 'python3':
+                             print_info("Download the Python 3.11 installer from the URL and run it. Ensure 'Add Python to PATH' is checked during installation.")
+                        elif cmd == 'git':
+                             print_info("Download the Git installer from the URL and run it, accepting default options is usually fine.")
+                        elif cmd == 'node':
+                             print_info("Download the Node.js LTS installer from the URL and run it. This will also install npm.")
+                        elif cmd == 'tesseract':
+                            print_error("Tesseract OCR is not installed or not found in PATH. This is required for some features.")
+                            print_info("Please install it manually:")
+                            print_info("1. Download the installer from: https://github.com/UB-Mannheim/tesseract/wiki (look for Windows installers).")
+                            print_info("2. Run the installer.")
+                            print_info("3. Important: During installation, ensure you select the option to 'Add Tesseract to system PATH'. This might be under a component like 'Full installation' or a specific checkbox for PATH.")
+                            print_info("   Alternatively, you can add it manually. Default path is often 'C:\\Program Files\\Tesseract-OCR'.")
+                            print_info("4. After installation, you MUST restart this script or open a new terminal window for the PATH changes to take effect.")
+                        missing.append((cmd, url))
+                elif cmd == 'pip3' and any(m[0] == 'python3' for m in missing): # If Python failed, pip will also fail.
+                    print_info("pip3 installation depends on Python. Python is not yet installed.")
+                    missing.append((cmd,url))
+                elif cmd == 'npm' and any(m[0] == 'node' for m in missing):
+                     print_info("npm installation depends on Node.js. Node.js is not yet installed.")
+                     missing.append((cmd,url))
+                elif cmd == 'tesseract': # Already handled by specific tesseract message above for failed winget
+                    pass
+                else: # No winget ID for this tool, or not docker
+                    print_info(f"No automated Windows installation configured for {cmd}. Please install manually from {url}.")
+                    missing.append((cmd, url))
+            else: # Not windows
+                if cmd == 'docker':
+                     print_info(f"For Docker on non-Windows, please follow instructions at {url}")
+                elif cmd == 'tesseract':
+                    print_error("Tesseract OCR is not installed or not found in PATH.")
+                    print_info("Please install Tesseract OCR for your OS from: https://github.com/UB-Mannheim/tesseract/wiki")
+                    print_info("Ensure it's added to your system PATH.")
+                missing.append((cmd, url))
+
+    # Re-check tools that were installed via winget, as PATH might not have updated immediately
+    if installed_via_winget_needs_path_check:
+        print_info("\nRe-checking tools installed via winget as PATH environment variable changes might require a new terminal session...")
+        for cmd, url, cmd_to_check_again in installed_via_winget_needs_path_check:
+            try:
+                version_check_cmd = [cmd_to_check_again, '--version']
+                if cmd == 'python3': # Ensure we check 'python --version'
+                    py_version_proc = subprocess.run(['python', '--version'], capture_output=True, text=True, check=True, shell=IS_WINDOWS)
+                    py_version_output = py_version_proc.stdout.strip() + py_version_proc.stderr.strip()
+                    if "3.11" not in py_version_output:
+                         raise FileNotFoundError("Python 3.11 not found after winget install")
+                    print_success(f"Python 3.11 successfully verified after winget installation: {py_version_output}")
+                elif cmd == 'poetry' and IS_WINDOWS: 
+                    try:
+                        subprocess.run([cmd_to_check_again, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                        print_success(f"{cmd} successfully verified after installation.")
+                    except (subprocess.SubprocessError, FileNotFoundError):
+                        print_warning(f"{cmd} was reportedly installed, but '{cmd_to_check_again} --version' still fails.")
+                        print_info(f"This is often a PATH issue. Ensure Python's user script directory is in your PATH.")
+                        print_info(f"Example user script directory: %APPDATA%\\Python\\Python311\\Scripts")
+                        print_info(f"Please open a new terminal and re-run the setup. If the issue persists, add {cmd} to PATH manually.")
+                        missing.append((cmd,url))
+                elif cmd == 'tesseract' and IS_WINDOWS:
+                    try:
+                        subprocess.run([cmd_to_check_again, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                        print_success(f"{cmd} successfully verified after winget installation.")
+                    except (subprocess.SubprocessError, FileNotFoundError):
+                        print_error(f"{cmd} was reportedly installed by winget, but is still not found in PATH.")
+                        print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
+                        print_info(f"Please open a new terminal/command prompt and re-run this setup script.")
+                        print_info(f"If the problem persists, ensure Tesseract OCR's installation directory (e.g., 'C:\\Program Files\\Tesseract-OCR') is in your system PATH.")
+                        missing.append((cmd, url))
+                else:
+                    subprocess.run(version_check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                    print_success(f"{cmd} successfully verified after winget installation.")
+            except (subprocess.SubprocessError, FileNotFoundError) as e:
+                final_error_msg = f"{cmd} was reportedly installed by winget, but is still not found or the correct version is not active."
+                if isinstance(e, FileNotFoundError) and cmd == 'python3' and "3.11" in str(e):
+                    final_error_msg = "Python 3.11 was reportedly installed by winget, but is still not the active version."
+                
+                print_error(final_error_msg)
+                print_info("This is often due to the PATH environment variable not being updated in the current terminal session.")
+                print_info(f"Please open a new terminal/command prompt and re-run this setup script.")
+                print_info(f"If the problem persists, you may need to manually adjust your PATH or ensure the correct version is selected (e.g., using pyenv or similar tools for Python).")
+                missing.append((cmd, url))
+                
+    # Filter out npm from missing if node is also missing, as node includes npm
+    if any(m[0] == 'node' for m in missing):
+        missing = [m for m in missing if m[0] != 'npm']
+    # Filter out pip3 from missing if python3 is also missing
+    if any(m[0] == 'python3' for m in missing):
+        missing = [m for m in missing if m[0] != 'pip3']
+
+    # Remove duplicates from missing list while preserving order (important for messages)
+    seen_missing = set()
+    unique_missing = []
+    for item in missing:
+        if item[0] not in seen_missing:
+            unique_missing.append(item)
+            seen_missing.add(item[0])
+    missing = unique_missing
+
     if missing:
-        print_error("Missing required tools. Please install them before continuing:")
+        print_error("\nMissing required tools or failed verification after automated install attempts.")
+        print_info("Please install them manually based on the instructions above or ensure they are correctly added to your PATH, then re-run this script.")
         for cmd, url in missing:
             print(f"  - {cmd}: {url}")
         sys.exit(1)
@@ -557,12 +792,65 @@ def setup_supabase():
             check=True,
             shell=IS_WINDOWS
         )
+        print_success("Supabase CLI is installed.")
     except (subprocess.SubprocessError, FileNotFoundError):
-        print_error("Supabase CLI is not installed.")
-        print_info("Please install it by following instructions at https://supabase.com/docs/guides/cli/getting-started")
-        print_info("After installing, run this setup again")
-        sys.exit(1)
-    
+        print_error("Supabase CLI is not initially detected.")
+        if IS_WINDOWS:
+            print_info("Attempting to install Supabase CLI globally using npm...")
+            try:
+                # Check if npm is installed (as it's a prerequisite for this step)
+                subprocess.run(['npm', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=IS_WINDOWS)
+                
+                # Attempt to install Supabase CLI via npm
+                npm_install_command = ['npm', 'install', '-g', 'supabase']
+                print_info(f"Running command: {' '.join(npm_install_command)}")
+                npm_install_process = subprocess.run(
+                    npm_install_command,
+                    capture_output=True, text=True, check=True, shell=IS_WINDOWS
+                )
+                print_info("npm install stdout:\n" + npm_install_process.stdout)
+                if npm_install_process.stderr:
+                    print_warning("npm install stderr:\n" + npm_install_process.stderr) # Some warnings might not be fatal
+
+                print_success("Supabase CLI installed successfully via npm.")
+                
+                # Re-verify installation
+                try:
+                    subprocess.run(
+                        ['supabase', '--version'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=True,
+                        shell=IS_WINDOWS
+                    )
+                    print_success("Supabase CLI successfully verified after npm installation.")
+                    # If successful, we can proceed with the rest of setup_supabase()
+                except (subprocess.SubprocessError, FileNotFoundError):
+                    print_warning("Supabase CLI was reportedly installed by npm, but 'supabase --version' still fails.")
+                    print_info("This is often a PATH issue. Please open a new terminal/command prompt and re-run this setup script.")
+                    print_info("If the issue persists, you may need to manually add the global npm packages directory to your PATH or follow the manual Supabase CLI installation instructions.")
+                    print_info("Manual installation instructions: https://supabase.com/docs/guides/cli/getting-started")
+                    sys.exit(1) # Exit because Supabase CLI is critical at this stage
+
+            except FileNotFoundError: # If npm itself is not found
+                 print_error("npm command not found. Cannot attempt Supabase CLI installation via npm.")
+                 print_info("Please ensure Node.js and npm are correctly installed and in your PATH (this should have been checked in 'check_requirements').")
+                 print_info("Then, either re-run this script or install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
+                 sys.exit(1)
+            except subprocess.SubprocessError as e:
+                print_error(f"Failed to install Supabase CLI via npm: {e}")
+                if hasattr(e, 'stdout') and e.stdout:
+                    print_error("npm install stdout:\n" + e.stdout)
+                if hasattr(e, 'stderr') and e.stderr:
+                    print_error("npm install stderr:\n" + e.stderr)
+                print_info("Please install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
+                print_info("After installing, run this setup again.")
+                sys.exit(1)
+        else: # Not Windows, or npm attempt was skipped/failed previously
+            print_info("Please install Supabase CLI manually by following instructions at https://supabase.com/docs/guides/cli/getting-started")
+            print_info("After installing, run this setup again.")
+            sys.exit(1)
+            
     # Extract project reference from Supabase URL
     supabase_url = os.environ.get('SUPABASE_URL')
     if not supabase_url:
