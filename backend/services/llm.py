@@ -42,9 +42,25 @@ def setup_api_keys() -> None:
     for provider in providers:
         key = getattr(config, f'{provider}_API_KEY')
         if key:
-            logger.debug(f"API key set for provider: {provider}")
+            logger.debug(f"API key found in config for provider: {provider}")
         else:
-            logger.warning(f"No API key found for provider: {provider}")
+            logger.warning(f"No API key found in config for provider: {provider}")
+
+    api_key_providers = {
+        "OPENAI": "OPENAI_API_KEY",
+        "ANTHROPIC": "ANTHROPIC_API_KEY",
+        "GROQ": "GROQ_API_KEY",
+        "OPENROUTER": "OPENROUTER_API_KEY"
+        # OLLAMA is handled differently, so it's omitted here
+    }
+
+    for provider_name, env_var_name in api_key_providers.items():
+        api_key = getattr(config, env_var_name, None)
+        if api_key:
+            os.environ[env_var_name] = api_key
+            logger.debug(f"Set {env_var_name} environment variable.")
+        else:
+            logger.warning(f"No {env_var_name} found in config to set as environment variable.")
 
     # Set up OpenRouter API base if not already set
     if config.OPENROUTER_API_KEY and config.OPENROUTER_API_BASE:
