@@ -43,6 +43,13 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
   const isLoading = isLoadingTask || (task && isLoadingSubtasks); // Loading if main task or its subtasks are loading
   const error = taskError || subtasksError;
 
+  // Define showLoadingSubtasksMessage logic
+  let showLoadingSubtasksMessage = false;
+  if (isLoadingSubtasks) {
+    if (!Array.isArray(subtasks) || subtasks.length === 0) {
+      showLoadingSubtasksMessage = true;
+    }
+  }
 
   // No explicit useEffect for subscription needed here, as useTask handles polling.
   // The component will re-render when `task` or `subtasks` data changes due to react-query's state management.
@@ -180,29 +187,42 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
           <div className="animate-fadeIn">
             <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4">Subtasks</h2>
 
-            {/* Loading indicator for subtasks, shown only if no subtasks are currently displayed */}
-            {isLoadingSubtasks && (Array.isArray(subtasks) ? subtasks.length === 0 : true) && (
+            {showLoadingSubtasksMessage && (
               <p className="text-gray-500 dark:text-gray-400">Loading subtasks...</p>
             )}
 
-            {/* Display subtask list if loading is complete and subtasks exist */}
             {!isLoadingSubtasks && Array.isArray(subtasks) && subtasks.length > 0 && (
-              <ul className="space-y-3">
-                {subtasks.map(sub => (
-                  <li key={sub.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
-                    <h3 className="font-medium text-gray-800 dark:text-gray-100">{sub.name}</h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                        Status: {sub.status.replace(/_/g, ' ')} | Progress: {(sub.progress * 100).toFixed(0)}%
-                    </p>
-                    {renderProgressBar(sub.progress, sub.status)}
-                  </li>
-                ))}
-              </ul>
+                <ul className="space-y-3">
+                    {subtasks.map(sub => (
+                        <li key={sub.id} className="p-3 bg-white dark:bg-zinc-800 rounded-lg shadow border dark:border-zinc-700"> {/* Updated styling from prompt */}
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="font-medium text-gray-800 dark:text-gray-100">{sub.name}</span>
+                                <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                                    sub.status === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-700 dark:text-green-100' :
+                                    sub.status === 'running' ? 'bg-blue-100 text-blue-700 dark:bg-blue-700 dark:text-blue-100' :
+                                    sub.status === 'pending' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-700 dark:text-yellow-100' :
+                                    sub.status === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-700 dark:text-red-100' :
+                                    'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-100'
+                                }`}>
+                                    {sub.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                </span>
+                            </div>
+                            {/* Using a simplified progress bar structure as per prompt's subtask item example */}
+                            <div className="h-2 bg-gray-200 dark:bg-zinc-700 rounded-full overflow-hidden mt-1">
+                                <div
+                                    className={`h-full rounded-full ${
+                                        sub.status === 'failed' ? 'bg-red-500' : (sub.status === 'completed' ? 'bg-green-500' : 'bg-primary')
+                                    }`}
+                                    style={{ width: `${(sub.progress || 0) * 100}%` }} // Ensure progress is a number, default to 0
+                                />
+                            </div>
+                        </li>
+                    ))}
+                </ul>
             )}
-
-            {/* Display "No subtasks" message if loading is complete and no subtasks are found */}
-            {!isLoadingSubtasks && (!Array.isArray(subtasks) || subtasks.length === 0) && (
-              <p className="text-gray-500 dark:text-gray-400">No subtasks for this task.</p>
+            {/* Adjusted condition for "No subtasks" message */}
+            {!isLoadingSubtasks && !showLoadingSubtasksMessage && (!Array.isArray(subtasks) || subtasks.length === 0) && (
+                <p className="text-gray-500 dark:text-gray-400">No subtasks for this task.</p>
             )}
           </div>
         )}
