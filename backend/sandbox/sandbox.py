@@ -119,6 +119,9 @@ def create_sandbox(password: str, project_id: str = None):
     sandbox = daytona.create(params)
     logger.debug(f"Sandbox created with ID: {sandbox.id}")
     
+    # Setup visualization environment
+    setup_visualization_environment(sandbox)
+
     # Start supervisord in a session for new sandbox
     start_supervisord_session(sandbox)
     
