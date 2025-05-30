@@ -35,6 +35,7 @@ MAX_CONCURRENT_IPS = 25
 async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting up FastAPI application with instance ID: {instance_id} in {config.ENV_MODE.value} mode")
+    logger.info("<<<<< CODE VERSION: DIAGNOSTIC_V1_LOCAL_SANDBOX_FIXES ACTIVE >>>>>")
     
     try:
         # Initialize database
