@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { Image as ImageIcon, ImageOff, CheckCircle, AlertTriangle, Loader2, Download, ZoomIn, ZoomOut, ExternalLink, Check } from 'lucide-react';
 import { ToolViewProps } from './types';
 import { formatTimestamp, getToolTitle, normalizeContentToString } from './utils';
@@ -274,7 +275,7 @@ function SafeImage({ src, alt, filePath, className }: { src: string; alt: string
         URL.revokeObjectURL(imgSrc);
       }
     };
-  }, [src, session?.access_token]);
+  }, [src, session?.access_token, imgSrc]);
 
   const handleError = () => {
     if (attempts < 3) {
@@ -362,22 +363,25 @@ function SafeImage({ src, alt, filePath, className }: { src: string; alt: string
         "overflow-hidden transition-all duration-300 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 mb-3",
         isZoomed ? "cursor-zoom-out" : "cursor-zoom-in"
       )}>
-        <div className="relative flex items-center justify-center">
-          <img
+        <div className="relative flex items-center justify-center w-full h-full" style={{minHeight: '200px'}}> {/* Ensure parent has dimensions for layout="fill" */}
+          <Image
             src={imgSrc}
             alt={alt}
             onClick={handleZoomToggle}
+            layout="fill"
+            objectFit="contain"
             className={cn(
-              "max-w-full object-contain transition-all duration-300 ease-in-out",
+              "transition-all duration-300 ease-in-out",
               isZoomed 
-                ? "max-h-[80vh]" 
-                : "max-h-[500px] hover:scale-[1.01]",
+                ? "" // layout="fill" handles sizing, max-h can be on parent if needed
+                : "hover:scale-[1.01]",
               className
             )}
             style={{
               transform: isZoomed ? `scale(${zoomLevel})` : 'none',
             }}
             onError={handleError}
+            unoptimized={imgSrc.startsWith('blob:') || imgSrc.startsWith('data:') ? true : undefined}
           />
         </div>
       </div>

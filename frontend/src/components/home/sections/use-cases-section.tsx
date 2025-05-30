@@ -5,6 +5,7 @@ import { siteConfig } from '@/lib/home';
 import { cn } from '@/lib/utils';
 import { motion } from 'motion/react';
 import { ArrowRight } from 'lucide-react';
+import Image from 'next/image';
 
 interface UseCase {
   id: string;
@@ -73,13 +74,14 @@ export function UseCasesSection() {
 
                 <div className="w-full h-[160px] bg-accent/10">
                   <div className="relative w-full h-full overflow-hidden">
-                    <img
+                    <Image
                       src={
                         useCase.image ||
                         `https://placehold.co/800x400/f5f5f5/666666?text=Suna+${useCase.title.split(' ').join('+')}`
                       }
                       alt={`Suna ${useCase.title}`}
-                      className="w-full h-full object-cover"
+                      layout="fill"
+                      objectFit="cover"
                     />
                     <a
                       href={useCase.url}

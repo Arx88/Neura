@@ -44,7 +44,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
                 clearTimeout(maxTimeoutRef.current);
             }
         };
-    }, [state]);
+    }, [state, stopRecording]);
 
     const startRecording = async () => {
         try {
@@ -96,11 +96,11 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
     };
 
-    const stopRecording = () => {
+    const stopRecording = React.useCallback(() => {
         if (mediaRecorderRef.current && state === 'recording') {
             mediaRecorderRef.current.stop();
         }
-    };
+    }, [state]);
 
     const cancelRecording = () => {
         if (mediaRecorderRef.current && state === 'recording') {

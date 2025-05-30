@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 
 // Global cache to persist between component mounts
@@ -280,7 +280,7 @@ export function useCachedFile<T = string>(
   };
 
   // Function to get data from cache first, then network if needed
-  const getFileContent = async () => {
+  const getFileContent = useCallback(async () => {
     if (!cacheKey) return;
     
     try {
@@ -307,7 +307,7 @@ export function useCachedFile<T = string>(
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [cacheKey, options.expiration]);
 
   useEffect(() => {
     if (sandboxId && filePath) {
@@ -333,7 +333,7 @@ export function useCachedFile<T = string>(
         }
       }
     };
-  }, [sandboxId, filePath, options.contentType]);
+  }, [sandboxId, filePath, options.contentType, cacheKey, getFileContent]);
 
   // Expose the cache manipulation functions
   return {

@@ -794,8 +794,9 @@ export function FileViewerModal({
 
   // Modify the cleanup effect to respect active downloads
   useEffect(() => {
+    const urls = activeDownloadUrls.current;
     return () => {
-      if (blobUrlForRenderer && !isDownloading && !activeDownloadUrls.current.has(blobUrlForRenderer)) {
+      if (blobUrlForRenderer && !isDownloading && !urls.has(blobUrlForRenderer)) {
         console.log(`[FILE VIEWER] Revoking blob URL on cleanup: ${blobUrlForRenderer}`);
         URL.revokeObjectURL(blobUrlForRenderer);
       }

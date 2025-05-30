@@ -309,22 +309,22 @@ export function FileAttachment({
                 }}
                 title={filename}
             >
-                <img
-                    src={sandboxId && session?.access_token ? imageUrl : fileUrl}
+                <Image
+                    src={sandboxId && session?.access_token && imageUrl ? imageUrl : fileUrl}
                     alt={filename}
-                    className={cn(
-                        "max-h-full", // Respect parent height constraint
-                        isGridLayout ? "w-full h-full object-cover" : "w-auto" // Full width & height in grid with object-cover
-                    )}
+                    layout="fill"
+                    objectFit={isGridLayout ? "cover" : "contain"}
                     style={{
-                        height: imageHeight,
+                        // The layout="fill" makes the image cover the parent,
+                        // so direct height style might not be needed or could conflict.
+                        // The parent button already has height constraints.
                         objectPosition: "center",
-                        objectFit: isGridLayout ? "cover" : "contain"
                     }}
-                    onLoad={() => {
+                    onLoadingComplete={() => { // Changed from onLoad for Next/Image
                         console.log("Image loaded successfully:", filename);
                     }}
                     onError={(e) => {
+                        // @ts-ignore
                         // Avoid logging the error for all instances of the same image
                         console.error('Image load error for:', filename);
 

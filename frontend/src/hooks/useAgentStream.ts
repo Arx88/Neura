@@ -228,7 +228,7 @@ export function useAgentStream(
   // --- Stream Callback Handlers ---
 
   const handleStreamMessage = useCallback(
-    (rawData: string) => {
+    useCallback((rawData: string) => {
       if (!isMountedRef.current) return;
       (window as any).lastStreamMessage = Date.now(); // Keep track of last message time
 
@@ -382,8 +382,6 @@ export function useAgentStream(
       }
     },
     [
-      threadId,
-      setMessages,
       status,
       toolCall,
       callbacks,

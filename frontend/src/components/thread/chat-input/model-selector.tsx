@@ -499,7 +499,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       setIsOpen(false);
       setTimeout(() => setIsOpen(true), 10);
     }
-  }, [customModels, modelOptions]); // Also depend on modelOptions to refresh when parent changes
+  }, [customModels, modelOptions, isOpen]); // Also depend on modelOptions to refresh when parent changes
 
   return (
     <div className="relative">
