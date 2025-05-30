@@ -335,6 +335,7 @@ async def run_agent(
             
         generation = trace.generation(name="thread_manager.run_thread")
         try:
+            logger.info(f"Iteration {iteration_count}: About to call thread_manager.run_thread for thread {thread_id}")
             # Make the LLM call and process the response
             response = await thread_manager.run_thread(
                 thread_id=thread_id,
@@ -362,6 +363,7 @@ async def run_agent(
                 enable_context_manager=enable_context_manager,
                 generation=generation
             )
+            logger.info(f"Iteration {iteration_count}: thread_manager.run_thread returned. Type of response: {type(response)}")
 
             if isinstance(response, dict) and "status" in response and response["status"] == "error":
                 logger.error(f"Error response from run_thread: {response.get('message', 'Unknown error')}")
@@ -377,6 +379,7 @@ async def run_agent(
             try:
                 full_response = ""
                 async for chunk in response:
+                    logger.debug(f"Iteration {iteration_count}: Received chunk from run_thread: {str(chunk)[:200]}")
                     # If we receive an error chunk, we should stop after this iteration
                     if isinstance(chunk, dict) and chunk.get('type') == 'status' and chunk.get('status') == 'error':
                         logger.error(f"Error chunk detected: {chunk.get('message', 'Unknown error')}")
@@ -416,11 +419,11 @@ async def run_agent(
                             logger.warning(f"Warning: Could not parse assistant content JSON: {chunk.get('content')}")
                             trace.event(name="warning_could_not_parse_assistant_content_json", level="WARNING", status_message=(f"Warning: Could not parse assistant content JSON: {chunk.get('content')}"))
                         except Exception as e:
-                            logger.error(f"Error processing assistant chunk: {e}")
+                            logger.error(f"Error processing assistant chunk: {e}", exc_info=True) # Ensured exc_info=True
                             trace.event(name="error_processing_assistant_chunk", level="ERROR", status_message=(f"Error processing assistant chunk: {e}"))
 
                     yield chunk
-
+                logger.info(f"Iteration {iteration_count}: Finished iterating over run_thread response for thread {thread_id}")
                 # Check if we should stop based on the last tool call or error
                 if error_detected:
                     logger.info(f"Stopping due to error detected in response")
@@ -435,8 +438,8 @@ async def run_agent(
                     continue_execution = False
             except Exception as e:
                 # Just log the error and re-raise to stop all iterations
-                error_msg = f"Error during response streaming: {str(e)}"
-                logger.error(f"Error: {error_msg}", exc_info=True) # Added exc_info
+                error_msg = f"Error during response streaming: {str(e)}" # This is used in the logger below
+                logger.error(f"Error during response streaming: {str(e)}", exc_info=True) # Ensuring format from subtask
                 trace.event(name="error_during_response_streaming", level="ERROR", status_message=(f"Error during response streaming: {str(e)}"))
                 generation.end(output=full_response, status_message=error_msg, level="ERROR")
                 yield {
