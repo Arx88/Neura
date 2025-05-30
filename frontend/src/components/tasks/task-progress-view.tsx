@@ -46,7 +46,14 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
   // Define showLoadingSubtasksMessage logic
   let showLoadingSubtasksMessage = false;
   if (isLoadingSubtasks) {
-    if (!Array.isArray(subtasks) || subtasks.length === 0) {
+    if (Array.isArray(subtasks)) {
+      // Only if it's an array, then check its length
+      if (subtasks.length === 0) {
+        showLoadingSubtasksMessage = true;
+      }
+      // If it's an array and length > 0, showLoadingSubtasksMessage remains false (we have items to show)
+    } else {
+      // If it's not an array (e.g., undefined, null), then we definitely want to show loading.
       showLoadingSubtasksMessage = true;
     }
   }
