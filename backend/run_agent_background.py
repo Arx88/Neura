@@ -22,7 +22,6 @@ except Exception as e:
 diag_logger.info(f"Exists /app/backend: {os.path.exists('/app/backend')}")
 diag_logger.info(f"Is dir /app/backend: {os.path.isdir('/app/backend')}")
 
-# The previous sys.path modification attempt:
 project_root = '/app'
 diag_logger.info(f"Attempting to add '{project_root}' to sys.path...")
 if project_root not in sys.path:
