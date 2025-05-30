@@ -1,3 +1,15 @@
+import sys
+import os
+
+# Ensure the '/app' directory (project root inside the container) is in sys.path
+# This allows top-level imports like 'from backend...' , 'from utils...' etc.
+# when the script is run by Dramatiq, which might not inherit Python's default
+# behavior of adding the script's CWD to sys.path for module resolution.
+project_root = '/app' # Standardized in Dockerfile
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# The rest of the script's imports and code will follow.
 import sentry
 import asyncio
 import json
