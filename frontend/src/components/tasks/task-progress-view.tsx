@@ -179,8 +179,14 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
         {activeTab === 'subtasks' && (
           <div className="animate-fadeIn">
             <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4">Subtasks</h2>
-            {isLoadingSubtasks && !(subtasks && subtasks.length > 0) && <p className="text-gray-500 dark:text-gray-400">Loading subtasks...</p>}
-            {!isLoadingSubtasks && subtasks && subtasks.length > 0 ? (
+
+            {/* Loading indicator for subtasks, shown only if no subtasks are currently displayed */}
+            {isLoadingSubtasks && (!Array.isArray(subtasks) || subtasks.length === 0) && (
+              <p className="text-gray-500 dark:text-gray-400">Loading subtasks...</p>
+            )}
+
+            {/* Display subtask list if loading is complete and subtasks exist */}
+            {!isLoadingSubtasks && Array.isArray(subtasks) && subtasks.length > 0 && (
               <ul className="space-y-3">
                 {subtasks.map(sub => (
                   <li key={sub.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg shadow-sm border border-gray-100 dark:border-gray-700">
@@ -192,8 +198,11 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
                   </li>
                 ))}
               </ul>
-            ) : (
-              !isLoadingSubtasks && <p className="text-gray-500 dark:text-gray-400">No subtasks for this task.</p>
+            )}
+
+            {/* Display "No subtasks" message if loading is complete and no subtasks are found */}
+            {!isLoadingSubtasks && (!Array.isArray(subtasks) || subtasks.length === 0) && (
+              <p className="text-gray-500 dark:text-gray-400">No subtasks for this task.</p>
             )}
           </div>
         )}
