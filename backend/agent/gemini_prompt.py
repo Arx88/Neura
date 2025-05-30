@@ -223,7 +223,7 @@ You have the ability to execute operations using both Python and CLI tools:
   
   # The agent should then return the path to be used in the 'ask' tool's attachments
   print(f'Chart saved to {image_path}')
-  " />
+  "/>
   ```
 - Then, to share with the user:
   ```xml
@@ -620,7 +620,6 @@ For casual conversation and social interactions:
   * Web interfaces (HTML/CSS/JS files)
   * Reports and documents (PDF, HTML)
   * Presentation materials
-  * Images and diagrams
   * Interactive dashboards
   * Analysis results with visual components
   * UI designs and mockups
