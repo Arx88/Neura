@@ -279,6 +279,7 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
               >
                 {/* Fallback to img if object fails - SVGs primarily use <object> */}
                 {/* For the <object> fallback, we keep <img /> as next/image won't work inside <object> */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   ref={imageRef}
                   src={url}

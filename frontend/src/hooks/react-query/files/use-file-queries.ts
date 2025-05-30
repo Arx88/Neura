@@ -353,6 +353,7 @@ export function useCachedFile<T = string>(
   } = {}
 ) {
   // Map old contentType values to new ones
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const mappedContentType = React.useMemo(() => {
     switch (options.contentType) {
       case 'json': return 'json';
