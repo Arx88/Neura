@@ -16,7 +16,7 @@ from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
 # Imports for sandbox stopping
-from sandbox.sandbox import get_or_start_sandbox, daytona # Modified import
+from backend.sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
@@ -292,13 +292,27 @@ async def run_agent_background(
 
                         # 2. Stop the Sandbox
                         logger.info(f"Attempting to stop sandbox: {sandbox_id_for_cleanup_and_stop} after cleanup.")
-                        current_state = sandbox_instance.info().state
-                        logger.info(f"Sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
-                        if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
-                            await daytona.stop(sandbox_instance)
-                            logger.info(f"Successfully sent stop command to sandbox {sandbox_id_for_cleanup_and_stop}")
+                        if use_daytona():
+                            logger.info(f"Using Daytona to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
+                            current_state = sandbox_instance.info().state
+                            logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
+                            if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
+                                await daytona.stop(sandbox_instance)
+                                logger.info(f"Successfully sent stop command to Daytona sandbox {sandbox_id_for_cleanup_and_stop}")
+                            else:
+                                logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
                         else:
-                            logger.info(f"Sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
+                            logger.info(f"Using local_sandbox to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
+                            # Ensure local_sandbox is imported for this scope
+                            from backend.sandbox.local_sandbox import local_sandbox
+                            current_state = sandbox_instance['info']()['state'] # local_sandbox returns a dict
+                            logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
+                            # Common Docker states for a stopped container are 'exited' or sometimes 'stopped' (though 'exited' is more canonical for normally stopped)
+                            if current_state not in ['exited', 'stopped', 'stopping']: # 'stopping' could be a transient state
+                                local_sandbox.stop(sandbox_instance) # local_sandbox.stop is synchronous
+                                logger.info(f"Successfully called stop for local sandbox {sandbox_id_for_cleanup_and_stop}")
+                            else:
+                                logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
                     else:
                         logger.warning(f"Could not retrieve sandbox instance for ID: {sandbox_id_for_cleanup_and_stop}. Skipping cleanup and stop.")
 

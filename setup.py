@@ -38,10 +38,14 @@ def load_state():
             with open(STATE_FILE, 'r') as f:
                 state = json.load(f)
                 print_info(f"Loaded saved setup state from {STATE_FILE}")
+                # Ensure env_vars is present
+                if 'env_vars' not in state:
+                    state['env_vars'] = {}
+                # execution_mode will be handled by ask_execution_mode if not present
                 return state
         except (IOError, json.JSONDecodeError) as e:
             print_warning(f"Could not load or parse state file {STATE_FILE}: {e}. Starting with a fresh state.")
-    return {}
+    return {'env_vars': {}} # Ensure env_vars is initialized for a fresh state
 
 def save_state(state):
     """Saves the setup state to STATE_FILE."""
@@ -103,6 +107,52 @@ def mask_url(url):
         return "****" # Fallback for complex or unexpected URL formats
 
 # --- End State Persistence Functions ---
+
+# --- New functions ---
+def ask_execution_mode(state):
+    """Asks the user for execution mode (Daytona or Local Docker) and saves the state."""
+    print_info("You can run Suna's sandbox environment using Daytona.io or locally using Docker.")
+    print_info(" - Daytona: Cloud-based, managed sandboxes. Requires a Daytona account and API key.")
+    print_info(" - Local Docker: Uses your local Docker installation. Requires Docker Desktop or Docker Engine to be running.")
+
+    # Check if execution_mode is already set in state
+    if 'execution_mode' in state and state['execution_mode'] in ['daytona', 'local']:
+        print_info(f"Saved execution mode found: {state['execution_mode'].capitalize()}")
+        use_existing = input(f"{Colors.YELLOW}Do you want to use this saved execution mode? (yes/no, default: yes): {Colors.ENDC}").strip().lower()
+        if use_existing in ['', 'yes', 'y']:
+            print_info(f"Using saved execution mode: {state['execution_mode'].capitalize()}.")
+            return state # Return existing state if user confirms
+
+    while True:
+        print(f"\n{Colors.CYAN}Choose your sandbox execution mode:{Colors.ENDC}")
+        print(f"{Colors.CYAN}[1] {Colors.GREEN}Daytona.io (Cloud Sandboxes){Colors.ENDC}")
+        print(f"{Colors.CYAN}[2] {Colors.GREEN}Local Docker (Requires Docker installed and running){Colors.ENDC}\n")
+        
+        choice = input("Enter your choice (1 for Daytona, 2 for Local Docker): ").strip()
+        if choice == '1':
+            state['execution_mode'] = 'daytona'
+            print_success("Selected Daytona.io for sandbox execution.")
+            break
+        elif choice == '2':
+            state['execution_mode'] = 'local'
+            print_success("Selected Local Docker for sandbox execution.")
+            break
+        else:
+            print_error("Invalid choice. Please enter '1' or '2'.")
+    
+    save_state(state)
+    return state
+
+def configure_local_docker(state):
+    """Placeholder for any specific Local Docker configuration steps."""
+    print_info("Configuring for Local Docker execution...")
+    # For now, this function is a placeholder.
+    # Future: Could check Docker version, resources, specific settings.
+    print_info("Ensure Docker is installed and running. No further specific configuration needed for Local Docker at this time.")
+    # state might be updated here in the future if specific local docker configs are collected
+    save_state(state) # Save state even if no changes, for consistency
+    return state
+# --- End New functions ---
 
 
 # Helper function to run winget install
@@ -1299,7 +1349,7 @@ def collect_rapidapi_keys(existing_info={}):
         'RAPID_API_KEY': rapid_api_key,
     }
 
-def configure_backend_env(env_vars, use_docker=True):
+def configure_backend_env(env_vars, use_docker=True, state=None): # Added state
     """Configure backend .env file"""
     env_path = os.path.join('backend', '.env')
     
@@ -1396,13 +1446,28 @@ ENV_MODE=local
     env_content += f"FIRECRAWL_API_KEY={firecrawl_key}\n"
     env_content += f"FIRECRAWL_URL={firecrawl_url}\n"
     
-    # Daytona section
+    # Daytona section (Modified)
     env_content += "\n# Sandbox container provider:\n"
-    for key, value in env_vars['daytona'].items():
-        env_content += f"{key}={value}\n"
+    # Ensure SANDBOX_IMAGE_NAME is present, using a default if not found in llm section
+    # This key was previously in Daytona section, but makes more sense with LLM/general sandbox config.
+    # It's used by local_sandbox.py
+    # Defaulting to kortix/suna:0.1.2.8, ensure this is the desired default.
+    sandbox_image_name = env_vars.get('llm', {}).get('sandbox_image_name', 'kortix/suna:0.1.2.8') 
+    env_content += f"SANDBOX_IMAGE_NAME={sandbox_image_name}\n"
+
+    if state and state.get('execution_mode') == 'daytona':
+        daytona_vars = env_vars.get('daytona', {}) # Should be populated by collect_daytona_info
+        env_content += f"DAYTONA_API_KEY={daytona_vars.get('DAYTONA_API_KEY', '')}\n"
+        env_content += f"DAYTONA_SERVER_URL={daytona_vars.get('DAYTONA_SERVER_URL', 'https://app.daytona.io/api')}\n"
+        env_content += f"DAYTONA_TARGET={daytona_vars.get('DAYTONA_TARGET', 'us')}\n"
+    else: # local mode or mode not determined (fallback to local-like empty Daytona vars)
+        env_content += f"# Daytona variables are not configured for local execution mode\n"
+        env_content += f"DAYTONA_API_KEY=\n"
+        env_content += f"DAYTONA_SERVER_URL=\n"
+        env_content += f"DAYTONA_TARGET=\n"
     
     # Add next public URL at the end
-    env_content += f"NEXT_PUBLIC_URL=http://localhost:3000\n"
+    env_content += f"\nNEXT_PUBLIC_URL=http://localhost:3000\n" # Added newline for separation
     
     # Write to file
     with open(env_path, 'w') as f:
@@ -1663,7 +1728,7 @@ def setup_supabase(existing_config={}, setup_completed=False):
         print_error(f"Failed to setup Supabase: {e}")
         sys.exit(1)
 
-def install_dependencies(dependencies_installed=False):
+def install_dependencies(dependencies_installed=False, state=None): # Added state
     """Install frontend and backend dependencies, allowing skipping if previously completed."""
     if dependencies_installed:
         print_info("Dependencies were previously installed. Skipping.")
@@ -1844,7 +1909,37 @@ print(f'DEBUG_SUBPROCESS: shutil.which("pip"): {shutil.which("pip")}')
         else:
             print_error("The error seems related to backend 'poetry' commands or another setup step within install_dependencies.")
         print_info("You may need to install them manually or check specific error messages above.")
-        return False
+        return False # Poetry or NPM install failed
+
+    # If we reach here, npm and poetry installs were successful.
+    # Now, add Docker SDK installation if local execution mode is selected
+    if state and state.get('execution_mode') == 'local':
+        print_info("Execution mode is 'local'. Checking and installing Docker SDK for Python if needed...")
+        try:
+            # Check if docker SDK is already importable
+            import docker # type: ignore
+            print_success("Docker SDK for Python is already installed.")
+        except ImportError:
+            print_info("Docker SDK for Python not found. Attempting to install...")
+            try:
+                # Use sys.executable to ensure pip is called from the venv's Python
+                pip_install_cmd = [sys.executable, '-m', 'pip', 'install', 'docker']
+                print_info(f"Executing: {' '.join(pip_install_cmd)}")
+                # Using capture_output to avoid polluting setup logs too much unless there's an error
+                pip_process = subprocess.run(pip_install_cmd, check=True, shell=False, capture_output=True, text=True)
+                print_success("Docker SDK for Python installed successfully.")
+                if pip_process.stdout: # Log stdout from pip if any, for transparency
+                    print_info(f"pip install docker stdout:\n{pip_process.stdout}")
+            except subprocess.SubprocessError as e:
+                print_error(f"Failed to install Docker SDK for Python: {e}")
+                # Print stdout/stderr from the failed pip command
+                if hasattr(e, 'stdout') and e.stdout: print_info(f"pip install docker stdout:\n{e.stdout}")
+                if hasattr(e, 'stderr') and e.stderr: print_error(f"pip install docker stderr:\n{e.stderr}")
+                print_warning("If you intend to use local Docker execution, please install the Docker SDK manually: pip install docker")
+                # Depending on strictness, you might return False here if Docker SDK is essential for local mode to even start.
+                # For now, treating as a warning and allowing setup to proceed.
+    
+    return True # All specified dependencies (npm, poetry, conditional docker sdk) installed successfully
 
 def start_suna():
     """Start Suna using Docker Compose or manual startup"""
@@ -2216,9 +2311,10 @@ def main():
     ensure_python_311_and_venv()
 
     state = load_state()
-    env_vars = state.get('env_vars', {})
+    env_vars = state.get('env_vars', {}) # Loaded state now ensures env_vars exists
+    # execution_mode is loaded if present, otherwise initialized by ask_execution_mode
 
-    total_steps = 8
+    total_steps = 9 # Increased for the new execution mode step
     current_step = 1
     
     print_banner()
@@ -2228,98 +2324,124 @@ def main():
     # check_requirements() will be called, and Python 3.11 check within it should now pass
     # because we are (or will be after re-launch) in the venv.
     check_requirements() # Python check within this should be fine now
-    check_docker_running()
+    # Docker running check might be conditional if local mode is chosen, but good to check early
+    # or ensure configure_local_docker handles it. For now, keep it here.
+    check_docker_running() 
     
     if not check_suna_directory():
         print_error("This setup script must be run from the Suna repository root directory.")
         sys.exit(1)
     current_step += 1
+
+    # Ask for execution mode early on
+    print_step(current_step, total_steps, "Choosing Sandbox Execution Mode")
+    state = ask_execution_mode(state) # state object is updated here
+    # env_vars is part of state, so it's implicitly saved if ask_execution_mode calls save_state
+    current_step += 1
     
     # Steps below assume we are now running in the correct Python 3.11 venv
     print_step(current_step, total_steps, "Collecting Supabase information")
-    supabase_info = collect_supabase_info(env_vars.get('supabase', {}))
-    env_vars['supabase'] = supabase_info
+    # Pass state['env_vars'] to collect functions, and update it
+    supabase_info = collect_supabase_info(state['env_vars'].get('supabase', {}))
+    state['env_vars']['supabase'] = supabase_info
     if 'SUPABASE_URL' in supabase_info: # Keep this for setup_supabase dependency
         os.environ['SUPABASE_URL'] = supabase_info['SUPABASE_URL']
-    save_state({'env_vars': env_vars})
+    save_state(state) # Save the whole state object
     current_step += 1
     
-    print_step(current_step, total_steps, "Collecting Daytona information")
-    daytona_info = collect_daytona_info(env_vars.get('daytona', {}))
-    env_vars['daytona'] = daytona_info
-    save_state({'env_vars': env_vars})
+    # Conditional Daytona or Local Docker configuration
+    if state.get('execution_mode') == 'daytona':
+        print_step(current_step, total_steps, "Collecting Daytona.io Information")
+        daytona_info = collect_daytona_info(state['env_vars'].get('daytona', {}))
+        state['env_vars']['daytona'] = daytona_info
+    else: # 'local' execution mode
+        print_step(current_step, total_steps, "Configuring Local Docker Environment")
+        state = configure_local_docker(state) # configure_local_docker saves state internally
+        # Ensure daytona env_vars are empty for local mode
+        state['env_vars']['daytona'] = {
+            'DAYTONA_API_KEY': '',
+            'DAYTONA_SERVER_URL': '',
+            'DAYTONA_TARGET': ''
+        }
+    save_state(state)
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting LLM API keys")
-    llm_api_keys = collect_llm_api_keys(env_vars.get('llm', {}))
-    env_vars['llm'] = llm_api_keys
-    save_state({'env_vars': env_vars})
+    # Pass state['env_vars'] to collect functions, and update it
+    llm_api_keys = collect_llm_api_keys(state['env_vars'].get('llm', {}))
+    state['env_vars']['llm'] = llm_api_keys
+    save_state(state)
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting search and web scraping API keys")
-    search_api_keys = collect_search_api_keys(env_vars.get('search', {}))
-    env_vars['search'] = search_api_keys
-    save_state({'env_vars': env_vars})
+    search_api_keys = collect_search_api_keys(state['env_vars'].get('search', {}))
+    state['env_vars']['search'] = search_api_keys
+    save_state(state)
     current_step += 1
     
     print_step(current_step, total_steps, "Collecting RapidAPI key")
-    rapidapi_keys = collect_rapidapi_keys(env_vars.get('rapidapi', {}))
-    env_vars['rapidapi'] = rapidapi_keys
-    save_state({'env_vars': env_vars})
+    rapidapi_keys = collect_rapidapi_keys(state['env_vars'].get('rapidapi', {}))
+    state['env_vars']['rapidapi'] = rapidapi_keys
+    save_state(state)
     current_step += 1
     
     # Setup Supabase database
-    supabase_config_to_use = env_vars.get('supabase', {})
-    supabase_previously_completed = env_vars.get('supabase_setup_completed', False)
-    # setup_supabase will print if skipped and sys.exit on error if not skipped
+    # Pass state['env_vars'] for Supabase config, and use 'supabase_setup_completed' from state directly
+    supabase_config_to_use = state['env_vars'].get('supabase', {})
+    supabase_previously_completed = state.get('supabase_setup_completed', False)
     setup_supabase(supabase_config_to_use, supabase_previously_completed) 
     
     if not supabase_previously_completed:
-        # If setup_supabase ran (wasn't skipped) and didn't exit, it means it succeeded.
         print_info("Marking Supabase setup as completed in state.")
-        env_vars['supabase_setup_completed'] = True
-        save_state({'env_vars': env_vars})
+        state['supabase_setup_completed'] = True
+        save_state(state)
     current_step += 1
     
     # Install dependencies before starting Suna
     print_step(current_step, total_steps, "Installing dependencies")
-    dependencies_previously_installed = env_vars.get('dependencies_installed', False)
-    installation_succeeded = install_dependencies(dependencies_previously_installed)
+    dependencies_previously_installed = state.get('dependencies_installed', False)
+    # Pass the whole state to install_dependencies
+    installation_succeeded = install_dependencies(dependencies_previously_installed, state)
 
     if not dependencies_previously_installed:
         if installation_succeeded:
-            env_vars['dependencies_installed'] = True
+            state['dependencies_installed'] = True
             print_info("Marking dependencies as installed in state.")
-            save_state({'env_vars': env_vars})
         else:
             print_error("Dependency installation failed. Exiting setup.")
-            save_state({'env_vars': env_vars}) # Save other collected info before exiting
-            sys.exit(1)
-    elif installation_succeeded: # Was skipped and returned True
+    elif installation_succeeded: 
          print_info("Dependencies installation was skipped as it was previously completed.")
-    else: # Skipped but returned False - should not happen
+    else: 
         print_warning("install_dependencies was skipped but did not return True. Check logic.")
-        # Still save state as a precaution
-        save_state({'env_vars': env_vars})
+    save_state(state) # Save state after dependency install attempt/check
+    if not installation_succeeded and not dependencies_previously_installed:
+        sys.exit(1) # Exit if install failed and wasn't skipped
     
     # Configure environment files with the correct settings before starting
-    # env_vars is already populated and saved throughout the steps above.
     print_info("Configuring environment files...")
-    configure_backend_env(env_vars, True)  # Always create for Docker first
-    configure_frontend_env(env_vars, True)
+    # Pass state to configure_backend_env
+    configure_backend_env(state['env_vars'], True, state)  # Always create for Docker first
+    configure_frontend_env(state['env_vars'], True)
     
     # Now ask how to start Suna
-    print_step(current_step, total_steps, "Starting Suna")
-    use_docker = start_suna() # This function might also benefit from env_vars in the future
+    # Step number for "Starting Suna" is now the last step, so total_steps
+    print_step(total_steps, total_steps, "Starting Suna") # Use total_steps as current_step for the last one
+    use_docker_startup = start_suna() 
     
-    # Update environment files if needed for non-Docker setup
-    if not use_docker:
+    # Update environment files if needed for non-Docker startup
+    if not use_docker_startup:
         print_info("Updating environment files for manual startup...")
-        configure_backend_env(env_vars, use_docker)
-        configure_frontend_env(env_vars, use_docker)
+        # Pass state to configure_backend_env
+        configure_backend_env(state['env_vars'], False, state)
+        configure_frontend_env(state['env_vars'], False)
     
     # Final instructions
-    final_instructions(use_docker, env_vars)
+    final_instructions(use_docker_startup, state['env_vars'])
+# This part is integrated into the diff block above.
+# Ensure that the final save_state call is appropriate if install_dependencies fails.
+# The logic for saving state after install_dependencies and exiting on failure is included.
+# The configure_backend_env and configure_frontend_env calls are also updated.
+# The start_suna and final_instructions calls are updated to use the correct variables.
 
 if __name__ == "__main__":
     try:

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from utils.logger import logger
 from utils.config import config
 from utils.config import Configuration
+from backend.sandbox.local_sandbox import local_sandbox
 
 load_dotenv()
 
@@ -32,36 +33,62 @@ else:
 daytona = Daytona(daytona_config)
 logger.debug("Daytona client initialized")
 
+def use_daytona():
+    """Determinar si se debe usar DAYTONA o sandbox local"""
+    return config.DAYTONA_API_KEY and config.DAYTONA_SERVER_URL and config.DAYTONA_TARGET
+
 async def get_or_start_sandbox(sandbox_id: str):
     """Retrieve a sandbox by ID, check its state, and start it if needed."""
     
     logger.info(f"Getting or starting sandbox with ID: {sandbox_id}")
-    
-    try:
-        sandbox = daytona.get_current_sandbox(sandbox_id)
-        
-        # Check if sandbox needs to be started
-        if sandbox.instance.state == WorkspaceState.ARCHIVED or sandbox.instance.state == WorkspaceState.STOPPED:
-            logger.info(f"Sandbox is in {sandbox.instance.state} state. Starting...")
+
+    if use_daytona():
+        logger.info("Using Daytona for sandbox operations")
+        try:
+            sandbox = daytona.get_current_sandbox(sandbox_id)
+            
+            # Check if sandbox needs to be started
+            if sandbox.instance.state == WorkspaceState.ARCHIVED or sandbox.instance.state == WorkspaceState.STOPPED:
+                logger.info(f"Daytona sandbox is in {sandbox.instance.state} state. Starting...")
+                try:
+                    daytona.start(sandbox)
+                    # Refresh sandbox state after starting
+                    sandbox = daytona.get_current_sandbox(sandbox_id)
+                    # Start supervisord in a session when restarting
+                    start_supervisord_session(sandbox) # Ensure this is compatible or adapted if needed
+                except Exception as e:
+                    logger.error(f"Error starting Daytona sandbox: {e}")
+                    raise e
+            
+            logger.info(f"Daytona sandbox {sandbox_id} is ready")
+            return sandbox
+            
+        except Exception as e:
+            logger.error(f"Error retrieving or starting Daytona sandbox: {str(e)}")
+            raise e
+    else:
+        logger.info("Using local sandbox for operations")
+        try:
             try:
-                daytona.start(sandbox)
-                # Wait a moment for the sandbox to initialize
-                # sleep(5)
-                # Refresh sandbox state after starting
-                sandbox = daytona.get_current_sandbox(sandbox_id)
+                sandbox = local_sandbox.get_current_sandbox(sandbox_id)
+                # Docker container states: created, restarting, running, removing, paused, exited, dead
+                if sandbox and sandbox.get('instance', {}).get('state') in ['exited', 'stopped']: # 'stopped' might not be a direct docker state, but good to check
+                    logger.info(f"Local sandbox {sandbox_id} is stopped. Starting...")
+                    sandbox = local_sandbox.start(sandbox)
+                elif not sandbox: # Should be caught by the exception below, but as a safeguard
+                    logger.info(f"Local sandbox {sandbox_id} not found. Creating...")
+                    sandbox = local_sandbox.create(project_id=sandbox_id)
                 
-                # Start supervisord in a session when restarting
-                start_supervisord_session(sandbox)
-            except Exception as e:
-                logger.error(f"Error starting sandbox: {e}")
-                raise e
-        
-        logger.info(f"Sandbox {sandbox_id} is ready")
-        return sandbox
-        
-    except Exception as e:
-        logger.error(f"Error retrieving or starting sandbox: {str(e)}")
-        raise e
+                logger.info(f"Local sandbox {sandbox_id} is ready. State: {sandbox.get('instance', {}).get('state')}")
+                return sandbox
+            except Exception as e: # Catches error from get_current_sandbox if not found
+                logger.info(f"Local sandbox {sandbox_id} not found or error during get: {str(e)}. Creating new one...")
+                sandbox = local_sandbox.create(project_id=sandbox_id)
+                logger.info(f"New local sandbox {sandbox_id} created.")
+                return sandbox
+        except Exception as e:
+            logger.error(f"Error with local sandbox operations for {sandbox_id}: {str(e)}")
+            raise e
 
 def start_supervisord_session(sandbox: Sandbox):
     """Start supervisord in a session."""
@@ -135,49 +162,61 @@ def setup_visualization_environment(sandbox: Sandbox):
 
 def create_sandbox(password: str, project_id: str = None):
     """Create a new sandbox with all required services configured and running."""
-    
-    logger.debug("Creating new Daytona sandbox environment")
-    logger.debug("Configuring sandbox with browser-use image and environment variables")
-    
-    labels = None
-    if project_id:
-        logger.debug(f"Using sandbox_id as label: {project_id}")
-        labels = {'id': project_id}
-        
-    params = CreateSandboxParams(
-        image=Configuration.SANDBOX_IMAGE_NAME,
-        public=True,
-        labels=labels,
-        env_vars={
-            "CHROME_PERSISTENT_SESSION": "true",
-            "RESOLUTION": "1024x768x24",
-            "RESOLUTION_WIDTH": "1024",
-            "RESOLUTION_HEIGHT": "768",
-            "VNC_PASSWORD": password,
-            "ANONYMIZED_TELEMETRY": "false",
-            "CHROME_PATH": "",
-            "CHROME_USER_DATA": "",
-            "CHROME_DEBUGGING_PORT": "9222",
-            "CHROME_DEBUGGING_HOST": "localhost",
-            "CHROME_CDP": ""
-        },
-        resources={
-            "cpu": 2,
-            "memory": 4,
-            "disk": 5,
-        }
-    )
-    
-    # Create the sandbox
-    sandbox = daytona.create(params)
-    logger.debug(f"Sandbox created with ID: {sandbox.id}")
-    
-    # Setup visualization environment
-    setup_visualization_environment(sandbox)
 
-    # Start supervisord in a session for new sandbox
-    start_supervisord_session(sandbox)
-    
-    logger.debug(f"Sandbox environment successfully initialized")
-    return sandbox
+    if use_daytona():
+        logger.info("Creating new Daytona sandbox environment")
+        logger.debug("Configuring Daytona sandbox with browser-use image and environment variables")
+        
+        labels = None
+        if project_id:
+            logger.debug(f"Using project_id as label for Daytona sandbox: {project_id}")
+            labels = {'id': project_id}
+            
+        params = CreateSandboxParams(
+            image=Configuration.SANDBOX_IMAGE_NAME, # Assuming Configuration.SANDBOX_IMAGE_NAME is also relevant for Daytona
+            public=True,
+            labels=labels,
+            name=f"suna-sandbox-{project_id}" if project_id else None, # Daytona might use name differently or via labels
+            env_vars={
+                "CHROME_PERSISTENT_SESSION": "true",
+                "RESOLUTION": "1024x768x24",
+                "RESOLUTION_WIDTH": "1024",
+                "RESOLUTION_HEIGHT": "768",
+                "VNC_PASSWORD": password,
+                "ANONYMIZED_TELEMETRY": "false",
+                "CHROME_PATH": "",
+                "CHROME_USER_DATA": "",
+                "CHROME_DEBUGGING_PORT": "9222",
+                "CHROME_DEBUGGING_HOST": "localhost",
+                "CHROME_CDP": ""
+            },
+            resources={ # These might be specific to Daytona's way of defining resources
+                "cpu": 2,
+                "memory": 4,
+                "disk": 5,
+            }
+        )
+        
+        # Create the Daytona sandbox
+        sandbox = daytona.create(params)
+        logger.debug(f"Daytona sandbox created with ID: {sandbox.id}")
+        
+        # Setup visualization environment (ensure this is Daytona compatible)
+        setup_visualization_environment(sandbox)
+
+        # Start supervisord in a session for new Daytona sandbox
+        start_supervisord_session(sandbox)
+        
+        logger.debug(f"Daytona sandbox environment successfully initialized")
+        return sandbox
+    else:
+        logger.info(f"Creating new local sandbox with project_id: {project_id}")
+        try:
+            sandbox = local_sandbox.create(project_id=project_id, password=password)
+            logger.info(f"Local sandbox created with ID: {sandbox['id']}")
+            # Note: setup_visualization_environment and start_supervisord are called within local_sandbox.create()
+            return sandbox
+        except Exception as e:
+            logger.error(f"Error creating local sandbox: {str(e)}")
+            raise e
 
