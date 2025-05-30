@@ -19,6 +19,7 @@ from agent.tools.sb_files_tool import SandboxFilesTool
 from agent.tools.sb_browser_tool import SandboxBrowserTool
 from agent.tools.python_tool import PythonTool # Import PythonTool
 from agent.tools.data_providers_tool import DataProvidersTool
+from agent.tools.visualization_tool import DataVisualizationTool # Import DataVisualizationTool
 from agent.prompt import get_system_prompt
 from utils.logger import logger
 from utils.auth_utils import get_account_id_from_thread
@@ -30,6 +31,30 @@ from services.langfuse import langfuse
 from agent.gemini_prompt import get_gemini_system_prompt
 
 load_dotenv()
+
+def detect_visualization_request(request_text: str):
+    """Detect if a request is asking for a visualization."""
+    visualization_keywords = [
+        "gráfico", "grafico", "visualización", "visualizacion", "chart", "graph", "plot",
+        "diagrama", "barras", "líneas", "lineas", "pastel", "pie", "histograma", "histogram"
+    ]
+    
+    request_lower = request_text.lower()
+    # Check if any visualization keyword is in the request
+    if any(keyword in request_lower for keyword in visualization_keywords):
+        # Determine the type of visualization
+        if any(keyword in request_lower for keyword in ["barras", "bar"]):
+            return "bar_chart"
+        elif any(keyword in request_lower for keyword in ["líneas", "lineas", "line"]):
+            return "line_chart"
+        elif any(keyword in request_lower for keyword in ["pastel", "pie"]):
+            return "pie_chart"
+        elif any(keyword in request_lower for keyword in ["histograma", "histogram"]):
+            return "histogram"
+        else:
+            return "generic_visualization" # Could be a more sophisticated detection or default
+    
+    return None
 
 async def run_agent(
     thread_id: str,
@@ -90,6 +115,7 @@ async def run_agent(
         thread_manager.add_tool(SandboxWebSearchTool, project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(SandboxVisionTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
         thread_manager.add_tool(PythonTool, project_id=project_id, thread_manager=thread_manager) # Register PythonTool
+        thread_manager.add_tool(DataVisualizationTool, project_id=project_id, thread_manager=thread_manager) # Register DataVisualizationTool
         if config.RAPID_API_KEY:
             logger.debug("RAPID_API_KEY found, adding DataProvidersTool.")
             thread_manager.add_tool(DataProvidersTool)
@@ -148,9 +174,32 @@ async def run_agent(
             }
             break
         # Check if last message is from assistant using direct Supabase query
-        latest_message = await client.table('messages').select('*').eq('thread_id', thread_id).in_('type', ['assistant', 'tool', 'user']).order('created_at', desc=True).limit(1).execute()
-        if latest_message.data and len(latest_message.data) > 0:
-            message_type = latest_message.data[0].get('type')
+        latest_message_query = await client.table('messages').select('*').eq('thread_id', thread_id).in_('type', ['assistant', 'tool', 'user']).order('created_at', desc=True).limit(1).execute()
+        
+        visualization_hint_message = None
+        if latest_message_query.data and len(latest_message_query.data) > 0:
+            latest_msg_data = latest_message_query.data[0]
+            message_type = latest_msg_data.get('type')
+            
+            if message_type == 'user':
+                try:
+                    user_content_json = json.loads(latest_msg_data.get('content', '{}'))
+                    user_text_content = user_content_json.get('content', '')
+                    if isinstance(user_text_content, str) and user_text_content: # Ensure it's a non-empty string
+                        detected_viz_type = detect_visualization_request(user_text_content)
+                        if detected_viz_type:
+                            logger.info(f"Detected visualization request: {detected_viz_type} in user message.")
+                            trace.event(name="visualization_request_detected", level="INFO", 
+                                        status_message=f"Type: {detected_viz_type}", 
+                                        input={"user_message": user_text_content})
+                            # Construct a system message to hint the LLM
+                            hint_text = f"The user seems to be asking for a '{detected_viz_type}' visualization. Consider using the 'DataVisualizationTool' if appropriate to generate it. Relevant keywords: {user_text_content[:200]}"
+                            visualization_hint_message = {"role": "system", "content": hint_text}
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse user message content for visualization detection: {latest_msg_data.get('content')}")
+                except Exception as e:
+                    logger.error(f"Error during visualization detection: {e}", exc_info=True)
+
             if message_type == 'assistant':
                 logger.info(f"Last message was from assistant, stopping execution")
                 trace.event(name="last_message_from_assistant", level="DEFAULT", status_message=(f"Last message was from assistant, stopping execution"))
@@ -158,8 +207,13 @@ async def run_agent(
                 break
 
         # ---- Temporary Message Handling (Browser State & Image Context) ----
-        temporary_message = None
-        temp_message_content_list = [] # List to hold text/image blocks
+        # This list will now also include the visualization hint message if generated
+        temp_messages_for_llm = [] 
+        
+        if visualization_hint_message:
+            temp_messages_for_llm.append(visualization_hint_message)
+
+        temp_message_content_list = [] # List to hold text/image blocks for the user-facing temporary message
 
         # Get the latest browser_state message
         latest_browser_state_msg = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'browser_state').order('created_at', desc=True).limit(1).execute()
@@ -231,10 +285,15 @@ async def run_agent(
                 logger.error(f"Error parsing image context: {e}")
                 trace.event(name="error_parsing_image_context", level="ERROR", status_message=(f"{e}"))
 
-        # If we have any content, construct the temporary_message
+        # If we have any content for the user-facing temporary message
         if temp_message_content_list:
-            temporary_message = {"role": "user", "content": temp_message_content_list}
-            # logger.debug(f"Constructed temporary message with {len(temp_message_content_list)} content blocks.")
+            # This message is specifically for context like browser state or image previews
+            user_context_message = {"role": "user", "content": temp_message_content_list}
+            temp_messages_for_llm.append(user_context_message)
+            # logger.debug(f"Constructed user context temporary message with {len(temp_message_content_list)} content blocks.")
+        
+        # The 'temporary_message' parameter for run_thread can take a single message or a list.
+        # If temp_messages_for_llm is empty, it will be handled by run_thread.
         # ---- End Temporary Message Handling ----
 
         # Set max_tokens based on model
@@ -256,7 +315,8 @@ async def run_agent(
                 llm_max_tokens=max_tokens,
                 tool_choice="auto",
                 max_xml_tool_calls=1,
-                temporary_message=temporary_message,
+                # Pass the list of temporary messages (could be just viz hint, just user context, both, or none)
+                temporary_message=temp_messages_for_llm if temp_messages_for_llm else None,
                 processor_config=ProcessorConfig(
                     xml_tool_calling=True,
                     native_tool_calling=False,
