@@ -52,7 +52,7 @@ from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
 # Imports for sandbox stopping
-from backend.sandbox.sandbox import get_or_start_sandbox, daytona
+from sandbox.sandbox import get_or_start_sandbox, daytona
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
