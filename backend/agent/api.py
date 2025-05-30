@@ -723,32 +723,71 @@ async def initiate_agent_with_files(
 
         # 3. Create Sandbox
         sandbox_pass = str(uuid.uuid4())
-        sandbox = create_sandbox(sandbox_pass, project_id)
-        sandbox_id = sandbox.id
-        logger.info(f"Created new sandbox {sandbox_id} for project {project_id}")
+        sandbox_obj = create_sandbox(sandbox_pass, project_id) # Renamed to sandbox_obj
 
-        # Get preview links
-        vnc_link = sandbox.get_preview_link(6080)
-        website_link = sandbox.get_preview_link(8080)
-        vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link).split("url='")[1].split("'")[0]
-        website_url = website_link.url if hasattr(website_link, 'url') else str(website_link).split("url='")[1].split("'")[0]
+        is_daytona_sandbox = not isinstance(sandbox_obj, dict)
+        sandbox_id = None
+        vnc_url = "N/A"
+        website_url = "N/A"
         token = None
-        if hasattr(vnc_link, 'token'):
-            token = vnc_link.token
-        elif "token='" in str(vnc_link):
-            token = str(vnc_link).split("token='")[1].split("'")[0]
+
+        if is_daytona_sandbox:
+            sandbox_id = sandbox_obj.id
+            logger.info(f"Created new Daytona sandbox {sandbox_id} for project {project_id}")
+            try:
+                vnc_link = sandbox_obj.get_preview_link(6080)
+                website_link = sandbox_obj.get_preview_link(8080)
+                vnc_url = vnc_link.url if hasattr(vnc_link, 'url') else str(vnc_link).split("url='")[1].split("'")[0]
+                website_url = website_link.url if hasattr(website_link, 'url') else str(website_link).split("url='")[1].split("'")[0]
+                if hasattr(vnc_link, 'token'):
+                    token = vnc_link.token
+                elif "token='" in str(vnc_link):
+                    token = str(vnc_link).split("token='")[1].split("'")[0]
+            except Exception as e_preview:
+                logger.error(f"Error getting preview links for Daytona sandbox {sandbox_id}: {str(e_preview)}", exc_info=True)
+                # vnc_url and website_url will remain "N/A"
+        else: # Local sandbox (dict)
+            sandbox_id = sandbox_obj.get('id')
+            logger.info(f"Created new Local sandbox {sandbox_id} for project {project_id}")
+            container = sandbox_obj.get('container')
+            if container:
+                try:
+                    container.reload() # Ensure ports are up-to-date
+                    ports = container.ports
+                    # Example: {'5900/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '32789'}], ...}
+                    vnc_host_port_list = ports.get('5900/tcp')
+                    if vnc_host_port_list and vnc_host_port_list[0] and vnc_host_port_list[0].get('HostPort'):
+                        vnc_host_port = vnc_host_port_list[0]['HostPort']
+                        vnc_url = f"localhost:{vnc_host_port}" # Assuming running on localhost
+                        logger.info(f"Local sandbox VNC URL determined: {vnc_url}")
+                    else:
+                        logger.warning(f"Could not determine VNC host port for local sandbox {sandbox_id}. Ports: {ports}")
+                    # For local sandbox, website_url might not be directly equivalent to Daytona's 8080 preview.
+                    # We'll set it to N/A or a placeholder.
+                    website_url = "N/A (local sandbox, direct website preview not applicable)"
+                    logger.info(f"Local sandbox website_url set to: {website_url}")
+                    token = None # No token concept for local_sandbox in this way
+                except Exception as e_local_ports:
+                    logger.error(f"Error getting port info for local sandbox {sandbox_id}: {str(e_local_ports)}", exc_info=True)
+            else:
+                logger.warning(f"Local sandbox object for {sandbox_id} does not contain a 'container' key.")
+
+        if not sandbox_id:
+             logger.error(f"Failed to obtain sandbox_id for project {project_id}")
+             raise Exception("Sandbox ID could not be determined.")
 
         # Update project with sandbox info
         update_result = await client.table('projects').update({
             'sandbox': {
                 'id': sandbox_id, 'pass': sandbox_pass, 'vnc_preview': vnc_url,
-                'sandbox_url': website_url, 'token': token
+                'sandbox_url': website_url, 'token': token,
+                'is_local': not is_daytona_sandbox # Add flag to indicate local
             }
         }).eq('project_id', project_id).execute()
 
         if not update_result.data:
             logger.error(f"Failed to update project {project_id} with new sandbox {sandbox_id}")
-            raise Exception("Database update failed")
+            raise Exception("Database update failed for project sandbox info")
 
         # 4. Upload Files to Sandbox (if any)
         message_content = prompt
@@ -757,43 +796,54 @@ async def initiate_agent_with_files(
             failed_uploads = []
             for file in files:
                 if file.filename:
+                    upload_successful = False # Reset for each file
                     try:
                         safe_filename = file.filename.replace('/', '_').replace('\\', '_')
                         target_path = f"/workspace/{safe_filename}"
-                        logger.info(f"Attempting to upload {safe_filename} to {target_path} in sandbox {sandbox_id}")
-                        content = await file.read()
-                        upload_successful = False
-                        try:
-                            if hasattr(sandbox, 'fs') and hasattr(sandbox.fs, 'upload_file'):
-                                import inspect
-                                if inspect.iscoroutinefunction(sandbox.fs.upload_file):
-                                    await sandbox.fs.upload_file(target_path, content)
-                                else:
-                                    sandbox.fs.upload_file(target_path, content)
-                                logger.debug(f"Called sandbox.fs.upload_file for {target_path}")
-                                upload_successful = True
-                            else:
-                                raise NotImplementedError("Suitable upload method not found on sandbox object.")
-                        except Exception as upload_error:
-                            logger.error(f"Error during sandbox upload call for {safe_filename}: {str(upload_error)}", exc_info=True)
 
-                        if upload_successful:
+                        if is_daytona_sandbox:
+                            logger.info(f"Attempting to upload {safe_filename} to {target_path} in Daytona sandbox {sandbox_id}")
+                            content = await file.read()
                             try:
-                                await asyncio.sleep(0.2)
+                                if hasattr(sandbox_obj, 'fs') and hasattr(sandbox_obj.fs, 'upload_file'):
+                                    import inspect
+                                    if inspect.iscoroutinefunction(sandbox_obj.fs.upload_file):
+                                        await sandbox_obj.fs.upload_file(target_path, content)
+                                    else:
+                                        sandbox_obj.fs.upload_file(target_path, content)
+                                    logger.debug(f"Called sandbox_obj.fs.upload_file for {target_path}")
+                                    upload_successful = True
+                                else:
+                                    logger.error(f"Daytona sandbox object for {sandbox_id} does not have 'fs.upload_file' method.")
+                                    # raise NotImplementedError("Suitable upload method not found on Daytona sandbox object.")
+                            except Exception as upload_error:
+                                logger.error(f"Error during Daytona sandbox upload call for {safe_filename}: {str(upload_error)}", exc_info=True)
+                        else: # Local sandbox
+                            logger.warning(f"Local sandbox file upload for {safe_filename} via this path is not fully implemented. Skipping file.")
+                            upload_successful = False # Explicitly false, though it's default
+
+                        if upload_successful and is_daytona_sandbox: # Verification only for Daytona for now
+                            try:
+                                await asyncio.sleep(0.2) # Give a moment for fs to sync
                                 parent_dir = os.path.dirname(target_path)
-                                files_in_dir = sandbox.fs.list_files(parent_dir)
+                                files_in_dir = sandbox_obj.fs.list_files(parent_dir)
                                 file_names_in_dir = [f.name for f in files_in_dir]
                                 if safe_filename in file_names_in_dir:
                                     successful_uploads.append(target_path)
-                                    logger.info(f"Successfully uploaded and verified file {safe_filename} to sandbox path {target_path}")
+                                    logger.info(f"Successfully uploaded and verified file {safe_filename} to Daytona sandbox path {target_path}")
                                 else:
-                                    logger.error(f"Verification failed for {safe_filename}: File not found in {parent_dir} after upload attempt.")
+                                    logger.error(f"Verification failed for {safe_filename} in Daytona sandbox: File not found in {parent_dir} after upload attempt.")
                                     failed_uploads.append(safe_filename)
                             except Exception as verify_error:
-                                logger.error(f"Error verifying file {safe_filename} after upload: {str(verify_error)}", exc_info=True)
+                                logger.error(f"Error verifying file {safe_filename} after Daytona upload: {str(verify_error)}", exc_info=True)
                                 failed_uploads.append(safe_filename)
-                        else:
-                            failed_uploads.append(safe_filename)
+                        elif upload_successful: # Should not happen for local if logic is correct
+                             successful_uploads.append(target_path) # Should ideally be verified too
+                        else: # upload_successful is False
+                            if not is_daytona_sandbox: # Already logged for local
+                                pass
+                            else: # Failed for Daytona
+                                failed_uploads.append(safe_filename)
                     except Exception as file_error:
                         logger.error(f"Error processing file {file.filename}: {str(file_error)}", exc_info=True)
                         failed_uploads.append(file.filename)
