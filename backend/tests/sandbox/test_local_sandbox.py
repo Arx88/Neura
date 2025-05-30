@@ -13,7 +13,7 @@ except ImportError:
     docker_errors = DockerErrors()
 
 # Assuming utils.logger and utils.config are importable or can be mocked.
-# For the purpose of these tests, we will mock them where they are imported 
+# For the purpose of these tests, we will mock them where they are imported
 # in local_sandbox.py. The LocalSandbox class itself receives logger and config
 # through its imports, so we patch at 'backend.sandbox.local_sandbox.logger' etc.
 
@@ -29,14 +29,14 @@ class TestLocalSandbox(unittest.TestCase):
         # Mock the Docker client returned by docker.from_env()
         self.mock_docker_client = MagicMock()
         mock_docker_module.from_env.return_value = self.mock_docker_client
-        
+
         # Set up default mock config values (as accessed by LocalSandbox)
         # The LocalSandbox class imports 'config' directly, so we patch 'backend.sandbox.local_sandbox.config'
         mock_config_module.SANDBOX_IMAGE_NAME = "test/image:latest"
-        
+
         # Instantiate the LocalSandbox
         self.sandbox_manager = LocalSandbox()
-        
+
         # Replace the instance's logger with the mock_logger_module if desired,
         # or trust the patcher to handle it if LocalSandbox uses 'logger.info' etc.
         # For direct assertion on the logger instance used by sandbox_manager:
@@ -51,7 +51,7 @@ class TestLocalSandbox(unittest.TestCase):
         # So, we access its from_env attribute.
         # We need to ensure the patch is active when LocalSandbox is instantiated.
         # This is implicitly handled by setUp running before each test.
-        
+
         # To explicitly test __init__ behavior if it were more complex:
         with patch('backend.sandbox.local_sandbox.docker') as new_mock_docker:
             new_client = MagicMock()
@@ -62,7 +62,7 @@ class TestLocalSandbox(unittest.TestCase):
     @patch('backend.sandbox.local_sandbox.uuid.uuid4')
     def test_create_sandbox_default_id_and_password(self, mock_uuid_module):
         mock_uuid_module.return_value = "test-uuid"
-        
+
         mock_container_instance = MagicMock()
         mock_container_instance.name = "suna-sandbox-test-uuid"
         # Simulate return values for exec_run for various setup steps
@@ -95,7 +95,7 @@ class TestLocalSandbox(unittest.TestCase):
         )
         self.assertEqual(sandbox['id'], 'test-uuid')
         self.assertEqual(sandbox['container'], mock_container_instance)
-        
+
         # Verify calls for setup methods
         calls = [
             call(cmd="pip install matplotlib pandas seaborn plotly", stdout=True, stderr=True),
@@ -117,7 +117,7 @@ class TestLocalSandbox(unittest.TestCase):
         mock_container_instance.exec_run.reset_mock() # Reset from setup calls
         mock_exec_output = (0, b"command output")
         mock_container_instance.exec_run.return_value = mock_exec_output
-        
+
         with patch('backend.sandbox.local_sandbox.uuid.uuid4') as mock_cmd_uuid:
             mock_cmd_uuid.return_value = "cmd-uuid"
             exec_result = sandbox['process']['execute_session_command']("session1", "echo hello")
@@ -132,7 +132,7 @@ class TestLocalSandbox(unittest.TestCase):
     def test_create_sandbox_with_project_id_and_password(self, mock_uuid_module):
         # This ensures that uuid.uuid4 is not called if project_id is provided
         # mock_uuid_module should not be called.
-        
+
         mock_container_instance = MagicMock()
         mock_container_instance.name = "suna-sandbox-custom-project"
         mock_container_instance.exec_run.side_effect = [(0, b""), (0, b""), (0, b"")]
@@ -166,10 +166,10 @@ class TestLocalSandbox(unittest.TestCase):
 
     def test_get_current_sandbox_not_found(self):
         self.mock_docker_client.containers.get.side_effect = docker_errors.NotFound("Container not found")
-        
+
         with self.assertRaises(docker_errors.NotFound):
             self.sandbox_manager.get_current_sandbox("non-existent-id")
-        
+
         self.mock_docker_client.containers.get.assert_called_once_with("suna-sandbox-non-existent-id")
         self.mock_logger.error.assert_called_once() # Check that an error was logged
 
@@ -182,13 +182,13 @@ class TestLocalSandbox(unittest.TestCase):
             'id': 'test-id',
             'container': mock_container_instance
         }
-        
+
         returned_sandbox = self.sandbox_manager.start(sandbox_dict)
 
         mock_container_instance.start.assert_called_once()
         # Check _start_supervisord call
         mock_container_instance.exec_run.assert_called_once_with(
-            cmd="/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf", 
+            cmd="/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf",
             detach=True
         )
         self.assertEqual(returned_sandbox, sandbox_dict)
@@ -231,7 +231,7 @@ class TestLocalSandbox(unittest.TestCase):
         command_request_obj = MagicMock()
         command_request_obj.command = "python script.py"
         command_request_obj.cwd = "/app"
-        
+
         result = self.sandbox_manager._execute_command(mock_container_instance, command_request_obj)
 
         mock_container_instance.exec_run.assert_called_once_with(
@@ -246,7 +246,7 @@ class TestLocalSandbox(unittest.TestCase):
         mock_container_instance = MagicMock()
         # Simulate successful pip install and mkdir
         mock_container_instance.exec_run.side_effect = [
-            (0, b"pip install successful"), 
+            (0, b"pip install successful"),
             (0, b"mkdir successful")
         ]
 
@@ -263,13 +263,13 @@ class TestLocalSandbox(unittest.TestCase):
         mock_container_instance = MagicMock()
         # Simulate failed pip install
         mock_container_instance.exec_run.side_effect = [
-            (1, b"pip install failed error message"), 
+            (1, b"pip install failed error message"),
             # mkdir might still be called or not depending on error handling, let's assume it is
-            (0, b"mkdir successful") 
+            (0, b"mkdir successful")
         ]
 
         self.sandbox_manager._setup_visualization_environment(mock_container_instance)
-        
+
         mock_container_instance.exec_run.assert_any_call(cmd="pip install matplotlib pandas seaborn plotly", stdout=True, stderr=True)
         self.mock_logger.error.assert_any_call("Error al instalar paquetes de visualización: pip install failed error message")
         # Check if mkdir was still called (good to know the behavior)
@@ -294,9 +294,9 @@ class TestLocalSandbox(unittest.TestCase):
         mock_container_instance = MagicMock()
         mock_container_instance.status = "paused"
         mock_container_instance.ports = {'1234/tcp': None}
-        
+
         # reload() is called on the container, doesn't return anything itself
-        mock_container_instance.reload.return_value = None 
+        mock_container_instance.reload.return_value = None
 
         info = self.sandbox_manager._get_container_info(mock_container_instance)
 

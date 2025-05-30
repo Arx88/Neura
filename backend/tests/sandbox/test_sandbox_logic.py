@@ -56,7 +56,7 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
     @patch('backend.sandbox.sandbox.use_daytona') # Mock the function itself
     async def test_get_or_start_sandbox_daytona_running(self, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord):
         mock_use_daytona_func.return_value = True
-        
+
         mock_daytona_sandbox_instance = MagicMock()
         mock_daytona_sandbox_instance.instance.state = WorkspaceState.RUNNING
         mock_daytona_client.get_current_sandbox.return_value = mock_daytona_sandbox_instance
@@ -77,10 +77,10 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
     @patch('backend.sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_daytona_stopped_starts_it(self, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord):
         mock_use_daytona_func.return_value = True
-        
+
         initial_mock_sandbox = MagicMock()
         initial_mock_sandbox.instance.state = WorkspaceState.STOPPED
-        
+
         started_mock_sandbox = MagicMock() # Simulate state refresh after start
         started_mock_sandbox.instance.state = WorkspaceState.RUNNING
 
@@ -101,7 +101,7 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
     @patch('backend.sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_local_exists_running(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False # Use local sandbox
-        
+
         mock_local_sandbox_instance = {
             'id': 'local-id-running',
             'container': MagicMock(),
@@ -123,7 +123,7 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
     @patch('backend.sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_local_exists_exited_starts_it(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False
-        
+
         initial_local_sandbox = {
             'id': 'local-id-exited',
             'container': MagicMock(),
@@ -149,7 +149,7 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         mock_use_daytona_func.return_value = False
         # Simulate local_sandbox.get_current_sandbox raising an error (e.g., docker.errors.NotFound)
         mock_ls_object.get_current_sandbox.side_effect = Exception("Simulated Docker Not Found")
-        
+
         created_local_sandbox = {
             'id': 'new-local-id',
             'container': MagicMock(),
@@ -176,19 +176,19 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
     async def test_create_sandbox_daytona_path(self, mock_configuration, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord, mock_setup_viz):
         mock_use_daytona_func.return_value = True
         mock_configuration.SANDBOX_IMAGE_NAME = "daytona/image:latest"
-        
+
         mock_created_daytona_sandbox = MagicMock()
         mock_daytona_client.create.return_value = mock_created_daytona_sandbox
 
         project_id = "daytona-proj-id"
         password = "secure_password"
-        
+
         result = create_sandbox(password=password, project_id=project_id) # create_sandbox is sync
 
         mock_daytona_client.create.assert_called_once_with(ANY) # ANY for CreateSandboxParams
         args, kwargs = mock_daytona_client.create.call_args
         created_params = args[0] # CreateSandboxParams is the first arg
-        
+
         self.assertEqual(created_params.image, "daytona/image:latest")
         self.assertEqual(created_params.labels, {'id': project_id})
         self.assertEqual(created_params.name, f"suna-sandbox-{project_id}")
@@ -210,7 +210,7 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
             'info': MagicMock(return_value={'state': 'running'})
         }
         mock_ls_object.create.return_value = mock_created_local_sandbox
-        
+
         project_id = "local-proj-id"
         password = "local_password"
 
