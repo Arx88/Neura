@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple, Union, Callable, Literal
 from dataclasses import dataclass
 from utils.logger import logger
-from agentpress.tool import ToolResult
-from agentpress.tool_registry import ToolRegistry
+from agentpress.tool import EnhancedToolResult # Changed from ToolResult
+from agentpress.tool_orchestrator import ToolOrchestrator # Changed from ToolRegistry
 from litellm import completion_cost
 from langfuse.client import StatefulTraceClient
 from services.langfuse import langfuse
@@ -38,7 +38,7 @@ class ToolExecutionContext:
     """Context for a tool execution including call details, result, and display info."""
     tool_call: Dict[str, Any]
     tool_index: int
-    result: Optional[ToolResult] = None
+    result: Optional[EnhancedToolResult] = None # Changed from ToolResult
     function_name: Optional[str] = None
     xml_tag_name: Optional[str] = None
     error: Optional[Exception] = None
@@ -86,15 +86,15 @@ class ProcessorConfig:
 class ResponseProcessor:
     """Processes LLM responses, extracting and executing tool calls."""
     
-    def __init__(self, tool_registry: ToolRegistry, add_message_callback: Callable, trace: Optional[StatefulTraceClient] = None):
+    def __init__(self, tool_orchestrator: ToolOrchestrator, add_message_callback: Callable, trace: Optional[StatefulTraceClient] = None): # Changed parameter
         """Initialize the ResponseProcessor.
         
         Args:
-            tool_registry: Registry of available tools
+            tool_orchestrator: Orchestrator for executing tools.
             add_message_callback: Callback function to add messages to the thread.
                 MUST return the full saved message object (dict) or None.
         """
-        self.tool_registry = tool_registry
+        self.tool_orchestrator = tool_orchestrator # Changed attribute
         self.add_message = add_message_callback
         self.trace = trace
         if not self.trace:
@@ -922,7 +922,24 @@ class ResponseProcessor:
                 current_tag = None
                 
                 # Find the earliest occurrence of any registered tag
-                for tag_name in self.tool_registry.xml_tools.keys():
+                # ToolOrchestrator.get_xml_examples() returns a dict with tag_name as keys.
+                # This part needs to get XML tags that are known to the orchestrator.
+                # One way is to iterate registered tools and their XML schemas.
+
+                # Let's get the registered tools and check their schemas for XML tags
+                registered_xml_tags = []
+                if self.tool_orchestrator and self.tool_orchestrator.tools:
+                    for tool_id, tool_instance in self.tool_orchestrator.tools.items():
+                        schemas = tool_instance.get_schemas()
+                        for method_name, schema_list in schemas.items():
+                            for schema_obj in schema_list:
+                                if schema_obj.xml_schema and schema_obj.xml_schema.tag_name:
+                                    registered_xml_tags.append(schema_obj.xml_schema.tag_name)
+
+                # Remove duplicates
+                registered_xml_tags = list(set(registered_xml_tags))
+
+                for tag_name in registered_xml_tags: # Use the dynamically obtained tags
                     start_pattern = f'<{tag_name}'
                     tag_pos = content.find(start_pattern, pos)
                     
@@ -998,16 +1015,34 @@ class ResponseProcessor:
             self.trace.event(name="found_xml_tag", level="DEFAULT", status_message=(f"Found XML tag: {xml_tag_name}"))
             
             # Get tool info and schema from registry
-            tool_info = self.tool_registry.get_xml_tool(xml_tag_name)
-            if not tool_info or not tool_info['schema'].xml_schema:
-                logger.error(f"No tool or schema found for tag: {xml_tag_name}")
-                self.trace.event(name="no_tool_or_schema_found_for_tag", level="ERROR", status_message=(f"No tool or schema found for tag: {xml_tag_name}"))
+            # With ToolOrchestrator, we need to find which registered tool_id and method_name correspond to this xml_tag_name.
+            target_tool_id = None
+            target_method_name = None
+            target_schema_obj = None
+
+            if self.tool_orchestrator and self.tool_orchestrator.tools:
+                for tool_id, tool_instance in self.tool_orchestrator.tools.items():
+                    schemas = tool_instance.get_schemas()
+                    for method_name, schema_list in schemas.items():
+                        for schema_obj in schema_list:
+                            if schema_obj.xml_schema and schema_obj.xml_schema.tag_name == xml_tag_name:
+                                target_tool_id = tool_id
+                                target_method_name = method_name
+                                target_schema_obj = schema_obj
+                                break
+                        if target_tool_id: break
+                    if target_tool_id: break
+
+            if not target_tool_id or not target_method_name or not target_schema_obj:
+                logger.error(f"No tool or schema found for tag: {xml_tag_name} in ToolOrchestrator")
+                self.trace.event(name="no_tool_or_schema_found_for_tag_orchestrator", level="ERROR", status_message=(f"No tool or schema found for tag: {xml_tag_name}"))
                 return None
             
             # This is the actual function name to call (e.g., "create_file")
-            function_name = tool_info['method']
+            # In the orchestrator context, this is target_method_name
+            # The tool_id is target_tool_id
             
-            schema = tool_info['schema'].xml_schema
+            schema = target_schema_obj.xml_schema # This is XMLTagSchema
             params = {}
             remaining_chunk = xml_chunk
             
@@ -1063,13 +1098,15 @@ class ResponseProcessor:
                     continue
 
             # Create tool call with clear separation between function_name and xml_tag_name
+            # Also include tool_id for the orchestrator
             tool_call = {
-                "function_name": function_name,  # The actual method to call (e.g., create_file)
+                "tool_id": target_tool_id,       # ID of the tool in the orchestrator
+                "method_name": target_method_name, # The actual method to call (e.g., create_file)
                 "xml_tag_name": xml_tag_name,    # The original XML tag (e.g., create-file)
                 "arguments": params              # The extracted parameters
             }
             
-            logger.debug(f"Created tool call: {tool_call}")
+            logger.debug(f"Created tool call for orchestrator: {tool_call}")
             return tool_call, parsing_details # Return both dicts
             
         except Exception as e:
@@ -1105,63 +1142,98 @@ class ResponseProcessor:
         return parsed_data
 
     # Tool execution methods
-    async def _execute_tool(self, tool_call: Dict[str, Any]) -> ToolResult:
-        """Execute a single tool call and return the result."""
-        span = self.trace.span(name=f"execute_tool.{tool_call['function_name']}", input=tool_call["arguments"])            
-        try:
-            function_name = tool_call["function_name"]
-            arguments = tool_call["arguments"]
+    async def _execute_tool(self, tool_call: Dict[str, Any]) -> EnhancedToolResult: # Changed return type
+        """
+        Execute a single tool call using ToolOrchestrator and return the EnhancedToolResult.
+        """
+        # Determine tool_id and method_name from tool_call
+        # Native calls: tool_call['function_name'] is "tool_id__method_name"
+        # XML calls: tool_call contains 'tool_id' and 'method_name' directly (from _parse_xml_tool_call)
 
-            logger.info(f"Executing tool: {function_name} with arguments: {arguments}")
-            self.trace.event(name="executing_tool", level="DEFAULT", status_message=(f"Executing tool: {function_name} with arguments: {arguments}"))
+        tool_id_for_orchestrator: Optional[str] = None
+        method_name_for_orchestrator: Optional[str] = None
+
+        if "tool_id" in tool_call and "method_name" in tool_call: # Likely XML parsed call
+            tool_id_for_orchestrator = tool_call["tool_id"]
+            method_name_for_orchestrator = tool_call["method_name"]
+        elif "function_name" in tool_call: # Likely native call
+            parts = tool_call["function_name"].split("__", 1)
+            if len(parts) == 2:
+                tool_id_for_orchestrator = parts[0]
+                method_name_for_orchestrator = parts[1]
+            else:
+                # Fallback or error: could not parse tool_id and method_name
+                logger.error(f"Could not parse tool_id and method_name from function_name: {tool_call['function_name']}")
+                # Create a failed EnhancedToolResult directly
+                return EnhancedToolResult(
+                    tool_id=tool_call.get("function_name", "unknown_tool"),
+                    execution_id=str(uuid.uuid4()), # Generate a new execution ID
+                    status="failed",
+                    error=f"Invalid function name format: {tool_call['function_name']}"
+                )
+        else:
+            logger.error(f"Tool call dictionary is missing 'function_name' or 'tool_id'/'method_name': {tool_call}")
+            return EnhancedToolResult(
+                tool_id="unknown_tool",
+                execution_id=str(uuid.uuid4()),
+                status="failed",
+                error="Malformed tool_call object"
+            )
+
+        arguments = tool_call.get("arguments", {})
+        span_name = f"execute_tool.{tool_id_for_orchestrator}.{method_name_for_orchestrator}"
+        span = self.trace.span(name=span_name, input=arguments)
+
+        try:
+            logger.info(f"Orchestrating tool: {tool_id_for_orchestrator}, method: {method_name_for_orchestrator} with arguments: {arguments}")
+            self.trace.event(name="orchestrating_tool", level="DEFAULT",
+                             status_message=(f"Tool: {tool_id_for_orchestrator}, Method: {method_name_for_orchestrator}"))
             
-            if isinstance(arguments, str):
+            if isinstance(arguments, str): # Ensure arguments is a dict
                 try:
                     arguments = safe_json_parse(arguments)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError: # If not JSON, wrap it as per previous logic
                     arguments = {"text": arguments}
             
-            # Get available functions from tool registry
-            available_functions = self.tool_registry.get_available_functions()
+            # Call the orchestrator's execute_tool method
+            enhanced_result = await self.tool_orchestrator.execute_tool(
+                tool_id=tool_id_for_orchestrator,
+                method_name=method_name_for_orchestrator,
+                params=arguments
+            )
             
-            # Look up the function by name
-            tool_fn = available_functions.get(function_name)
-            if not tool_fn:
-                logger.error(f"Tool function '{function_name}' not found in registry")
-                span.end(status_message="tool_not_found", level="ERROR")
-                return ToolResult(success=False, output=f"Tool function '{function_name}' not found")
+            logger.info(f"Tool execution via orchestrator complete: {tool_id_for_orchestrator}.{method_name_for_orchestrator} -> Status: {enhanced_result.status}")
+            span.end(status_message=f"tool_executed_via_orchestrator: {enhanced_result.status}", output=enhanced_result.result or enhanced_result.error)
+            return enhanced_result
             
-            logger.debug(f"Found tool function for '{function_name}', executing...")
-            result = await tool_fn(**arguments)
-            logger.info(f"Tool execution complete: {function_name} -> {result}")
-            span.end(status_message="tool_executed", output=result)
-            return result
         except Exception as e:
-            logger.error(f"Error executing tool {tool_call['function_name']}: {str(e)}", exc_info=True)
-            span.end(status_message="tool_execution_error", output=f"Error executing tool: {str(e)}", level="ERROR")
-            return ToolResult(success=False, output=f"Error executing tool: {str(e)}")
+            logger.error(f"Error calling ToolOrchestrator for {tool_id_for_orchestrator}.{method_name_for_orchestrator}: {str(e)}", exc_info=True)
+            span.end(status_message="tool_orchestration_error", output=str(e), level="ERROR")
+            # Construct a failed EnhancedToolResult
+            return EnhancedToolResult(
+                tool_id=tool_id_for_orchestrator or "unknown_tool",
+                execution_id=str(uuid.uuid4()), # Generate new exec id for this failure event
+                status="failed",
+                error=f"Error during tool orchestration: {str(e)}"
+            )
 
     async def _execute_tools(
         self, 
         tool_calls: List[Dict[str, Any]], 
         execution_strategy: ToolExecutionStrategy = "sequential"
-    ) -> List[Tuple[Dict[str, Any], ToolResult]]:
-        """Execute tool calls with the specified strategy.
-        
-        This is the main entry point for tool execution. It dispatches to the appropriate
-        execution method based on the provided strategy.
+    ) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+        """Execute tool calls with the specified strategy using ToolOrchestrator.
         
         Args:
             tool_calls: List of tool calls to execute
-            execution_strategy: Strategy for executing tools:
-                - "sequential": Execute tools one after another, waiting for each to complete
-                - "parallel": Execute all tools simultaneously for better performance 
+            execution_strategy: Strategy for executing tools
                 
         Returns:
-            List of tuples containing the original tool call and its result
+            List of tuples containing the original tool call and its EnhancedToolResult
         """
-        logger.info(f"Executing {len(tool_calls)} tools with strategy: {execution_strategy}")
-        self.trace.event(name="executing_tools_with_strategy", level="DEFAULT", status_message=(f"Executing {len(tool_calls)} tools with strategy: {execution_strategy}"))
+        logger.info(f"Executing {len(tool_calls)} tools with strategy: {execution_strategy} via ToolOrchestrator")
+        self.trace.event(name="executing_tools_via_orchestrator", level="DEFAULT",
+                         status_message=(f"Count: {len(tool_calls)}, Strategy: {execution_strategy}"))
             
         if execution_strategy == "sequential":
             return await self._execute_tools_sequentially(tool_calls)
@@ -1171,241 +1243,134 @@ class ResponseProcessor:
             logger.warning(f"Unknown execution strategy: {execution_strategy}, falling back to sequential")
             return await self._execute_tools_sequentially(tool_calls)
 
-    async def _execute_tools_sequentially(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], ToolResult]]:
-        """Execute tool calls sequentially and return results.
-        
-        This method executes tool calls one after another, waiting for each tool to complete
-        before starting the next one. This is useful when tools have dependencies on each other.
-        
-        Args:
-            tool_calls: List of tool calls to execute
-            
-        Returns:
-            List of tuples containing the original tool call and its result
-        """
+    async def _execute_tools_sequentially(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+        """Execute tool calls sequentially using ToolOrchestrator."""
         if not tool_calls:
             return []
             
-        try:
-            tool_names = [t.get('function_name', 'unknown') for t in tool_calls]
-            logger.info(f"Executing {len(tool_calls)} tools sequentially: {tool_names}")
-            self.trace.event(name="executing_tools_sequentially", level="DEFAULT", status_message=(f"Executing {len(tool_calls)} tools sequentially: {tool_names}"))
+        results = []
+        for index, tool_call in enumerate(tool_calls):
+            tool_repr = tool_call.get('function_name') or f"{tool_call.get('tool_id')}__{tool_call.get('method_name')}"
+            logger.debug(f"Executing tool {index+1}/{len(tool_calls)} (seq): {tool_repr}")
             
-            results = []
-            for index, tool_call in enumerate(tool_calls):
-                tool_name = tool_call.get('function_name', 'unknown')
-                logger.debug(f"Executing tool {index+1}/{len(tool_calls)}: {tool_name}")
-                
-                try:
-                    result = await self._execute_tool(tool_call)
-                    results.append((tool_call, result))
-                    logger.debug(f"Completed tool {tool_name} with success={result.success}")
-                except Exception as e:
-                    logger.error(f"Error executing tool {tool_name}: {str(e)}")
-                    self.trace.event(name="error_executing_tool", level="ERROR", status_message=(f"Error executing tool {tool_name}: {str(e)}"))
-                    error_result = ToolResult(success=False, output=f"Error executing tool: {str(e)}")
-                    results.append((tool_call, error_result))
-            
-            logger.info(f"Sequential execution completed for {len(tool_calls)} tools")
-            self.trace.event(name="sequential_execution_completed", level="DEFAULT", status_message=(f"Sequential execution completed for {len(tool_calls)} tools"))
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error in sequential tool execution: {str(e)}", exc_info=True)
-            # Return partial results plus error results for remaining tools
-            completed_tool_names = [r[0].get('function_name', 'unknown') for r in results] if 'results' in locals() else []
-            remaining_tools = [t for t in tool_calls if t.get('function_name', 'unknown') not in completed_tool_names]
-            
-            # Add error results for remaining tools
-            error_results = [(tool, ToolResult(success=False, output=f"Execution error: {str(e)}")) 
-                            for tool in remaining_tools]
-                            
-            return (results if 'results' in locals() else []) + error_results
+            try:
+                result = await self._execute_tool(tool_call) # This now calls the orchestrator
+                results.append((tool_call, result))
+                logger.debug(f"Completed tool {tool_repr} with status: {result.status}")
+            except Exception as e: # Should be caught by _execute_tool, but as a safeguard
+                logger.error(f"Outer error executing tool {tool_repr} (seq): {str(e)}")
+                error_result = EnhancedToolResult(
+                    tool_id=tool_call.get('tool_id') or tool_call.get('function_name', 'unknown'),
+                    execution_id=str(uuid.uuid4()), status="failed",
+                    error=f"Sequential execution error: {str(e)}"
+                )
+                results.append((tool_call, error_result))
+        return results
 
-    async def _execute_tools_in_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], ToolResult]]:
-        """Execute tool calls in parallel and return results.
-        
-        This method executes all tool calls simultaneously using asyncio.gather, which
-        can significantly improve performance when executing multiple independent tools.
-        
-        Args:
-            tool_calls: List of tool calls to execute
-            
-        Returns:
-            List of tuples containing the original tool call and its result
-        """
+    async def _execute_tools_in_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+        """Execute tool calls in parallel using ToolOrchestrator."""
         if not tool_calls:
             return []
             
-        try:
-            tool_names = [t.get('function_name', 'unknown') for t in tool_calls]
-            logger.info(f"Executing {len(tool_calls)} tools in parallel: {tool_names}")
-            self.trace.event(name="executing_tools_in_parallel", level="DEFAULT", status_message=(f"Executing {len(tool_calls)} tools in parallel: {tool_names}"))
+        tasks = [self._execute_tool(tool_call) for tool_call in tool_calls]
+        # Execute all tasks concurrently, exceptions are returned by gather
+        gathered_results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # Create tasks for all tool calls
-            tasks = [self._execute_tool(tool_call) for tool_call in tool_calls]
-            
-            # Execute all tasks concurrently with error handling
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Process results and handle any exceptions
-            processed_results = []
-            for i, (tool_call, result) in enumerate(zip(tool_calls, results)):
-                if isinstance(result, Exception):
-                    logger.error(f"Error executing tool {tool_call.get('function_name', 'unknown')}: {str(result)}")
-                    self.trace.event(name="error_executing_tool", level="ERROR", status_message=(f"Error executing tool {tool_call.get('function_name', 'unknown')}: {str(result)}"))
-                    # Create error result
-                    error_result = ToolResult(success=False, output=f"Error executing tool: {str(result)}")
-                    processed_results.append((tool_call, error_result))
-                else:
-                    processed_results.append((tool_call, result))
-            
-            logger.info(f"Parallel execution completed for {len(tool_calls)} tools")
-            self.trace.event(name="parallel_execution_completed", level="DEFAULT", status_message=(f"Parallel execution completed for {len(tool_calls)} tools"))
-            return processed_results
-        
-        except Exception as e:
-            logger.error(f"Error in parallel tool execution: {str(e)}", exc_info=True)
-            self.trace.event(name="error_in_parallel_tool_execution", level="ERROR", status_message=(f"Error in parallel tool execution: {str(e)}"))
-            # Return error results for all tools if the gather itself fails
-            return [(tool_call, ToolResult(success=False, output=f"Execution error: {str(e)}")) 
-                    for tool_call in tool_calls]
+        processed_results = []
+        for i, (tool_call, result_or_exception) in enumerate(zip(tool_calls, gathered_results)):
+            tool_repr = tool_call.get('function_name') or f"{tool_call.get('tool_id')}__{tool_call.get('method_name')}"
+            if isinstance(result_or_exception, Exception):
+                logger.error(f"Error executing tool {tool_repr} (parallel): {str(result_or_exception)}")
+                error_result = EnhancedToolResult(
+                    tool_id=tool_call.get('tool_id') or tool_call.get('function_name', 'unknown'),
+                    execution_id=str(uuid.uuid4()), status="failed",
+                    error=f"Parallel execution error: {str(result_or_exception)}"
+                )
+                processed_results.append((tool_call, error_result))
+            else: # It's an EnhancedToolResult
+                processed_results.append((tool_call, result_or_exception))
+        return processed_results
 
     async def _add_tool_result(
         self, 
         thread_id: str, 
         tool_call: Dict[str, Any], 
-        result: ToolResult,
+        result: EnhancedToolResult, # Changed from ToolResult
         strategy: Union[XmlAddingStrategy, str] = "assistant_message",
         assistant_message_id: Optional[str] = None,
         parsing_details: Optional[Dict[str, Any]] = None
     ) -> Optional[str]: # Return the message ID
-        """Add a tool result to the conversation thread based on the specified format.
-        
-        This method formats tool results and adds them to the conversation history,
-        making them visible to the LLM in subsequent interactions. Results can be 
-        added either as native tool messages (OpenAI format) or as XML-wrapped content
-        with a specified role (user or assistant).
-        
-        Args:
-            thread_id: ID of the conversation thread
-            tool_call: The original tool call that produced this result
-            result: The result from the tool execution
-            strategy: How to add XML tool results to the conversation
-                     ("user_message", "assistant_message", or "inline_edit")
-            assistant_message_id: ID of the assistant message that generated this tool call
-            parsing_details: Detailed parsing info for XML calls (attributes, elements, etc.)
-        """
+        """Add a tool result (EnhancedToolResult) to the conversation thread."""
         try:
-            message_id = None # Initialize message_id
-            
-            # Create metadata with assistant_message_id if provided
+            message_id = None
             metadata = {}
             if assistant_message_id:
                 metadata["assistant_message_id"] = assistant_message_id
-                logger.info(f"Linking tool result to assistant message: {assistant_message_id}")
-                self.trace.event(name="linking_tool_result_to_assistant_message", level="DEFAULT", status_message=(f"Linking tool result to assistant message: {assistant_message_id}"))
-            
-            # --- Add parsing details to metadata if available ---
             if parsing_details:
                 metadata["parsing_details"] = parsing_details
-                logger.info("Adding parsing_details to tool result metadata")
-                self.trace.event(name="adding_parsing_details_to_tool_result_metadata", level="DEFAULT", status_message=(f"Adding parsing_details to tool result metadata"), metadata={"parsing_details": parsing_details})
-            # ---
             
-            # Check if this is a native function call (has id field)
-            if "id" in tool_call:
-                # Format as a proper tool message according to OpenAI spec
-                function_name = tool_call.get("function_name", "")
-                
-                # Format the tool result content - tool role needs string content
-                if isinstance(result, str):
-                    content = result
-                elif hasattr(result, 'output'):
-                    # If it's a ToolResult object
-                    if isinstance(result.output, dict) or isinstance(result.output, list):
-                        # If output is already a dict or list, convert to JSON string
-                        content = json.dumps(result.output)
-                    else:
-                        # Otherwise just use the string representation
-                        content = str(result.output)
+            # Native function calls have an 'id' in the original tool_call from the LLM
+            is_native_call = "id" in tool_call
+
+            tool_name_for_logging = result.tool_id # From EnhancedToolResult
+
+            # Determine content for the message
+            # For native calls, content is result.result or result.error
+            # For XML, it's formatted string
+            if is_native_call:
+                content_to_store = result.result if result.status == "completed" else result.error
+                if isinstance(content_to_store, (dict, list)):
+                    content_to_store = json.dumps(content_to_store)
                 else:
-                    # Fallback to string representation of the whole result
-                    content = str(result)
-                
-                logger.info(f"Formatted tool result content: {content[:100]}...")
-                self.trace.event(name="formatted_tool_result_content", level="DEFAULT", status_message=(f"Formatted tool result content: {content[:100]}..."))
-                
-                # Create the tool response message with proper format
-                tool_message = {
+                    content_to_store = str(content_to_store) # Ensure string
+            else: # XML call
+                # _format_xml_tool_result expects the old ToolResult structure.
+                # We need to adapt or make it use EnhancedToolResult.
+                # For now, let's quickly adapt here.
+                temp_legacy_result_obj = {"success": result.status == "completed", "output": result.result or result.error}
+                # This is a simplification; ToolResult was a class. Let's assume _format_xml_tool_result just needs a string.
+                content_to_store = self._format_xml_tool_result(tool_call, str(temp_legacy_result_obj['output']))
+
+
+            if is_native_call:
+                tool_message_content = {
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "name": function_name,
-                    "content": content
+                    "name": tool_call.get("function_name", tool_name_for_logging), # function_name from original LLM req
+                    "content": content_to_store
                 }
-                
-                logger.info(f"Adding native tool result for tool_call_id={tool_call['id']} with role=tool")
-                self.trace.event(name="adding_native_tool_result_for_tool_call_id", level="DEFAULT", status_message=(f"Adding native tool result for tool_call_id={tool_call['id']} with role=tool"))
-                
-                # Add as a tool message to the conversation history
-                # This makes the result visible to the LLM in the next turn
-                message_id = await self.add_message(
-                    thread_id=thread_id,
-                    type="tool",  # Special type for tool responses
-                    content=tool_message,
-                    is_llm_message=True,
-                    metadata=metadata
+                logger.info(f"Adding native tool result for tool_call_id={tool_call['id']}")
+                msg_obj = await self.add_message(
+                    thread_id=thread_id, type="tool", content=tool_message_content,
+                    is_llm_message=True, metadata=metadata
                 )
-                return message_id # Return the message ID
-            
-            # For XML and other non-native tools, continue with the original logic
-            # Determine message role based on strategy
-            result_role = "user" if strategy == "user_message" else "assistant"
-            
-            # Create a context for consistent formatting
-            context = self._create_tool_context(tool_call, 0, assistant_message_id, parsing_details)
-            context.result = result
-            
-            # Format the content using the formatting helper
-            content = self._format_xml_tool_result(tool_call, result)
-            
-            # Add the message with the appropriate role to the conversation history
-            # This allows the LLM to see the tool result in subsequent interactions
-            result_message = {
-                "role": result_role,
-                "content": content
-            }
-            message_id = await self.add_message(
-                thread_id=thread_id, 
-                type="tool",
-                content=result_message,
-                is_llm_message=True,
-                metadata=metadata
-            )
-            return message_id # Return the message ID
-        except Exception as e:
-            logger.error(f"Error adding tool result: {str(e)}", exc_info=True)
-            self.trace.event(name="error_adding_tool_result", level="ERROR", status_message=(f"Error adding tool result: {str(e)}"), metadata={"tool_call": tool_call, "result": result, "strategy": strategy, "assistant_message_id": assistant_message_id, "parsing_details": parsing_details})
-            # Fallback to a simple message
-            try:
-                fallback_message = {
-                    "role": "user",
-                    "content": str(result)
-                }
-                message_id = await self.add_message(
-                    thread_id=thread_id, 
-                    type="tool", 
-                    content=fallback_message,
-                    is_llm_message=True,
-                    metadata={"assistant_message_id": assistant_message_id} if assistant_message_id else {}
-                )
-                return message_id # Return the message ID
-            except Exception as e2:
-                logger.error(f"Failed even with fallback message: {str(e2)}", exc_info=True)
-                self.trace.event(name="failed_even_with_fallback_message", level="ERROR", status_message=(f"Failed even with fallback message: {str(e2)}"), metadata={"tool_call": tool_call, "result": result, "strategy": strategy, "assistant_message_id": assistant_message_id, "parsing_details": parsing_details})
-                return None # Return None on error
+                return msg_obj['message_id'] if msg_obj else None
 
-    def _format_xml_tool_result(self, tool_call: Dict[str, Any], result: ToolResult) -> str:
+            # XML or other non-native tools
+            result_role = "user" if strategy == "user_message" else "assistant"
+            tool_result_message_content = {"role": result_role, "content": content_to_store}
+            
+            msg_obj = await self.add_message(
+                thread_id=thread_id, type="tool", content=tool_result_message_content,
+                is_llm_message=True, metadata=metadata
+            )
+            return msg_obj['message_id'] if msg_obj else None
+
+        except Exception as e:
+            logger.error(f"Error adding tool result (Enhanced): {str(e)}", exc_info=True)
+            # Fallback for safety, though less likely needed now
+            try:
+                fallback_content = {"role": "user", "content": str(result.result or result.error)}
+                msg_obj = await self.add_message(
+                    thread_id=thread_id, type="tool", content=fallback_content,
+                    is_llm_message=True, metadata=metadata # use same metadata
+                )
+                return msg_obj['message_id'] if msg_obj else None
+            except Exception as e2:
+                logger.error(f"Failed even with fallback message (Enhanced): {str(e2)}", exc_info=True)
+                return None
+
+    def _format_xml_tool_result(self, tool_call: Dict[str, Any], result_str: str) -> str: # Changed result type
         """Format a tool result wrapped in a <tool_result> tag.
 
         Args:
@@ -1415,14 +1380,10 @@ class ResponseProcessor:
         Returns:
             String containing the formatted result wrapped in <tool_result> tag
         """
-        # Always use xml_tag_name if it exists
-        if "xml_tag_name" in tool_call:
-            xml_tag_name = tool_call["xml_tag_name"]
-            return f"<tool_result> <{xml_tag_name}> {str(result)} </{xml_tag_name}> </tool_result>"
-        
-        # Non-XML tool, just return the function result
-        function_name = tool_call["function_name"]
-        return f"Result for {function_name}: {str(result)}"
+        """Format an XML tool result string wrapped in a <tool_result> tag."""
+        # xml_tag_name should be present in tool_call for XML tools from _parse_xml_tool_call
+        xml_tag_name = tool_call.get("xml_tag_name", tool_call.get("method_name", "unknown_tool"))
+        return f"<tool_result> <{xml_tag_name}> {result_str} </{xml_tag_name}> </tool_result>"
 
     def _create_tool_context(self, tool_call: Dict[str, Any], tool_index: int, assistant_message_id: Optional[str] = None, parsing_details: Optional[Dict[str, Any]] = None) -> ToolExecutionContext:
         """Create a tool execution context with display name and parsing details populated."""
@@ -1454,34 +1415,50 @@ class ResponseProcessor:
             "tool_call_id": context.tool_call.get("id") # Include tool_call ID if native
         }
         metadata = {"thread_run_id": thread_run_id}
+        # If context.result is EnhancedToolResult, it might contain artifacts or other metadata
+        if context.result and context.result.artifacts:
+            metadata["artifacts"] = context.result.artifacts
+        if context.result and context.result.warnings:
+            metadata["warnings"] = context.result.warnings
+
         saved_message_obj = await self.add_message(
             thread_id=thread_id, type="status", content=content, is_llm_message=False, metadata=metadata
         )
         return saved_message_obj # Return the full object (or None if saving failed)
 
     async def _yield_and_save_tool_completed(self, context: ToolExecutionContext, tool_message_id: Optional[str], thread_id: str, thread_run_id: str) -> Optional[Dict[str, Any]]:
-        """Formats, saves, and returns a tool completed/failed status message."""
-        if not context.result:
-            # Delegate to error saving if result is missing (e.g., execution failed)
+        """Formats, saves, and returns a tool completed/failed status message using EnhancedToolResult."""
+        if not context.result: # context.result is an EnhancedToolResult
             return await self._yield_and_save_tool_error(context, thread_id, thread_run_id)
 
         tool_name = context.xml_tag_name or context.function_name
-        status_type = "tool_completed" if context.result.success else "tool_failed"
-        message_text = f"Tool {tool_name} {'completed successfully' if context.result.success else 'failed'}"
+        # Use status from EnhancedToolResult
+        is_success = context.result.status == "completed"
+        status_type = "tool_completed" if is_success else "tool_failed"
+        message_text = f"Tool {tool_name} {context.result.status}"
+        if not is_success and context.result.error:
+            message_text += f": {context.result.error}"
+
 
         content = {
             "role": "assistant", "status_type": status_type,
             "function_name": context.function_name, "xml_tag_name": context.xml_tag_name,
             "message": message_text, "tool_index": context.tool_index,
-            "tool_call_id": context.tool_call.get("id")
+            "tool_call_id": context.tool_call.get("id") # Native tool_call id
         }
         metadata = {"thread_run_id": thread_run_id}
+        if context.result.artifacts:
+            metadata["artifacts"] = context.result.artifacts
+        if context.result.warnings:
+            metadata["warnings"] = context.result.warnings
+
         # Add the *actual* tool result message ID to the metadata if available and successful
-        if context.result.success and tool_message_id:
+        if is_success and tool_message_id:
             metadata["linked_tool_result_message_id"] = tool_message_id
             
         # <<< ADDED: Signal if this is a terminating tool >>>
-        if context.function_name in ['ask', 'complete']:
+        # This list might need to come from a config or be more dynamic
+        if context.function_name in ['ask', 'complete', 'submit_subtask_report']: # Added submit_subtask_report
             metadata["agent_should_terminate"] = True
             logger.info(f"Marking tool status for '{context.function_name}' with termination signal.")
             self.trace.event(name="marking_tool_status_for_termination", level="DEFAULT", status_message=(f"Marking tool status for '{context.function_name}' with termination signal."))
