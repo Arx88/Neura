@@ -8,34 +8,41 @@ from .local_sandbox import local_sandbox
 
 load_dotenv()
 
-logger.debug("Initializing Daytona sandbox configuration")
-daytona_config = DaytonaConfig(
-    api_key=config.DAYTONA_API_KEY,
-    server_url=config.DAYTONA_SERVER_URL,
-    target=config.DAYTONA_TARGET
-)
-
-if daytona_config.api_key:
-    logger.debug("Daytona API key configured successfully")
-else:
-    logger.warning("No Daytona API key found in environment variables")
-
-if daytona_config.server_url:
-    logger.debug(f"Daytona server URL set to: {daytona_config.server_url}")
-else:
-    logger.warning("No Daytona server URL found in environment variables")
-
-if daytona_config.target:
-    logger.debug(f"Daytona target set to: {daytona_config.target}")
-else:
-    logger.warning("No Daytona target found in environment variables")
-
-daytona = Daytona(daytona_config)
-logger.debug("Daytona client initialized")
+# Conditional Daytona Client Initialization
+daytona = None # Initialize module-level 'daytona' client as None
 
 def use_daytona():
     """Determinar si se debe usar DAYTONA o sandbox local"""
-    return config.DAYTONA_API_KEY and config.DAYTONA_SERVER_URL and config.DAYTONA_TARGET
+    return bool(config.DAYTONA_API_KEY and config.DAYTONA_SERVER_URL and config.DAYTONA_TARGET)
+
+if use_daytona():
+    logger.debug("Daytona mode enabled. Initializing Daytona sandbox configuration.")
+
+    # Specific check for DAYTONA_TARGET validity before DaytonaConfig instantiation
+    if config.DAYTONA_TARGET not in ['eu', 'us', 'asia']:
+        logger.error(
+            f"Invalid DAYTONA_TARGET: '{config.DAYTONA_TARGET}' in .env. Must be one of 'eu', 'us', or 'asia'. "
+            "Daytona client will not be initialized. Ensure this is intended if local mode is active, "
+            "or correct it if Daytona mode is intended."
+        )
+        # 'daytona' remains None
+    else:
+        try:
+            daytona_config = DaytonaConfig(
+                api_key=config.DAYTONA_API_KEY,
+                server_url=config.DAYTONA_SERVER_URL,
+                target=config.DAYTONA_TARGET
+            )
+            daytona = Daytona(daytona_config) # Assign to the module-level 'daytona'
+            logger.debug("Daytona client initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Daytona client even though use_daytona() was true and target seemed valid: {e}")
+            # daytona remains None
+else:
+    logger.debug(
+        "Daytona mode disabled (DAYTONA_API_KEY, DAYTONA_SERVER_URL, or DAYTONA_TARGET not set, empty, or invalid). "
+        "Skipping Daytona client initialization."
+    )
 
 async def get_or_start_sandbox(sandbox_id: str):
     """Retrieve a sandbox by ID, check its state, and start it if needed."""
