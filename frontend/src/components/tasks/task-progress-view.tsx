@@ -181,7 +181,7 @@ const TaskProgressView: React.FC<TaskProgressViewProps> = ({ taskId }) => {
             <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-4">Subtasks</h2>
 
             {/* Loading indicator for subtasks, shown only if no subtasks are currently displayed */}
-            {isLoadingSubtasks && (!Array.isArray(subtasks) || subtasks.length === 0) && (
+            {isLoadingSubtasks && (Array.isArray(subtasks) ? subtasks.length === 0 : true) && (
               <p className="text-gray-500 dark:text-gray-400">Loading subtasks...</p>
             )}
 
