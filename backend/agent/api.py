@@ -535,13 +535,16 @@ async def stream_agent_run(
             if pubsub_control: await pubsub_control.close()
 
             if listener_task:
-                listener_task.cancel()
+                if not listener_task.done(): # Only cancel if not already done
+                    listener_task.cancel()
                 try:
-                    await listener_task  # Reap inner tasks & swallow their errors
+                    await listener_task
                 except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    logger.debug(f"listener_task ended with: {e}")
+                    logger.debug(f"Listener task for {agent_run_id} was cancelled.")
+                except StopAsyncIteration:
+                    logger.debug(f"Listener task for {agent_run_id} finished with StopAsyncIteration (expected if Redis pubsub listener naturally ended).")
+                except Exception as e: # Catch other unexpected errors from the listener task
+                    logger.error(f"Listener task for {agent_run_id} ended with an unexpected error: {e}", exc_info=True)
             # Wait briefly for tasks to cancel
             await asyncio.sleep(0.1)
             logger.debug(f"Streaming cleanup complete for agent run: {agent_run_id}")
