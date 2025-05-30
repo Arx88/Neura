@@ -151,6 +151,7 @@ async def run_agent(
 
     iteration_count = 0
     continue_execution = True
+    image_message_id_to_delete = None # Initialize image_message_id_to_delete
 
     latest_user_message = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=True).limit(1).execute()
     if latest_user_message.data and len(latest_user_message.data) > 0:
@@ -218,8 +219,9 @@ async def run_agent(
         # Get the latest browser_state message
         latest_browser_state_msg = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'browser_state').order('created_at', desc=True).limit(1).execute()
         if latest_browser_state_msg.data and len(latest_browser_state_msg.data) > 0:
+            browser_message_content_raw = latest_browser_state_msg.data[0]["content"]
             try:
-                browser_content = json.loads(latest_browser_state_msg.data[0]["content"])
+                browser_content = json.loads(browser_message_content_raw)
                 screenshot_base64 = browser_content.get("screenshot_base64")
                 screenshot_url = browser_content.get("screenshot_url")
                 
@@ -251,17 +253,31 @@ async def run_agent(
                         }
                     })
                 else:
-                    logger.warning("Browser state found but no screenshot data.")
+                    # This is a scenario where content might be missing
+                    logger.warning("Browser state message is missing both screenshot_url and screenshot_base64. Content: %s", browser_content)
 
-            except Exception as e:
-                logger.error(f"Error parsing browser state: {e}")
-                trace.event(name="error_parsing_browser_state", level="ERROR", status_message=(f"{e}"))
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse browser state JSON: {browser_message_content_raw}. Error: {e}")
+                trace.event(name="json_decode_error_browser_state", level="ERROR", status_message=(f"Failed to parse browser state: {e}"))
+                yield {"type": "status", "status": "error", "message": f"Failed to parse browser state: {e}"}
+                continue_execution = False
+                break # Break from the while loop
+            except Exception as e: # Catch other potential errors
+                logger.error(f"Error processing browser state: {e}", exc_info=True)
+                trace.event(name="error_processing_browser_state", level="ERROR", status_message=(f"{e}"))
+                # Optionally, yield a generic error or break depending on severity
+                yield {"type": "status", "status": "error", "message": f"Error processing browser state: {e}"}
+                continue_execution = False
+                break
 
-        # Get the latest image_context message (NEW)
+
+        # Get the latest image_context message
         latest_image_context_msg = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'image_context').order('created_at', desc=True).limit(1).execute()
         if latest_image_context_msg.data and len(latest_image_context_msg.data) > 0:
+            image_message_content_raw = latest_image_context_msg.data[0]["content"]
+            image_msg_id_candidate = latest_image_context_msg.data[0]["message_id"]
             try:
-                image_context_content = json.loads(latest_image_context_msg.data[0]["content"])
+                image_context_content = json.loads(image_message_content_raw)
                 base64_image = image_context_content.get("base64")
                 mime_type = image_context_content.get("mime_type")
                 file_path = image_context_content.get("file_path", "unknown file")
@@ -277,13 +293,27 @@ async def run_agent(
                             "url": f"data:{mime_type};base64,{base64_image}",
                         }
                     })
+                    image_message_id_to_delete = image_msg_id_candidate # Mark for deletion after LLM call
                 else:
-                    logger.warning(f"Image context found for '{file_path}' but missing base64 or mime_type.")
+                    logger.warning(f"Image context for '{file_path}' is missing base64_image or mime_type. Content: %s", image_context_content)
+                    # Do not mark for deletion if content is invalid, it might need to be inspected or retried.
+                    # However, if it's just a warning, we might still want to delete it to prevent reprocessing.
+                    # For now, let's assume if it's a warning, we still mark for deletion to avoid loop.
+                    image_message_id_to_delete = image_msg_id_candidate
 
-                await client.table('messages').delete().eq('message_id', latest_image_context_msg.data[0]["message_id"]).execute()
-            except Exception as e:
-                logger.error(f"Error parsing image context: {e}")
-                trace.event(name="error_parsing_image_context", level="ERROR", status_message=(f"{e}"))
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse image context JSON: {image_message_content_raw}. Error: {e}")
+                trace.event(name="json_decode_error_image_context", level="ERROR", status_message=(f"Failed to parse image context: {e}"))
+                yield {"type": "status", "status": "error", "message": f"Failed to parse image context: {e}"}
+                continue_execution = False
+                break # Break from the while loop
+            except Exception as e: # Catch other potential errors
+                logger.error(f"Error processing image context: {e}", exc_info=True)
+                trace.event(name="error_processing_image_context", level="ERROR", status_message=(f"{e}"))
+                yield {"type": "status", "status": "error", "message": f"Error processing image context: {e}"}
+                continue_execution = False
+                break
 
         # If we have any content for the user-facing temporary message
         if temp_message_content_list:
@@ -403,11 +433,10 @@ async def run_agent(
                     trace.event(name="agent_decided_to_stop_with_tool", level="DEFAULT", status_message=(f"Agent decided to stop with tool: {last_tool_call}"))
                     generation.end(output=full_response, status_message="agent_stopped")
                     continue_execution = False
-
             except Exception as e:
                 # Just log the error and re-raise to stop all iterations
                 error_msg = f"Error during response streaming: {str(e)}"
-                logger.error(f"Error: {error_msg}")
+                logger.error(f"Error: {error_msg}", exc_info=True) # Added exc_info
                 trace.event(name="error_during_response_streaming", level="ERROR", status_message=(f"Error during response streaming: {str(e)}"))
                 generation.end(output=full_response, status_message=error_msg, level="ERROR")
                 yield {
@@ -421,7 +450,7 @@ async def run_agent(
         except Exception as e:
             # Just log the error and re-raise to stop all iterations
             error_msg = f"Error running thread: {str(e)}"
-            logger.error(f"Error: {error_msg}")
+            logger.error(f"Error: {error_msg}", exc_info=True) # Added exc_info
             trace.event(name="error_running_thread", level="ERROR", status_message=(f"Error running thread: {str(e)}"))
             yield {
                 "type": "status",
@@ -430,10 +459,24 @@ async def run_agent(
             }
             # Stop execution immediately on any error
             break
+
+        # Moved image deletion to after the LLM call and response processing
+        if image_message_id_to_delete:
+            logger.info(f"Attempting to delete processed image context message with ID: {image_message_id_to_delete}")
+            try:
+                delete_result = await client.table('messages').delete().eq('message_id', image_message_id_to_delete).execute()
+                if delete_result.data or (hasattr(delete_result, 'count') and delete_result.count > 0) or (hasattr(delete_result, 'status_code') and 200 <= delete_result.status_code < 300) :
+                    logger.info(f"Successfully deleted image context message: {image_message_id_to_delete}")
+                else:
+                    logger.warning(f"No data returned or count was zero when deleting image message {image_message_id_to_delete}. Result: {delete_result}")
+            except Exception as e:
+                logger.error(f"Error deleting image context message {image_message_id_to_delete}: {e}", exc_info=True)
+                trace.event(name="error_deleting_image_context", level="ERROR", status_message=(f"{e}"))
+            image_message_id_to_delete = None # Reset for the next iteration
+
         generation.end(output=full_response)
 
     langfuse.flush() # Flush Langfuse events at the end of the run
-  
 
 
 # # TESTING
