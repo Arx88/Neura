@@ -80,6 +80,59 @@ def start_supervisord_session(sandbox: Sandbox):
         logger.error(f"Error starting supervisord session: {str(e)}")
         raise e
 
+def setup_visualization_environment(sandbox: Sandbox):
+    """Set up the visualization environment in the sandbox."""
+    session_id = "viz_setup_session"
+    try:
+        logger.info(f"Setting up visualization environment for sandbox {sandbox.id}")
+        sandbox.process.create_session(session_id)
+        
+        # Install required packages
+        logger.info(f"Installing visualization packages in session {session_id}...")
+        install_req = SessionExecuteRequest(
+            command="pip install matplotlib pandas seaborn plotly",
+            var_async=False,
+            cwd="/workspace" # Typically, pip install is not cwd sensitive for global site-packages
+        )
+        install_response = sandbox.process.execute_session_command(session_id, install_req, timeout=300) # Increased timeout for pip install
+        
+        install_logs = sandbox.process.get_session_command_logs(session_id, install_response.cmd_id)
+        if install_response.exit_code == 0:
+            logger.info(f"Visualization packages installed successfully. Logs:\n{install_logs}")
+        else:
+            logger.error(f"Failed to install visualization packages. Exit code: {install_response.exit_code}. Logs:\n{install_logs}")
+            # Optionally, raise an exception or handle error more specifically
+            # For now, just logging the error.
+
+        # Create visualizations directory
+        logger.info(f"Creating visualizations directory in session {session_id}...")
+        mkdir_req = SessionExecuteRequest(
+            command="mkdir -p /workspace/visualizations",
+            var_async=False,
+            cwd="/workspace"
+        )
+        mkdir_response = sandbox.process.execute_session_command(session_id, mkdir_req)
+        mkdir_logs = sandbox.process.get_session_command_logs(session_id, mkdir_response.cmd_id)
+
+        if mkdir_response.exit_code == 0:
+            logger.info(f"Visualizations directory created successfully. Logs:\n{mkdir_logs}")
+        else:
+            logger.error(f"Failed to create visualizations directory. Exit code: {mkdir_response.exit_code}. Logs:\n{mkdir_logs}")
+            # Optionally, raise an exception
+
+    except Exception as e:
+        logger.error(f"Error setting up visualization environment: {str(e)}", exc_info=True)
+        # It might be useful to re-raise the exception if setup is critical
+        # raise e 
+    finally:
+        try:
+            logger.info(f"Deleting session {session_id} for visualization setup.")
+            sandbox.process.delete_session(session_id)
+            logger.info(f"Session {session_id} deleted successfully.")
+        except Exception as e:
+            logger.error(f"Error deleting session {session_id}: {str(e)}", exc_info=True)
+            pass # Avoid shadowing original exception if any
+
 def create_sandbox(password: str, project_id: str = None):
     """Create a new sandbox with all required services configured and running."""
     
