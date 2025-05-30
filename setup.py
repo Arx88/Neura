@@ -127,7 +127,7 @@ def ask_execution_mode(state):
         print(f"\n{Colors.CYAN}Choose your sandbox execution mode:{Colors.ENDC}")
         print(f"{Colors.CYAN}[1] {Colors.GREEN}Daytona.io (Cloud Sandboxes){Colors.ENDC}")
         print(f"{Colors.CYAN}[2] {Colors.GREEN}Local Docker (Requires Docker installed and running){Colors.ENDC}\n")
-        
+
         choice = input("Enter your choice (1 for Daytona, 2 for Local Docker): ").strip()
         if choice == '1':
             state['execution_mode'] = 'daytona'
@@ -139,7 +139,7 @@ def ask_execution_mode(state):
             break
         else:
             print_error("Invalid choice. Please enter '1' or '2'.")
-    
+
     save_state(state)
     return state
 
@@ -148,23 +148,23 @@ def configure_local_docker(state):
     print_info("Local Docker execution mode has been selected and configured.")
     print_info("The setup process (specifically in the 'Installing dependencies' step) handles:")
     print_info("  - Ensuring the Docker SDK for Python is installed.")
-    
+
     # Retrieve the image name from state for the message, using the same logic as in install_dependencies
     DEFAULT_SANDBOX_IMAGE = 'kortix/suna:0.1.2.8'
     env_vars_combined = state.get('env_vars', {})
     llm_vars = env_vars_combined.get('llm', {})
     image_name = llm_vars.get('sandbox_image_name', DEFAULT_SANDBOX_IMAGE)
-    if not image_name: 
+    if not image_name:
         image_name = DEFAULT_SANDBOX_IMAGE
-        
+
     print_info(f"  - Checking for and attempting to pull the Suna sandbox image ('{image_name}').")
-    
+
     print_warning("\nCrucial Reminder for Local Docker Mode:")
     print_warning("  - Docker Desktop (on Windows/Mac) or the Docker daemon (on Linux) MUST be installed and RUNNING on your system.")
     print_warning("  - If Docker is not running, Suna will not be able to create local sandboxes.")
     print_info("\nIf Docker is running and the image is available, Suna will use local containers for agents.")
-    
-    # This function is primarily informational. 
+
+    # This function is primarily informational.
     # Clearing of Daytona env_vars is handled in main() before this is called.
     # Saving state is also handled in main() after this returns.
     return state
@@ -1468,7 +1468,7 @@ ENV_MODE=local
     # This key was previously in Daytona section, but makes more sense with LLM/general sandbox config.
     # It's used by local_sandbox.py
     # Defaulting to kortix/suna:0.1.2.8, ensure this is the desired default.
-    sandbox_image_name = env_vars.get('llm', {}).get('sandbox_image_name', 'kortix/suna:0.1.2.8') 
+    sandbox_image_name = env_vars.get('llm', {}).get('sandbox_image_name', 'kortix/suna:0.1.2.8')
     env_content += f"SANDBOX_IMAGE_NAME={sandbox_image_name}\n"
 
     if state and state.get('execution_mode') == 'daytona':
@@ -2009,7 +2009,7 @@ print(f'DEBUG_SUBPROCESS: shutil.which("pip"): {shutil.which("pip")}')
                 print_error(f"Could not connect to Docker daemon: {e_docker_service}")
                 print_warning("Please ensure Docker Desktop (or Docker service) is running and accessible.")
                 print_info(f"You may need to pull the sandbox image '{image_name if 'image_name' in locals() else DEFAULT_SANDBOX_IMAGE}' manually after starting Docker.")
-    
+
     return True # Return True assuming primary dependencies (npm, poetry) were successful
 
 def start_suna():
@@ -2397,7 +2397,7 @@ def main():
     check_requirements() # Python check within this should be fine now
     # Docker running check might be conditional if local mode is chosen, but good to check early
     # or ensure configure_local_docker handles it. For now, keep it here.
-    check_docker_running() 
+    check_docker_running()
     
     if not check_suna_directory():
         print_error("This setup script must be run from the Suna repository root directory.")
@@ -2480,9 +2480,9 @@ def main():
             print_info("Marking dependencies as installed in state.")
         else:
             print_error("Dependency installation failed. Exiting setup.")
-    elif installation_succeeded: 
+    elif installation_succeeded:
          print_info("Dependencies installation was skipped as it was previously completed.")
-    else: 
+    else:
         print_warning("install_dependencies was skipped but did not return True. Check logic.")
     save_state(state) # Save state after dependency install attempt/check
     if not installation_succeeded and not dependencies_previously_installed:
@@ -2497,7 +2497,7 @@ def main():
     # Now ask how to start Suna
     # Step number for "Starting Suna" is now the last step, so total_steps
     print_step(total_steps, total_steps, "Starting Suna") # Use total_steps as current_step for the last one
-    use_docker_startup = start_suna() 
+    use_docker_startup = start_suna()
     
     # Update environment files if needed for non-Docker startup
     if not use_docker_startup:

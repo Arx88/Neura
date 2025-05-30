@@ -62,11 +62,11 @@ class TestSetupDockerLogic(unittest.TestCase):
         mock_docker_module.from_env.return_value = mock_docker_client
         mock_docker_client.ping.return_value = True # Docker daemon is responsive
         # client.images.get() succeeds, meaning image is found
-        mock_docker_client.images.get.return_value = MagicMock() 
+        mock_docker_client.images.get.return_value = MagicMock()
 
         # Simulate pip install docker already done or successful
         mock_subprocess_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        
+
         # Act
         install_dependencies(state=self.mock_state, dependencies_installed=False)
 
@@ -88,12 +88,12 @@ class TestSetupDockerLogic(unittest.TestCase):
         mock_docker_client = MagicMock()
         mock_docker_module.from_env.return_value = mock_docker_client
         mock_docker_client.ping.return_value = True
-        
+
         image_name = self.mock_state['env_vars']['llm']['sandbox_image_name']
         # First call to images.get (check) raises ImageNotFound
         # Second call to images.get (verify after pull) succeeds
         mock_docker_client.images.get.side_effect = [
-            docker_errors.ImageNotFound("Image not found locally"), 
+            docker_errors.ImageNotFound("Image not found locally"),
             MagicMock() # Simulates image found after pull
         ]
         mock_docker_client.api.pull.return_value = [] # Simulate successful pull (empty log stream for simplicity)
@@ -128,7 +128,7 @@ class TestSetupDockerLogic(unittest.TestCase):
         mock_subprocess_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
 
         install_dependencies(state=self.mock_state, dependencies_installed=False)
-        
+
         mock_docker_client.api.pull.assert_called_once_with(image_name, stream=True, decode=True)
         mock_print_error.assert_any_call(f"Failed to pull image '{image_name}': Image not found in the registry.")
 
@@ -150,7 +150,7 @@ class TestSetupDockerLogic(unittest.TestCase):
         mock_subprocess_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
 
         install_dependencies(state=self.mock_state, dependencies_installed=False)
-        
+
         mock_docker_client.api.pull.assert_called_once_with(image_name, stream=True, decode=True)
         mock_print_error.assert_any_call(f"Failed to pull image '{image_name}': Docker API error: Docker API error during pull")
 
@@ -178,10 +178,10 @@ class TestSetupDockerLogic(unittest.TestCase):
     @patch('setup.subprocess.run')
     def test_execution_mode_not_local(self, mock_subprocess_run, mock_print_info, mock_docker_module):
         self.mock_state['execution_mode'] = 'daytona'
-        
+
         mock_docker_client = MagicMock()
         mock_docker_module.from_env.return_value = mock_docker_client
-        
+
         mock_subprocess_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
 
         install_dependencies(state=self.mock_state, dependencies_installed=False)
@@ -209,7 +209,7 @@ class TestSetupDockerLogic(unittest.TestCase):
         mock_docker_client = MagicMock()
         mock_docker_module.from_env.return_value = mock_docker_client
         mock_docker_client.ping.return_value = True
-        mock_docker_client.images.get.return_value = MagicMock() 
+        mock_docker_client.images.get.return_value = MagicMock()
 
         # Modify state to not include sandbox_image_name
         current_state = {
@@ -221,7 +221,7 @@ class TestSetupDockerLogic(unittest.TestCase):
         DEFAULT_IMAGE_IN_SETUP = 'kortix/suna:0.1.2.8' # Should match the default in install_dependencies
 
         mock_subprocess_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-        
+
         install_dependencies(state=current_state, dependencies_installed=False)
 
         mock_docker_client.images.get.assert_called_once_with(DEFAULT_IMAGE_IN_SETUP)

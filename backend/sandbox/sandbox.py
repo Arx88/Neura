@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from utils.logger import logger
 from utils.config import config
 from utils.config import Configuration
-from backend.sandbox.local_sandbox import local_sandbox
+from .local_sandbox import local_sandbox
 
 load_dotenv()
 
@@ -46,7 +46,7 @@ async def get_or_start_sandbox(sandbox_id: str):
         logger.info("Using Daytona for sandbox operations")
         try:
             sandbox = daytona.get_current_sandbox(sandbox_id)
-            
+
             # Check if sandbox needs to be started
             if sandbox.instance.state == WorkspaceState.ARCHIVED or sandbox.instance.state == WorkspaceState.STOPPED:
                 logger.info(f"Daytona sandbox is in {sandbox.instance.state} state. Starting...")
@@ -59,10 +59,10 @@ async def get_or_start_sandbox(sandbox_id: str):
                 except Exception as e:
                     logger.error(f"Error starting Daytona sandbox: {e}")
                     raise e
-            
+
             logger.info(f"Daytona sandbox {sandbox_id} is ready")
             return sandbox
-            
+
         except Exception as e:
             logger.error(f"Error retrieving or starting Daytona sandbox: {str(e)}")
             raise e
@@ -171,7 +171,7 @@ def create_sandbox(password: str, project_id: str = None):
         if project_id:
             logger.debug(f"Using project_id as label for Daytona sandbox: {project_id}")
             labels = {'id': project_id}
-            
+
         params = CreateSandboxParams(
             image=Configuration.SANDBOX_IMAGE_NAME, # Assuming Configuration.SANDBOX_IMAGE_NAME is also relevant for Daytona
             public=True,
@@ -196,17 +196,17 @@ def create_sandbox(password: str, project_id: str = None):
                 "disk": 5,
             }
         )
-        
+
         # Create the Daytona sandbox
         sandbox = daytona.create(params)
         logger.debug(f"Daytona sandbox created with ID: {sandbox.id}")
-        
+
         # Setup visualization environment (ensure this is Daytona compatible)
         setup_visualization_environment(sandbox)
 
         # Start supervisord in a session for new Daytona sandbox
         start_supervisord_session(sandbox)
-        
+
         logger.debug(f"Daytona sandbox environment successfully initialized")
         return sandbox
     else:
