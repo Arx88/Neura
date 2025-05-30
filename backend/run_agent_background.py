@@ -60,6 +60,7 @@ async def run_agent_background(
     enable_context_manager: bool
 ):
     """Run the agent in the background using Redis for state."""
+    logger.info(f"Entering run_agent_background task for agent_run_id: {agent_run_id}, thread_id: {thread_id}, project_id: {project_id}, model: {model_name}")
     await initialize()
 
     sentry.sentry.set_tag("thread_id", thread_id)
