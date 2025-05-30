@@ -139,44 +139,72 @@ class LocalSandbox:
     def _setup_visualization_environment(self, container):
         """Configurar el entorno de visualización en el sandbox"""
         try:
-            self.logger.info("Configurando entorno de visualización para sandbox local")
-
+            self.logger.info(f"Configurando entorno de visualización para sandbox local (Container: {container.short_id})")
+            self.logger.info(f"Attempting pip install in {container.short_id}: matplotlib pandas seaborn plotly")
             # Instalar paquetes necesarios
-            exit_code, output = container.exec_run(
+            exit_code, output_bytes = container.exec_run(
                 cmd="pip install matplotlib pandas seaborn plotly",
                 stdout=True,
                 stderr=True
             )
 
+            output_str = ""
+            try:
+                output_str = output_bytes.decode('utf-8') if output_bytes else ""
+            except UnicodeDecodeError:
+                output_str = output_bytes.decode('latin-1', errors='replace') if output_bytes else "" # Fallback decoding
+
             if exit_code == 0:
-                self.logger.info("Paquetes de visualización instalados correctamente")
+                self.logger.info(f"Paquetes de visualización instalados correctamente in {container.short_id}.")
             else:
-                self.logger.error(f"Error al instalar paquetes de visualización: {output.decode('utf-8')}")
+                error_message = f"PIP INSTALL FAILED in {container.short_id} with exit code {exit_code}. Output: {output_str}"
+                self.logger.error(error_message)
+                raise Exception(error_message)
 
             # Crear directorio de visualizaciones
-            container.exec_run(cmd="mkdir -p /workspace/visualizations")
+            self.logger.info(f"Creating /workspace/visualizations in {container.short_id}")
+            exit_code_mkdir, output_mkdir_bytes = container.exec_run(cmd="mkdir -p /workspace/visualizations")
+
+            output_mkdir_str = ""
+            try:
+                output_mkdir_str = output_mkdir_bytes.decode('utf-8') if output_mkdir_bytes else ""
+            except UnicodeDecodeError:
+                output_mkdir_str = output_mkdir_bytes.decode('latin-1', errors='replace') if output_mkdir_bytes else "" # Fallback decoding
+
+            if exit_code_mkdir != 0:
+                error_message_mkdir = f"MKDIR FAILED for /workspace/visualizations in {container.short_id} with exit code {exit_code_mkdir}. Output: {output_mkdir_str}"
+                self.logger.error(error_message_mkdir)
+                raise Exception(error_message_mkdir)
+            self.logger.info(f"/workspace/visualizations directory ensured in {container.short_id}")
 
         except Exception as e:
-            self.logger.error(f"Error al configurar entorno de visualización: {str(e)}")
+            self.logger.error(f"Error al configurar entorno de visualización in {container.short_id}: {str(e)}", exc_info=True)
+            # Re-raise the exception to be caught by the caller (LocalSandbox.create)
+            # This ensures that sandbox creation fails if visualization setup fails.
+            raise
 
     def _start_supervisord(self, container):
         """Iniciar supervisord en el contenedor"""
         try:
-            self.logger.info("Iniciando supervisord en sandbox local")
+            self.logger.info(f"Iniciando supervisord en sandbox local (Container: {container.short_id})")
 
-            exit_code, output = container.exec_run(
+            # The command is detached, so we don't rely heavily on its immediate output for success.
+            # We log the attempt and any immediate output. If supervisord fails to start correctly,
+            # subsequent operations in the sandbox that depend on it would likely fail.
+            _exit_code, _output_bytes = container.exec_run(
                 cmd="/usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf",
                 detach=True
             )
-
-            # Note: For detached exec_run, exit_code might not be immediately useful
-            # or might indicate the command was launched, not its completion status.
-            # Consider logging output if available, but be aware it might be empty for detached processes.
-            self.logger.info(f"Supervisord launch attempted. Exit code: {exit_code}. Output: {output.decode('utf-8') if output else 'N/A'}")
-            # A more robust check might involve checking container logs or process status if critical
+            # For detached, output might be minimal or non-existent.
+            # _output_str = _output_bytes.decode('utf-8', errors='replace') if _output_bytes else "N/A (detached)"
+            # self.logger.info(f"Supervisord launch command issued in {container.short_id}. Exit Code: {_exit_code}, Output: {_output_str}")
+            self.logger.info(f"Supervisord launch command issued in {container.short_id}.")
 
         except Exception as e:
-            self.logger.error(f"Error al iniciar supervisord: {str(e)}")
+            self.logger.error(f"Error al iniciar supervisord in {container.short_id}: {str(e)}", exc_info=True)
+            # Re-raise the exception to be caught by the caller (LocalSandbox.create)
+            # This ensures that sandbox creation fails if supervisord setup fails.
+            raise
 
     def _get_container_info(self, container):
         """Obtener información del contenedor"""
