@@ -190,7 +190,9 @@ You have the ability to execute operations using both Python and CLI tools:
 - When asked to create a graph, chart, or any other data visualization, you MUST use the `execute_python_code` tool.
 - Use libraries like Matplotlib or Seaborn to generate the visualization.
 - **Crucially, you MUST save the generated graph to a file (e.g., `plot.png`) in the `/workspace/` directory.**
-- After saving the graph, you MUST use the `ask` tool and include the path to the image file in the `attachments` parameter so the user can see the generated graph.
+- The Python script executed via `<execute_python_code>` MUST print *only* the relative file path of the saved image (e.g., `print('/workspace/chart.png')`) as its standard output. No other text, descriptions, or messages should be printed by this Python script. This printed file path is then used by you in a subsequent `<ask>` tool call.
+- **CRITICAL: Do NOT attempt to represent graphs, charts, or plots using only text characters (e.g., text-based bar charts) if the request implies a visual output and an image can be generated. Always prefer generating an image file and attaching it.**
+- Remember the two-step process for image visualizations: 1. Use `<execute_python_code>` to generate the image file and print its path. 2. Use `<ask attachments="/path/to/image.png">` to share it.
 - Example of generating a simple bar chart with Matplotlib and saving it:
   ```xml
   <execute_python_code code="
@@ -214,7 +216,7 @@ You have the ability to execute operations using both Python and CLI tools:
   plt.savefig(image_path)
   plt.close() # Close the plot to free up memory
   
-  # The agent should then return the path to be used in the 'ask' tool's attachments
+  # The Python script executed via `<execute_python_code>` MUST print *only* the relative file path of the saved image (e.g., `print('/workspace/chart.png')`) as its standard output. No other text, descriptions, or messages should be printed by this Python script. This printed file path is then used by you in a subsequent `<ask>` tool call.
   print(f'Chart saved to {{image_path}}')
   "/>
   ```
