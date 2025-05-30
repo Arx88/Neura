@@ -144,13 +144,29 @@ def ask_execution_mode(state):
     return state
 
 def configure_local_docker(state):
-    """Placeholder for any specific Local Docker configuration steps."""
-    print_info("Configuring for Local Docker execution...")
-    # For now, this function is a placeholder.
-    # Future: Could check Docker version, resources, specific settings.
-    print_info("Ensure Docker is installed and running. No further specific configuration needed for Local Docker at this time.")
-    # state might be updated here in the future if specific local docker configs are collected
-    save_state(state) # Save state even if no changes, for consistency
+    """Provides information to the user about the Local Docker configuration status."""
+    print_info("Local Docker execution mode has been selected and configured.")
+    print_info("The setup process (specifically in the 'Installing dependencies' step) handles:")
+    print_info("  - Ensuring the Docker SDK for Python is installed.")
+    
+    # Retrieve the image name from state for the message, using the same logic as in install_dependencies
+    DEFAULT_SANDBOX_IMAGE = 'kortix/suna:0.1.2.8'
+    env_vars_combined = state.get('env_vars', {})
+    llm_vars = env_vars_combined.get('llm', {})
+    image_name = llm_vars.get('sandbox_image_name', DEFAULT_SANDBOX_IMAGE)
+    if not image_name: 
+        image_name = DEFAULT_SANDBOX_IMAGE
+        
+    print_info(f"  - Checking for and attempting to pull the Suna sandbox image ('{image_name}').")
+    
+    print_warning("\nCrucial Reminder for Local Docker Mode:")
+    print_warning("  - Docker Desktop (on Windows/Mac) or the Docker daemon (on Linux) MUST be installed and RUNNING on your system.")
+    print_warning("  - If Docker is not running, Suna will not be able to create local sandboxes.")
+    print_info("\nIf Docker is running and the image is available, Suna will use local containers for agents.")
+    
+    # This function is primarily informational. 
+    # Clearing of Daytona env_vars is handled in main() before this is called.
+    # Saving state is also handled in main() after this returns.
     return state
 # --- End New functions ---
 
@@ -1912,34 +1928,89 @@ print(f'DEBUG_SUBPROCESS: shutil.which("pip"): {shutil.which("pip")}')
         return False # Poetry or NPM install failed
 
     # If we reach here, npm and poetry installs were successful.
-    # Now, add Docker SDK installation if local execution mode is selected
+    # Now, add Docker SDK installation and image pull if local execution mode is selected
     if state and state.get('execution_mode') == 'local':
-        print_info("Execution mode is 'local'. Checking and installing Docker SDK for Python if needed...")
+        print_info("Execution mode is 'local'. Preparing Docker environment...")
+        docker_sdk_installed = False
         try:
-            # Check if docker SDK is already importable
             import docker # type: ignore
             print_success("Docker SDK for Python is already installed.")
+            docker_sdk_installed = True
         except ImportError:
             print_info("Docker SDK for Python not found. Attempting to install...")
             try:
-                # Use sys.executable to ensure pip is called from the venv's Python
                 pip_install_cmd = [sys.executable, '-m', 'pip', 'install', 'docker']
                 print_info(f"Executing: {' '.join(pip_install_cmd)}")
-                # Using capture_output to avoid polluting setup logs too much unless there's an error
                 pip_process = subprocess.run(pip_install_cmd, check=True, shell=False, capture_output=True, text=True)
                 print_success("Docker SDK for Python installed successfully.")
-                if pip_process.stdout: # Log stdout from pip if any, for transparency
+                if pip_process.stdout:
                     print_info(f"pip install docker stdout:\n{pip_process.stdout}")
+                docker_sdk_installed = True
+                import docker # type: ignore # Now it should be importable
             except subprocess.SubprocessError as e:
                 print_error(f"Failed to install Docker SDK for Python: {e}")
-                # Print stdout/stderr from the failed pip command
                 if hasattr(e, 'stdout') and e.stdout: print_info(f"pip install docker stdout:\n{e.stdout}")
                 if hasattr(e, 'stderr') and e.stderr: print_error(f"pip install docker stderr:\n{e.stderr}")
-                print_warning("If you intend to use local Docker execution, please install the Docker SDK manually: pip install docker")
-                # Depending on strictness, you might return False here if Docker SDK is essential for local mode to even start.
-                # For now, treating as a warning and allowing setup to proceed.
+                print_warning("Docker SDK for Python could not be installed. Local Docker execution might fail.")
+                print_warning("Please install it manually: pip install docker")
+            except ImportError:
+                print_error("Failed to import Docker SDK even after attempting installation.")
+                print_warning("Local Docker execution will likely fail.")
+
+        if docker_sdk_installed:
+            print_info("Ensuring Suna sandbox Docker image is available...")
+            try:
+                client = docker.from_env()
+                client.ping() # Check if Docker daemon is responsive
+                print_success("Docker client initialized and server is responsive.")
+
+                DEFAULT_SANDBOX_IMAGE = 'kortix/suna:0.1.2.8' # Consistent default
+                env_vars_combined = state.get('env_vars', {})
+                llm_vars = env_vars_combined.get('llm', {})
+                image_name = llm_vars.get('sandbox_image_name', DEFAULT_SANDBOX_IMAGE)
+                if not image_name: # Handle case where it might be an empty string
+                    image_name = DEFAULT_SANDBOX_IMAGE
+                    print_warning(f"Sandbox image name was empty in config, defaulting to {image_name}")
+
+                print_info(f"Checking for Docker image: {image_name}...")
+                try:
+                    client.images.get(image_name)
+                    print_success(f"Image '{image_name}' found locally.")
+                except docker.errors.ImageNotFound:
+                    print_warning(f"Image '{image_name}' not found locally.")
+                    print_info(f"Attempting to pull '{image_name}'. This may take a few minutes...")
+                    try:
+                        # Stream pull logs for better user feedback
+                        pull_logs = client.api.pull(image_name, stream=True, decode=True)
+                        for log_line in pull_logs:
+                            status = log_line.get('status')
+                            progress = log_line.get('progress')
+                            if status and progress:
+                                print_info(f"Pulling: {status} - {progress}")
+                            elif status:
+                                print_info(f"Pulling: {status}")
+                        # Verify after pull by trying to get it again
+                        client.images.get(image_name)
+                        print_success(f"Successfully pulled image '{image_name}'.")
+                    except docker.errors.NotFound:
+                        print_error(f"Failed to pull image '{image_name}': Image not found in the registry.")
+                        print_info(f"Please ensure the image name is correct or pull it manually: docker pull {image_name}")
+                    except docker.errors.APIError as e_pull:
+                        print_error(f"Failed to pull image '{image_name}': Docker API error: {e_pull}")
+                        print_info(f"Please check your Docker setup and try pulling manually: docker pull {image_name}")
+                except docker.errors.APIError as e_get:
+                    print_error(f"Error checking for image '{image_name}': Docker API error: {e_get}")
+                    print_info("Please ensure Docker is running correctly and you have permissions.")
+                except Exception as e_general_docker_ops:
+                    print_error(f"An unexpected error occurred with Docker image operations: {e_general_docker_ops}")
+                    print_info("Please ensure Docker is running correctly.")
+
+            except docker.errors.DockerException as e_docker_service:
+                print_error(f"Could not connect to Docker daemon: {e_docker_service}")
+                print_warning("Please ensure Docker Desktop (or Docker service) is running and accessible.")
+                print_info(f"You may need to pull the sandbox image '{image_name if 'image_name' in locals() else DEFAULT_SANDBOX_IMAGE}' manually after starting Docker.")
     
-    return True # All specified dependencies (npm, poetry, conditional docker sdk) installed successfully
+    return True # Return True assuming primary dependencies (npm, poetry) were successful
 
 def start_suna():
     """Start Suna using Docker Compose or manual startup"""
