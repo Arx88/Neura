@@ -44,6 +44,9 @@ ENV WORKER_CONNECTIONS=2000
 
 EXPOSE 8000
 
+# Switch to root user for the worker process
+USER root
+
 # Gunicorn configuration
 CMD ["sh", "-c", "gunicorn api:app \
      --workers $WORKERS \
