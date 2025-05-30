@@ -1,6 +1,7 @@
 'use client';
 
 import React, { forwardRef } from 'react';
+import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -102,13 +103,38 @@ export const MarkdownRenderer = forwardRef<
                 {...props}
               />
             ),
-            img: ({ node, ...props }) => (
-              <img
-                className="max-w-full h-auto rounded-md my-2"
-                {...props}
-                alt={props.alt || ''}
-              />
-            ),
+            img: ({ node, ...props }) => {
+              // Attempt to get width and height if available, otherwise use placeholders
+              // For layout="responsive" or "intrinsic", width and height are needed.
+              // Markdown typically doesn't provide these easily unless custom syntax is used.
+              // Using placeholder values.
+              // @ts-ignore
+              const width = node?.properties?.width || 500; // Placeholder
+              // @ts-ignore
+              const height = node?.properties?.height || 300; // Placeholder
+              const src = props.src || '';
+              const alt = props.alt || '';
+
+              if (!src) {
+                return null; // Don't render if no src
+              }
+
+              // For "fill", parent needs to be relative and have dimensions.
+              // Markdown output (often <p>) might not be styled for this.
+              // Using layout="responsive" as a more common markdown image solution.
+              return (
+                <div style={{ position: 'relative', width: '100%', maxWidth: `${width}px` }} className="my-2">
+                  <Image
+                    src={src}
+                    alt={alt}
+                    layout="responsive"
+                    width={width}
+                    height={height}
+                    className="rounded-md" // Apply styling here
+                  />
+                </div>
+              );
+            },
             pre: ({ node, ...props }) => (
               <pre className="p-0 my-2 bg-transparent" {...props} />
             ),

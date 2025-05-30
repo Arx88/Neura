@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ImageLoader } from './shared/ImageLoader';
+import Image from 'next/image';
 
 export function BrowserToolView({
   name = 'browser-operation',
@@ -189,12 +190,13 @@ export function BrowserToolView({
           {imageLoading && (
             <ImageLoader />
           )}
-          <Card className={`p-0 overflow-hidden border ${imageLoading ? 'hidden' : 'block'}`}>
-            <img
+          <Card className={`p-0 overflow-hidden border relative w-full h-full ${imageLoading ? 'hidden' : 'block'}`}>
+            <Image
               src={screenshotUrl}
               alt="Browser Screenshot"
-              className="max-w-full max-h-full object-contain"
-              onLoad={handleImageLoad}
+              layout="fill"
+              objectFit="contain"
+              onLoadingComplete={handleImageLoad}
               onError={handleImageError}
             />
           </Card>
@@ -214,12 +216,13 @@ export function BrowserToolView({
           {imageLoading && (
             <ImageLoader />
           )}
-          <Card className={`overflow-hidden border ${imageLoading ? 'hidden' : 'block'}`}>
-            <img
+          <Card className={`overflow-hidden border relative w-full h-full ${imageLoading ? 'hidden' : 'block'}`}>
+            <Image
               src={`data:image/jpeg;base64,${screenshotBase64}`}
               alt="Browser Screenshot"
-              className="max-w-full max-h-full object-contain"
-              onLoad={handleImageLoad}
+              layout="fill"
+              objectFit="contain"
+              onLoadingComplete={handleImageLoad}
               onError={handleImageError}
             />
           </Card>
@@ -332,21 +335,23 @@ export function BrowserToolView({
               {imageLoading && (
                 <ImageLoader />
               )}
-              <Card className={`p-0 overflow-hidden border ${imageLoading ? 'hidden' : 'block'}`}>
+              <Card className={`p-0 overflow-hidden border relative w-full h-full ${imageLoading ? 'hidden' : 'block'}`}>
                 {screenshotUrl ? (
-                  <img
+                  <Image
                     src={screenshotUrl}
                     alt="Browser Screenshot"
-                    className="max-w-full max-h-full object-contain"
-                    onLoad={handleImageLoad}
+                    layout="fill"
+                    objectFit="contain"
+                    onLoadingComplete={handleImageLoad}
                     onError={handleImageError}
                   />
                 ) : (
-                  <img
+                  <Image
                     src={`data:image/jpeg;base64,${screenshotBase64}`}
                     alt="Browser Screenshot"
-                    className="max-w-full max-h-full object-contain"
-                    onLoad={handleImageLoad}
+                    layout="fill"
+                    objectFit="contain"
+                    onLoadingComplete={handleImageLoad}
                     onError={handleImageError}
                   />
                 )}

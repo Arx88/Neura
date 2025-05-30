@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -47,14 +48,34 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
   }, [zoom, isFitToScreen]);
 
   // Handle image load success
-  const handleImageLoad = () => {
+  const handleImageLoad = (
+    event?: React.SyntheticEvent<HTMLImageElement, Event> | { naturalWidth: number; naturalHeight: number }
+  ) => {
     setImgLoaded(true);
     setImgError(false);
 
-    if (imageRef.current) {
+    let naturalWidth = 0;
+    let naturalHeight = 0;
+
+    if (event && 'naturalWidth' in event && 'naturalHeight' in event) {
+      naturalWidth = event.naturalWidth;
+      naturalHeight = event.naturalHeight;
+    } else if (event && event.target && 'naturalWidth' in event.target && 'naturalHeight' in event.target) {
+      // This case handles the SyntheticEvent from an HTMLImageElement
+      const target = event.target as HTMLImageElement;
+      naturalWidth = target.naturalWidth;
+      naturalHeight = target.naturalHeight;
+    } else if (imageRef.current) {
+      // Fallback for SVGs using the <object> tag's inner <img> or if Next/Image event isn't as expected
+      // This might be less reliable for Next/Image if it doesn't populate imageRef.current as an HTMLImageElement
+      naturalWidth = imageRef.current.naturalWidth;
+      naturalHeight = imageRef.current.naturalHeight;
+    }
+
+    if (naturalWidth && naturalHeight) {
       setImgInfo({
-        width: imageRef.current.naturalWidth,
-        height: imageRef.current.naturalHeight,
+        width: naturalWidth,
+        height: naturalHeight,
         type: isSvg ? 'SVG' : url.split('.').pop()?.toUpperCase() || 'Image',
       });
     }
@@ -256,7 +277,8 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
                   height: '100%',
                 }}
               >
-                {/* Fallback to img if object fails */}
+                {/* Fallback to img if object fails - SVGs primarily use <object> */}
+                {/* For the <object> fallback, we keep <img /> as next/image won't work inside <object> */}
                 <img
                   ref={imageRef}
                   src={url}
@@ -267,16 +289,18 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
                     transition: 'transform 0.2s ease',
                   }}
                   draggable={false}
-                  onLoad={handleImageLoad}
+                  onLoad={() => handleImageLoad()} // Pass event if needed, or handle via ref
                   onError={handleImageError}
                 />
               </object>
             ) : (
-              <img
-                ref={imageRef}
+              <Image
+                // ref is not typically used with Next/Image for direct DOM manipulation like getting naturalWidth
+                // onLoad callback should provide dimensions
                 src={url}
                 alt="Image preview"
-                className="max-w-full max-h-full object-contain"
+                layout="fill"
+                objectFit="contain" // Equivalent to className="object-contain max-w-full max-h-full"
                 style={{
                   transform: imageTransform,
                   transition: 'transform 0.2s ease',
@@ -284,6 +308,7 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
                 draggable={false}
                 onLoad={handleImageLoad}
                 onError={handleImageError}
+                unoptimized={isSvg || undefined} // Potentially unoptimize SVGs if they are passed here directly
               />
             )}
           </div>

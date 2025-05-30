@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { cn } from '@/lib/utils';
 import { marked } from 'marked';
 import { memo, useId, useMemo } from 'react';

@@ -202,7 +202,7 @@ export const FileUploadHandler = forwardRef<
           return prev;
         });
       };
-    }, []);
+    }, [setUploadedFiles]);
 
     const handleFileUpload = () => {
       if (ref && 'current' in ref && ref.current) {

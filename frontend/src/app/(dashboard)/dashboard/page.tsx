@@ -128,7 +128,7 @@ function DashboardContent() {
 
       return () => clearTimeout(timer);
     }
-  }, [autoSubmit, inputValue, isSubmitting]);
+  }, [autoSubmit, inputValue, isSubmitting, handleSubmit]);
 
   return (
     <>

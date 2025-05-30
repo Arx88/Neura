@@ -362,7 +362,7 @@ export function useCachedFile<T = string>(
       case 'text':
       default: return 'text';
     }
-  }, [options.contentType]);
+  }, [options]);
   
   const query = useFileContentQuery(sandboxId, filePath, {
     contentType: mappedContentType,
