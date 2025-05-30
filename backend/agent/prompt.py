@@ -215,7 +215,7 @@ You have the ability to execute operations using both Python and CLI tools:
   plt.close() # Close the plot to free up memory
   
   # The agent should then return the path to be used in the 'ask' tool's attachments
-  print(f'Chart saved to {image_path}')
+  print(f'Chart saved to {{image_path}}')
   "/>
   ```
 - Then, to share with the user:
