@@ -58,7 +58,7 @@ export const useTaskManager = () => {
 
   // --- Mutations ---
 
-  const usePlanTask = ()_=> {
+  const usePlanTask = () => {
     return useMutation<TaskState, Error, { description: string; context?: Record<string, any> }>({
       mutationFn: ({ description, context }) => tasksApi.planTask(description, context),
       onSuccess: (data) => {
