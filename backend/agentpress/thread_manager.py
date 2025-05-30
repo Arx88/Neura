@@ -157,7 +157,7 @@ class ThreadManager:
         thread_id: str,
         system_prompt: Dict[str, Any],
         stream: bool = True,
-        temporary_message: Optional[Dict[str, Any]] = None,
+        temporary_message: Optional[List[Dict[str, Any]]] = None, # Changed to List
         llm_model: str = "gpt-4o",
         llm_temperature: float = 0,
         llm_max_tokens: Optional[int] = None,
@@ -258,7 +258,7 @@ Here are the XML tools available with examples:
         auto_continue_count = 0
 
         # Define inner function to handle a single run
-        async def _run_once(temp_msg=None):
+        async def _run_once(temp_msg_list: Optional[List[Dict[str, Any]]] = None): # Changed parameter name and type
             try:
                 # Ensure processor_config is available in this scope
                 nonlocal processor_config
@@ -300,26 +300,30 @@ Here are the XML tools available with examples:
 
                 # 3. Prepare messages for LLM call + add temporary message if it exists
                 # Use the working_system_prompt which may contain the XML examples
-                prepared_messages = [working_system_prompt]
 
-                # Find the last user message index
-                last_user_index = -1
-                for i, msg in enumerate(messages):
-                    if msg.get('role') == 'user':
-                        last_user_index = i
+                final_messages_for_llm = [working_system_prompt]
 
-                # Insert temporary message before the last user message if it exists
-                if temp_msg and last_user_index >= 0:
-                    prepared_messages.extend(messages[:last_user_index])
-                    prepared_messages.append(temp_msg)
-                    prepared_messages.extend(messages[last_user_index:])
-                    logger.debug("Added temporary message before the last user message")
+                # Find the last user message index in 'messages' from DB
+                last_user_idx_in_db_messages = -1
+                for i, msg_db in enumerate(messages):
+                    if msg_db.get('role') == 'user':
+                        last_user_idx_in_db_messages = i
+
+                if temp_msg_list: # temp_msg_list is Optional[List[Dict[str, Any]]]
+                    if last_user_idx_in_db_messages != -1:
+                        # Insert before the last user message from DB
+                        final_messages_for_llm.extend(messages[:last_user_idx_in_db_messages])
+                        final_messages_for_llm.extend(temp_msg_list)
+                        final_messages_for_llm.extend(messages[last_user_idx_in_db_messages:])
+                        logger.debug(f"Inserted {len(temp_msg_list)} temporary messages before last user message.")
+                    else:
+                        # No user messages in DB, or append temp messages after all DB messages
+                        final_messages_for_llm.extend(messages)
+                        final_messages_for_llm.extend(temp_msg_list)
+                        logger.debug(f"Appended {len(temp_msg_list)} temporary messages to the end.")
                 else:
-                    # If no user message or no temporary message, just add all messages
-                    prepared_messages.extend(messages)
-                    if temp_msg:
-                        prepared_messages.append(temp_msg)
-                        logger.debug("Added temporary message to the end of prepared messages")
+                    # No temporary messages
+                    final_messages_for_llm.extend(messages)
 
                 # 4. Prepare tools for LLM call
                 openapi_tool_schemas = None
@@ -328,8 +332,8 @@ Here are the XML tools available with examples:
                     logger.debug(f"Retrieved {len(openapi_tool_schemas) if openapi_tool_schemas else 0} OpenAPI tool schemas")
 
                 # 5. Make LLM API call
-                logger.debug(f"Prepared messages for LLM call (Thread {thread_id}):")
-                for i, msg in enumerate(prepared_messages):
+                logger.debug(f"Final messages for LLM call (Thread {thread_id}):") # Changed prepared_messages to final_messages_for_llm
+                for i, msg in enumerate(final_messages_for_llm): # Changed prepared_messages to final_messages_for_llm
                     if isinstance(msg, dict):
                         role = msg.get('role')
                         content = msg.get('content')
@@ -359,7 +363,7 @@ Here are the XML tools available with examples:
                 try:
                     if generation:
                         generation.update(
-                            input=prepared_messages,
+                            input=final_messages_for_llm, # Changed prepared_messages to final_messages_for_llm
                             start_time=datetime.datetime.now(datetime.timezone.utc),
                             model=llm_model,
                             model_parameters={
@@ -372,7 +376,7 @@ Here are the XML tools available with examples:
                             }
                         )
                     llm_response = await make_llm_api_call(
-                        prepared_messages, # Pass the potentially modified messages
+                        final_messages_for_llm, # Changed prepared_messages to final_messages_for_llm
                         llm_model,
                         temperature=llm_temperature,
                         max_tokens=llm_max_tokens,
@@ -395,7 +399,7 @@ Here are the XML tools available with examples:
                         llm_response=llm_response,
                         thread_id=thread_id,
                         config=processor_config,
-                        prompt_messages=prepared_messages,
+                        prompt_messages=final_messages_for_llm, # Changed prepared_messages to final_messages_for_llm
                         llm_model=llm_model,
                     )
 
@@ -407,7 +411,7 @@ Here are the XML tools available with examples:
                         llm_response=llm_response,
                         thread_id=thread_id,
                         config=processor_config,
-                        prompt_messages=prepared_messages,
+                        prompt_messages=final_messages_for_llm, # Changed prepared_messages to final_messages_for_llm
                         llm_model=llm_model,
                     )
                     return response_generator # Return the generator
