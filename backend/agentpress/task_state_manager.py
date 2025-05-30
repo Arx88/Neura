@@ -5,7 +5,7 @@ import time
 import asyncio
 
 from backend.agentpress.task_types import TaskState, TaskStorage
-from utils.logger import logger
+from backend.utils.logger import logger # Changed import
 
 # For Partial[TaskState] equivalent if needed for subtask_data without Pydantic/TypedDict features
 # from typing import TypedDict
@@ -121,9 +121,11 @@ class TaskStateManager:
                 parent_task = self._tasks.get(parent_id)
                 if parent_task:
                     parent_task.subtasks.append(task_id)
-                    # No need to save parent_task immediately if storage.save_task for parent will be called
-                    # by its own update cycle. However, direct modification needs saving.
-                    await self.storage.save_task(parent_task) # Save parent if its subtasks list is updated
+                    # Save parent task to persist the new subtask ID in its list
+                    await self.storage.save_task(parent_task)
+                    logger.debug(f"Updated parent task {parent_id} with new subtask {task_id}.")
+                    # Notify listeners for the parent task as it has changed
+                    await self._notify_listeners(parent_id, parent_task)
                 else:
                     logger.warning(f"Parent task {parent_id} not found for new task {task_id}.")
                     # Decide on behavior: raise error, or create orphan task?
@@ -257,15 +259,38 @@ class TaskStateManager:
             return None
 
         # Ensure parent_id is set in the subtask data
-        subtask_creation_data["parentId"] = parent_id
+        # subtask_creation_data["parentId"] = parent_id # This would cause duplicate if parent_id is also a named arg in create_task
 
         # Default name if not provided
-        if "name" not in subtask_creation_data:
-            subtask_creation_data["name"] = f"Subtask of {self._tasks[parent_id].name}"
+        name = subtask_creation_data.pop("name", f"Subtask of {self._tasks[parent_id].name}")
+        description = subtask_creation_data.pop("description", None)
+        # Pass other fields from subtask_creation_data explicitly or ensure create_task handles them well in **kwargs
+        # For now, assuming create_task's signature is mainly name, description, parent_id, dependencies, etc.
+        # and other arbitrary data goes into metadata.
+        # Let's simplify: remove known args from subtask_creation_data and pass the rest as metadata
+        # if create_task is structured to accept **kwargs for metadata or similar.
+        # Current create_task signature: name, description, parent_id, dependencies, assigned_tools, metadata, status, progress
+
+        # Extract known fields for create_task signature
+        dependencies = subtask_creation_data.pop("dependencies", None)
+        assigned_tools = subtask_creation_data.pop("assignedTools", None)
+        status = subtask_creation_data.pop("status", "pending")
+        progress = subtask_creation_data.pop("progress", 0.0)
+        # Any remaining items in subtask_creation_data can be passed as metadata
+        metadata = subtask_creation_data # Remaining items are metadata
 
         try:
             # Use the main create_task method which handles saving and locking
-            subtask = await self.create_task(**subtask_creation_data)
+            subtask = await self.create_task(
+                name=name,
+                description=description,
+                parent_id=parent_id, # Pass explicitly
+                dependencies=dependencies,
+                assigned_tools=assigned_tools,
+                metadata=metadata,
+                status=status,
+                progress=progress
+            )
             # create_task already handles adding to parent's subtasks list if parent_id is provided.
             return subtask
         except Exception as e:

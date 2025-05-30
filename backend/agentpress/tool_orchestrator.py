@@ -6,7 +6,7 @@ import importlib.util # Added
 import inspect # Added
 from typing import Dict, Any, Optional, List, Type # Added List, Type
 from backend.agentpress.tool import Tool, EnhancedToolResult, openapi_schema # Added openapi_schema for dummy tool
-from utils.logger import logger
+from backend.utils.logger import logger # Changed import
 
 # Define a default plugin directory at the module level or pass to orchestrator
 DEFAULT_PLUGINS_DIR = "backend/agentpress/plugins"
@@ -202,8 +202,11 @@ class ToolOrchestrator:
 
             # We need to adapt how parameters are passed if they are not directly kwargs
             # For now, assuming they are kwargs.
-            loop = asyncio.get_event_loop()
-            call_result = await loop.run_in_executor(None, lambda: method_to_call(**params))
+            # loop = asyncio.get_event_loop() # Not needed if method_to_call is already async
+            # The method_to_call is an async method of the tool.
+            # It should return raw data or raise an exception.
+            # actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params)) # This was incorrect for async tool methods
+            actual_result_data = await method_to_call(**params)
 
             # The `method_to_call` should now return an EnhancedToolResult.
             # We need to ensure the tool_id and execution_id are correctly passed into it.
@@ -239,7 +242,7 @@ class ToolOrchestrator:
             # The `ToolOrchestrator` then uses `tool_instance.success_response` or `tool_instance.fail_response`
             # to construct the `EnhancedToolResult`.
 
-            actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params))
+            # actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params)) # This was moved up
 
             # Now, use the tool's success_response to build the EnhancedToolResult
             final_enhanced_result = tool_instance.success_response(
@@ -459,7 +462,7 @@ if __name__ == '__main__':
         # Create a dummy plugin file
         dummy_plugin_content = """
 from backend.agentpress.tool import Tool, openapi_schema
-from utils.logger import logger
+from backend.utils.logger import logger # Changed import for dummy plugin content as well
 
 class TestPluginTool(Tool):
     PLUGIN_TOOL_ID = "FileSystemHelper" # Custom ID for this tool
