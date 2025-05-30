@@ -309,6 +309,7 @@ export function useCachedFile<T = string>(
     }
   }, [cacheKey, options.expiration]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (sandboxId && filePath) {
       getFileContent();
