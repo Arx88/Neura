@@ -333,22 +333,31 @@ class BrowserAutomation:
             playwright = await async_playwright().start()
             print("Playwright started, launching browser...")
             
-            # Use non-headless mode for testing with slower timeouts
+            # Always use headless mode for reliability
             launch_options = {
-                "headless": False,
+                "headless": True,
                 "timeout": 60000
             }
             
             try:
+                self.logger.info("Attempting to launch browser with options: %s", launch_options)
                 self.browser = await playwright.chromium.launch(**launch_options)
-                print("Browser launched successfully")
+                self.logger.info("Browser launched successfully")
             except Exception as browser_error:
-                print(f"Failed to launch browser: {browser_error}")
+                self.logger.warning("Failed to launch browser with initial options: %s", browser_error)
                 # Try with minimal options
-                print("Retrying with minimal options...")
-                launch_options = {"timeout": 90000}
-                self.browser = await playwright.chromium.launch(**launch_options)
-                print("Browser launched with minimal options")
+                self.logger.info("Retrying with minimal options...")
+                minimal_launch_options = {
+                    "headless": True, # Ensure headless is also true here
+                    "timeout": 90000
+                }
+                try:
+                    self.logger.info("Attempting to launch browser with minimal options: %s", minimal_launch_options)
+                    self.browser = await playwright.chromium.launch(**minimal_launch_options)
+                    self.logger.info("Browser launched successfully with minimal options")
+                except Exception as e:
+                    self.logger.error("Failed to launch browser on both attempts. Last error: %s", e)
+                    raise RuntimeError(f"Failed to launch browser after multiple attempts. Last error: {e}")
 
             try:
                 await self.get_current_page()
