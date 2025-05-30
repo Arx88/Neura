@@ -23,6 +23,13 @@ RUN useradd -m -u 1000 appuser && \
 COPY --chown=appuser:appuser requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
+# Add appuser to docker group to allow Docker socket access
+RUN apt-get update && apt-get install -y --no-install-recommends shadow && \
+    groupadd -r docker || true && \
+    usermod -aG docker appuser && \
+    apt-get purge -y --auto-remove shadow && \
+    rm -rf /var/lib/apt/lists/*
+
 # Switch to non-root user
 USER appuser
 
