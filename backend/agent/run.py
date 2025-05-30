@@ -191,7 +191,7 @@ async def run_agent(
                         detected_viz_type = detect_visualization_request(user_text_content)
                         if detected_viz_type:
                             logger.info(f"Detected visualization request: {detected_viz_type} in user message.")
-                            trace.event(name="visualization_request_detected", level="INFO", 
+                            trace.event(name="visualization_request_detected", level="DEFAULT",
                                         status_message=f"Type: {detected_viz_type}", 
                                         input={"user_message": user_text_content})
                             # Construct a system message to hint the LLM
