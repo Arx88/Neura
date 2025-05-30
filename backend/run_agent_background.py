@@ -15,6 +15,10 @@ from services import redis
 from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
+# Imports for sandbox stopping
+from backend.sandbox.sandbox import get_or_start_sandbox, daytona
+from daytona_api_client.models.workspace_state import WorkspaceState
+
 
 rabbitmq_host = os.getenv('RABBITMQ_HOST', 'rabbitmq')
 rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
@@ -230,6 +234,44 @@ async def run_agent_background(
 
         # Remove the instance-specific active run key
         await _cleanup_redis_instance_key(agent_run_id)
+
+        # --- Add Sandbox Stopping Logic ---
+        logger.info(f"Attempting to stop sandbox for project_id: {project_id} after agent run {agent_run_id} completion.")
+        try:
+            client = await db.client 
+            project_result = await client.table('projects').select('sandbox').eq('project_id', project_id).maybe_single().execute()
+            
+            sandbox_id_to_stop = None
+            if project_result and project_result.data and project_result.data.get('sandbox'):
+                sandbox_id_to_stop = project_result.data['sandbox'].get('id')
+            else:
+                logger.warning(f"Could not find project or sandbox information for project_id: {project_id} to stop sandbox.")
+
+            if sandbox_id_to_stop:
+                logger.info(f"Found sandbox_id: {sandbox_id_to_stop} for project_id: {project_id}. Attempting to stop.")
+                try:
+                    # get_or_start_sandbox might start it if it's stopped/archived, 
+                    # but daytona.stop should handle already stopped instances gracefully.
+                    sandbox_instance = await get_or_start_sandbox(sandbox_id_to_stop)
+                    if sandbox_instance:
+                        current_state = sandbox_instance.info().state
+                        logger.info(f"Sandbox {sandbox_id_to_stop} current state: {current_state}")
+                        # Check if it's already in a non-running state
+                        if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
+                            logger.info(f"Stopping sandbox {sandbox_id_to_stop}...")
+                            await daytona.stop(sandbox_instance) # Use await for async daytona methods
+                            logger.info(f"Successfully initiated stop for sandbox {sandbox_id_to_stop}.")
+                        else:
+                            logger.info(f"Sandbox {sandbox_id_to_stop} is already in a non-running state ({current_state}). No stop action needed.")
+                    else:
+                        logger.warning(f"Could not retrieve sandbox instance for sandbox_id: {sandbox_id_to_stop}.")
+                except Exception as e:
+                    logger.error(f"Error stopping sandbox {sandbox_id_to_stop}: {str(e)}", exc_info=True)
+            else:
+                logger.info(f"No sandbox_id found for project_id: {project_id}, skipping sandbox stop.")
+        except Exception as e:
+            logger.error(f"Outer error during sandbox stopping logic for project_id {project_id}: {str(e)}", exc_info=True)
+        # --- End Sandbox Stopping Logic ---
 
         logger.info(f"Agent run background task fully completed for: {agent_run_id} (Instance: {instance_id}) with final status: {final_status}")
 

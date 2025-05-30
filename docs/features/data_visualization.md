@@ -66,7 +66,33 @@ The recommended approach for displaying visualizations on the frontend is:
     ```
 *   The `sandbox="allow-scripts"` attribute on the iframe may be necessary if the generated charts are interactive (e.g., from Plotly). For static images (like Matplotlib PNGs), fewer permissions might be needed, but `allow-scripts` provides flexibility for future interactive chart types.
 
-## 5. Future Enhancements
+## 5. Sandbox Lifecycle & Resource Management
+
+To effectively manage resources and prevent excessive memory or quota consumption by Daytona sandboxes, several automated mechanisms are implemented throughout the sandbox lifecycle. While these processes are generally applicable to all sandboxes used by the agent, they are particularly relevant when considering features like data visualization that rely heavily on sandbox operations.
+
+*   **Automatic Stopping of Sandboxes**:
+    *   When an agent run, processed by `backend/run_agent_background.py`, concludes (whether it completes successfully, fails, or is explicitly stopped by a user/system signal), the associated Daytona sandbox is automatically sent a "stop" command.
+    *   This action transitions the sandbox from a running state to a stopped state, conserving active resources and making it eligible for subsequent archival processes.
+
+*   **Automated Archiving of Stopped Sandboxes**:
+    *   The system includes utility scripts (e.g., `archive_inactive_sandboxes.py`, `archive_old_sandboxes.py`) that are typically run on a schedule.
+    *   These scripts identify *stopped* sandboxes that have been inactive for a certain period or that have exceeded a defined age.
+    *   Once identified, these sandboxes are moved to an "archived" state. Archiving further reduces resource consumption while still allowing for potential later retrieval if needed. The automatic stopping feature (mentioned above) significantly enhances the effectiveness of these archiving scripts by ensuring sandboxes are promptly made eligible for archival upon completion of their active use.
+
+*   **Automated Deletion of Archived Sandboxes**:
+    *   A new utility script, `backend/utils/scripts/delete_old_archived_sandboxes.py`, has been introduced to complete the sandbox lifecycle.
+    *   **Purpose**: This script identifies and deletes sandboxes that have remained in the "archived" state for a configurable duration (default is typically 7 days, adjustable via the `--days-archived` argument).
+    *   **Operation**: It iterates through all sandboxes, checks their state and the duration for which they have been archived, and then proceeds with deletion if the criteria are met.
+    *   **Controls**: The script includes important operational controls:
+        *   `--dry-run`: Allows administrators to preview which sandboxes *would be* deleted without actually performing any deletions.
+        *   `--confirm`: Can be used to bypass interactive confirmation prompts, suitable for automated cron jobs or scripted execution.
+    *   This script ensures that sandboxes do not remain in the archived state indefinitely, freeing up storage and other resources associated with Daytona.
+
+*   **Lifecycle Summary**: Active Use -> Auto-Stopped (on agent run completion) -> Auto-Archived (by scheduled scripts based on inactivity/age) -> Auto-Deleted (by scheduled script based on time in archived state).
+
+*   **Importance**: These automated lifecycle management mechanisms are crucial for maintaining the health of the Daytona environment, ensuring efficient resource utilization, and preventing the accumulation of unused sandboxes, thereby keeping operational costs and system load within manageable limits.
+
+## 6. Future Enhancements
 
 This feature lays the groundwork for more advanced data visualization capabilities. Potential future enhancements include:
 
