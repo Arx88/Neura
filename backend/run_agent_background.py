@@ -16,7 +16,7 @@ from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
 # Imports for sandbox stopping
-from backend.sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
+from sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
@@ -304,7 +304,7 @@ async def run_agent_background(
                         else:
                             logger.info(f"Using local_sandbox to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
                             # Ensure local_sandbox is imported for this scope
-                            from backend.sandbox.local_sandbox import local_sandbox
+                            from sandbox.local_sandbox import local_sandbox
                             current_state = sandbox_instance['info']()['state'] # local_sandbox returns a dict
                             logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
                             # Common Docker states for a stopped container are 'exited' or sometimes 'stopped' (though 'exited' is more canonical for normally stopped)
