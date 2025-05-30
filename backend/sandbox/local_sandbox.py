@@ -14,48 +14,58 @@ class LocalSandbox:
         sandbox_id = project_id or str(uuid.uuid4())
         self.logger.info(f"Creando sandbox local con ID: {sandbox_id}")
 
-        # Configuración del contenedor similar a la de DAYTONA
-        container = self.client.containers.run(
-            image=config.SANDBOX_IMAGE_NAME,
-            detach=True,
-            environment={
-                "CHROME_PERSISTENT_SESSION": "true",
-                "RESOLUTION": "1024x768x24",
-                "RESOLUTION_WIDTH": "1024",
-                "RESOLUTION_HEIGHT": "768",
-                "VNC_PASSWORD": password or "suna",
-                "ANONYMIZED_TELEMETRY": "false",
-                "CHROME_DEBUGGING_PORT": "9222",
-                "CHROME_DEBUGGING_HOST": "localhost",
-            },
-            ports={
-                '5900/tcp': None,  # VNC
-                '9222/tcp': None,  # Chrome debugging
-            },
-            name=f"suna-sandbox-{sandbox_id}",
-            labels={
+        try:
+            # ... (existing info log about creating sandbox) ...
+            self.logger.info(f"Attempting to run Docker container for sandbox: {sandbox_id} with image: {config.SANDBOX_IMAGE_NAME}")
+            container = self.client.containers.run(
+                image=config.SANDBOX_IMAGE_NAME,
+                detach=True,
+                environment={
+                    "CHROME_PERSISTENT_SESSION": "true",
+                    "RESOLUTION": "1024x768x24",
+                    "RESOLUTION_WIDTH": "1024",
+                    "RESOLUTION_HEIGHT": "768",
+                    "VNC_PASSWORD": password or "suna",
+                    "ANONYMIZED_TELEMETRY": "false",
+                    "CHROME_DEBUGGING_PORT": "9222",
+                    "CHROME_DEBUGGING_HOST": "localhost",
+                },
+                ports={
+                    '5900/tcp': None,  # VNC
+                    '9222/tcp': None,  # Chrome debugging
+                },
+                name=f"suna-sandbox-{sandbox_id}",
+                labels={
+                    'id': sandbox_id,
+                    'type': 'suna-sandbox'
+                }
+            )
+            self.logger.info(f"Successfully ran Docker container: {container.id} for sandbox: {sandbox_id}")
+
+            self._setup_visualization_environment(container)
+            self._start_supervisord(container)
+
+            return {
                 'id': sandbox_id,
-                'type': 'suna-sandbox'
+                'container': container,
+                'info': lambda: self._get_container_info(container),
+                'process': {
+                    'create_session': lambda session_id: None,
+                    'execute_session_command': lambda session_id, command: self._execute_command(container, command),
+                    'delete_session': lambda session_id: None,
+                    'get_session_command_logs': lambda session_id, cmd_id: ""
+                }
             }
-        )
-
-        # Configurar el entorno de visualización
-        self._setup_visualization_environment(container)
-
-        # Iniciar supervisord
-        self._start_supervisord(container)
-
-        return {
-            'id': sandbox_id,
-            'container': container,
-            'info': lambda: self._get_container_info(container),
-            'process': {
-                'create_session': lambda session_id: None,
-                'execute_session_command': lambda session_id, command: self._execute_command(container, command),
-                'delete_session': lambda session_id: None,
-                'get_session_command_logs': lambda session_id, cmd_id: ""
-            }
-        }
+        except docker.errors.ImageNotFound as img_err:
+            self.logger.critical(f"DOCKER IMAGE NOT FOUND for sandbox {sandbox_id}: {str(img_err)}. Explanation: {getattr(img_err, 'explanation', 'N/A')}. Ensure image '{config.SANDBOX_IMAGE_NAME}' is available.", exc_info=True)
+            raise
+        except docker.errors.APIError as api_err:
+            self.logger.critical(f"DOCKER API ERROR during container run for sandbox {sandbox_id}: {str(api_err)}. Explanation: {getattr(api_err, 'explanation', 'N/A')}", exc_info=True)
+            raise
+        except Exception as e:
+            # This will catch errors from _setup_visualization_environment or _start_supervisord if they are not docker.errors.APIError
+            self.logger.error(f"Error in LocalSandbox.create for {sandbox_id} after container run attempt or during setup: {str(e)}", exc_info=True)
+            raise
 
     def get_current_sandbox(self, sandbox_id):
         """Obtener un sandbox existente por ID"""
