@@ -328,6 +328,33 @@ Here are the XML tools available with examples:
                     logger.debug(f"Retrieved {len(openapi_tool_schemas) if openapi_tool_schemas else 0} OpenAPI tool schemas")
 
                 # 5. Make LLM API call
+                logger.debug(f"Prepared messages for LLM call (Thread {thread_id}):")
+                for i, msg in enumerate(prepared_messages):
+                    if isinstance(msg, dict):
+                        role = msg.get('role')
+                        content = msg.get('content')
+                        content_type = type(content).__name__
+                        content_preview = str(content)[:150] # Preview first 150 chars
+                        if isinstance(content, list): # If content itself is a list (e.g. for multimodal)
+                            content_parts_preview = []
+                            for part in content:
+                                if isinstance(part, dict):
+                                    part_type = part.get('type', 'unknown_part')
+                                    if part_type == 'text':
+                                        part_preview = f"text: {str(part.get('text',''))[:50]}..."
+                                    elif part_type == 'image_url':
+                                        part_preview = f"image_url: {str(part.get('image_url',{}).get('url',''))[:50]}..."
+                                    else:
+                                        part_preview = f"{part_type}: {str(part)[:50]}..."
+                                    content_parts_preview.append(part_preview)
+                                else:
+                                    content_parts_preview.append(f"non_dict_part: {str(part)[:50]}...")
+                            content_preview = f"[{', '.join(content_parts_preview)}]"
+
+                        logger.debug(f"  Msg {i}: Role='{role}', ContentType='{content_type}', ContentPreview='{content_preview}'")
+                    else:
+                        # This is the problematic case we want to catch
+                        logger.error(f"  Msg {i}: UNEXPECTED TYPE! Expected dict, got {type(msg).__name__}. Message: {str(msg)[:200]}")
                 logger.debug("Making LLM API call")
                 try:
                     if generation:
