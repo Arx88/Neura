@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from abc import ABC
 import json
 import inspect
+import time
 from enum import Enum
 from utils.logger import logger
 
@@ -83,15 +84,40 @@ class ToolSchema:
     xml_schema: Optional[XMLTagSchema] = None
 
 @dataclass
-class ToolResult:
-    """Container for tool execution results.
-    
-    Attributes:
-        success (bool): Whether the tool execution succeeded
-        output (str): Output message or error description
-    """
-    success: bool
-    output: str
+class EnhancedToolResult:
+    """Enhanced container for tool execution results."""
+    tool_id: str
+    execution_id: str
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    status: str = "running"  # running, completed, failed, cancelled
+    progress: float = 0.0  # 0.0 to 1.0
+    result: Optional[Any] = None
+    error: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
+    resource_usage: Dict[str, Any] = field(default_factory=dict)
+    artifacts: List[str] = field(default_factory=list) # List of file paths or URLs
+
+    def update_progress(self, progress: float, status: Optional[str] = None):
+        """Update the progress and optionally the status."""
+        self.progress = progress
+        if status:
+            self.status = status
+        logger.debug(f"Tool {self.tool_id} (Exec ID: {self.execution_id}) progress: {self.progress}%, status: {self.status}")
+
+    def complete(self, result: Optional[Any] = None, error: Optional[str] = None, warnings: Optional[List[str]] = None):
+        """Mark the tool execution as completed or failed."""
+        self.end_time = time.time()
+        if error:
+            self.status = "failed"
+            self.error = error
+            logger.error(f"Tool {self.tool_id} (Exec ID: {self.execution_id}) failed: {self.error}")
+        else:
+            self.status = "completed"
+            self.result = result
+            logger.info(f"Tool {self.tool_id} (Exec ID: {self.execution_id}) completed successfully.")
+        if warnings:
+            self.warnings.extend(warnings)
 
 class Tool(ABC):
     """Abstract base class for all tools.
@@ -129,33 +155,51 @@ class Tool(ABC):
         """
         return self._schemas
 
-    def success_response(self, data: Union[Dict[str, Any], str]) -> ToolResult:
+    def success_response(self, tool_id: str, execution_id: str, data: Union[Dict[str, Any], str]) -> EnhancedToolResult:
         """Create a successful tool result.
         
         Args:
+            tool_id: The ID of the tool.
+            execution_id: The ID of this execution instance.
             data: Result data (dictionary or string)
             
         Returns:
-            ToolResult with success=True and formatted output
+            EnhancedToolResult with status='completed' and formatted result
         """
         if isinstance(data, str):
             text = data
         else:
             text = json.dumps(data, indent=2)
         logger.debug(f"Created success response for {self.__class__.__name__}")
-        return ToolResult(success=True, output=text)
+        return EnhancedToolResult(
+            tool_id=tool_id,
+            execution_id=execution_id,
+            status="completed",
+            result=text,
+            progress=1.0,
+            end_time=time.time()
+        )
 
-    def fail_response(self, msg: str) -> ToolResult:
+    def fail_response(self, tool_id: str, execution_id: str, msg: str) -> EnhancedToolResult:
         """Create a failed tool result.
         
         Args:
+            tool_id: The ID of the tool.
+            execution_id: The ID of this execution instance.
             msg: Error message describing the failure
             
         Returns:
-            ToolResult with success=False and error message
+            EnhancedToolResult with status='failed' and error message
         """
         logger.debug(f"Tool {self.__class__.__name__} returned failed result: {msg}")
-        return ToolResult(success=False, output=msg)
+        return EnhancedToolResult(
+            tool_id=tool_id,
+            execution_id=execution_id,
+            status="failed",
+            error=msg,
+            progress=1.0, # Or should this be the progress it failed at? For now, 1.0
+            end_time=time.time()
+        )
 
 def _add_schema(func, schema: ToolSchema):
     """Helper to add schema to a function."""

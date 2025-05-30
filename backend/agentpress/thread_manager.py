@@ -14,7 +14,7 @@ import json
 from typing import List, Dict, Any, Optional, Type, Union, AsyncGenerator, Literal
 from services.llm import make_llm_api_call
 from agentpress.tool import Tool
-from agentpress.tool_registry import ToolRegistry
+from agentpress.tool_orchestrator import ToolOrchestrator # Changed import
 from agentpress.context_manager import ContextManager
 from agentpress.response_processor import (
     ResponseProcessor,
@@ -42,20 +42,23 @@ class ThreadManager:
 
         """
         self.db = DBConnection()
-        self.tool_registry = ToolRegistry()
+        self.tool_orchestrator = ToolOrchestrator() # Changed attribute
         self.trace = trace
         if not self.trace:
             self.trace = langfuse.trace(name="anonymous:thread_manager")
         self.response_processor = ResponseProcessor(
-            tool_registry=self.tool_registry,
+            tool_orchestrator=self.tool_orchestrator, # Changed argument
             add_message_callback=self.add_message,
             trace=self.trace
         )
         self.context_manager = ContextManager()
 
-    def add_tool(self, tool_class: Type[Tool], function_names: Optional[List[str]] = None, **kwargs):
-        """Add a tool to the ThreadManager."""
-        self.tool_registry.register_tool(tool_class, function_names, **kwargs)
+    def add_tool(self, tool_instance: Tool, tool_id: Optional[str] = None): # Changed signature
+        """Add a tool instance to the ThreadManager."""
+        # ToolOrchestrator expects an instance and an optional tool_id.
+        # The old ToolRegistry took a class and instantiated it.
+        # We now require the caller of add_tool to provide an instance.
+        self.tool_orchestrator.register_tool(tool_instance, tool_id)
 
     async def add_message(
         self,
@@ -213,10 +216,27 @@ class ThreadManager:
 
         # Add XML examples to system prompt if requested, do this only ONCE before the loop
         if include_xml_examples and processor_config.xml_tool_calling:
-            xml_examples = self.tool_registry.get_xml_examples()
-            if xml_examples:
-                examples_content = """
---- XML TOOL CALLING ---
+            # xml_examples is now a Dict[str, str] from tool_orchestrator.get_xml_examples()
+            # For direct use in prompt, get_xml_schemas_for_llm() might be better as it returns a formatted string.
+            # Let's use get_xml_schemas_for_llm() for a more direct replacement of functionality.
+            xml_prompt_string = self.tool_orchestrator.get_xml_schemas_for_llm()
+            if xml_prompt_string: # Check if the string is not empty
+                examples_content = f"\n{xml_prompt_string}\n" # Ensure newlines if there's content
+                # The original code appended a long static header.
+                # get_xml_schemas_for_llm() already includes a header.
+                # So, we just use its output.
+                # examples_content = """
+# --- XML TOOL CALLING ---
+
+# In this environment you have access to a set of tools you can use to answer the user's question. The tools are specified in XML format.
+# Format your tool calls using the specified XML tags. Place parameters marked as 'attribute' within the opening tag (e.g., `<tag attribute='value'>`). Place parameters marked as 'content' between the opening and closing tags. Place parameters marked as 'element' within their own child tags (e.g., `<tag><element>value</element></tag>`). Refer to the examples provided below for the exact structure of each tool.
+# String and scalar parameters should be specified as attributes, while content goes between tags.
+# Note that spaces for string values are not stripped. The output is parsed with regular expressions.
+
+# Here are the XML tools available with examples:
+# """
+                # for tag_name, example in xml_examples.items(): # xml_examples is a dict
+                #     examples_content += f"<{tag_name}> Example: {example}\\n"
 
 In this environment you have access to a set of tools you can use to answer the user's question. The tools are specified in XML format.
 Format your tool calls using the specified XML tags. Place parameters marked as 'attribute' within the opening tag (e.g., `<tag attribute='value'>`). Place parameters marked as 'content' between the opening and closing tags. Place parameters marked as 'element' within their own child tags (e.g., `<tag><element>value</element></tag>`). Refer to the examples provided below for the exact structure of each tool.
@@ -273,27 +293,27 @@ Here are the XML tools available with examples:
                     from litellm import token_counter
                     # Use the potentially modified working_system_prompt for token counting
                     token_count = token_counter(model=llm_model, messages=[working_system_prompt] + messages)
-                    token_threshold = self.context_manager.token_threshold
+                        token_threshold = self.context_manager.token_threshold # Ensure this attribute exists or is defined
                     logger.info(f"Thread {thread_id} token count: {token_count}/{token_threshold} ({(token_count/token_threshold)*100:.1f}%)")
 
-                    # if token_count >= token_threshold and enable_context_manager:
-                    #     logger.info(f"Thread token count ({token_count}) exceeds threshold ({token_threshold}), summarizing...")
-                    #     summarized = await self.context_manager.check_and_summarize_if_needed(
-                    #         thread_id=thread_id,
-                    #         add_message_callback=self.add_message,
-                    #         model=llm_model,
-                    #         force=True
-                    #     )
-                    #     if summarized:
-                    #         logger.info("Summarization complete, fetching updated messages with summary")
-                    #         messages = await self.get_llm_messages(thread_id)
-                    #         # Recount tokens after summarization, using the modified prompt
-                    #         new_token_count = token_counter(model=llm_model, messages=[working_system_prompt] + messages)
-                    #         logger.info(f"After summarization: token count reduced from {token_count} to {new_token_count}")
-                    #     else:
-                    #         logger.warning("Summarization failed or wasn't needed - proceeding with original messages")
-                    # elif not enable_context_manager:
-                    #     logger.info("Automatic summarization disabled. Skipping token count check and summarization.")
+                        if token_count >= token_threshold and enable_context_manager:
+                            logger.info(f"Thread token count ({token_count}) exceeds threshold ({token_threshold}), summarizing...")
+                            summarized = await self.context_manager.check_and_summarize_if_needed(
+                                thread_id=thread_id,
+                                add_message_callback=self.add_message,
+                                model=llm_model,
+                                force=True # Consider if force should always be true here
+                            )
+                            if summarized:
+                                logger.info("Summarization complete, fetching updated messages with summary")
+                                messages = await self.get_llm_messages(thread_id)
+                                # Recount tokens after summarization, using the modified prompt
+                                new_token_count = token_counter(model=llm_model, messages=[working_system_prompt] + messages)
+                                logger.info(f"After summarization: token count reduced from {token_count} to {new_token_count}")
+                            else:
+                                logger.warning("Summarization failed or wasn't needed - proceeding with original messages")
+                        elif not enable_context_manager:
+                            logger.info("Automatic summarization disabled. Skipping token count check and summarization.")
 
                 except Exception as e:
                     logger.error(f"Error counting tokens or summarizing: {str(e)}")
@@ -328,8 +348,9 @@ Here are the XML tools available with examples:
                 # 4. Prepare tools for LLM call
                 openapi_tool_schemas = None
                 if processor_config.native_tool_calling:
-                    openapi_tool_schemas = self.tool_registry.get_openapi_schemas()
-                    logger.debug(f"Retrieved {len(openapi_tool_schemas) if openapi_tool_schemas else 0} OpenAPI tool schemas")
+                    # Use the LLM-specific schema getter from ToolOrchestrator
+                    openapi_tool_schemas = self.tool_orchestrator.get_tool_schemas_for_llm()
+                    logger.debug(f"Retrieved {len(openapi_tool_schemas) if openapi_tool_schemas else 0} OpenAPI tool schemas for LLM.")
 
                 # 5. Make LLM API call
                 logger.debug(f"Final messages for LLM call (Thread {thread_id}):") # Changed prepared_messages to final_messages_for_llm
