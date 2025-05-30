@@ -1,39 +1,3 @@
-import sys
-import os
-import logging
-
-# Configure a temporary logger for diagnostics if the main logger isn't ready
-diag_logger = logging.getLogger('run_agent_background_diag')
-diag_handler = logging.StreamHandler(sys.stdout)
-diag_formatter = logging.Formatter('[DIAGNOSTIC] %(asctime)s - %(levelname)s - %(message)s')
-diag_handler.setFormatter(diag_formatter)
-diag_logger.addHandler(diag_handler)
-diag_logger.setLevel(logging.INFO)
-
-diag_logger.info(f"--- DIAGNOSTICS START for run_agent_background.py ---")
-diag_logger.info(f"Initial Current Working Directory: {os.getcwd()}")
-diag_logger.info(f"Initial sys.path: {sys.path}")
-
-try:
-    diag_logger.info(f"Contents of /app: {os.listdir('/app')}")
-except Exception as e:
-    diag_logger.error(f"Error listing /app: {e}")
-
-diag_logger.info(f"Exists /app/backend: {os.path.exists('/app/backend')}")
-diag_logger.info(f"Is dir /app/backend: {os.path.isdir('/app/backend')}")
-
-project_root = '/app'
-diag_logger.info(f"Attempting to add '{project_root}' to sys.path...")
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-    diag_logger.info(f"'{project_root}' was ADDED to sys.path.")
-else:
-    diag_logger.info(f"'{project_root}' was ALREADY in sys.path.")
-
-diag_logger.info(f"sys.path AFTER modification attempt: {sys.path}")
-diag_logger.info(f"--- DIAGNOSTICS END for run_agent_background.py ---")
-
-# Original script content follows...
 import sentry
 import asyncio
 import json
@@ -52,7 +16,7 @@ from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
 # Imports for sandbox stopping
-from sandbox.sandbox import get_or_start_sandbox, daytona
+from sandbox.sandbox import get_or_start_sandbox, daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
