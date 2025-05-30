@@ -71,6 +71,7 @@ async def run_agent(
 ):
     """Run the development agent with specified configuration."""
     try:
+        logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id=trace.id if trace else 'N/A', model_name={model_name}, stream={stream}")
         logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
 
         if not trace:
