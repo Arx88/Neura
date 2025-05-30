@@ -227,8 +227,7 @@ export function useAgentStream(
 
   // --- Stream Callback Handlers ---
 
-  const handleStreamMessage = useCallback(
-    useCallback((rawData: string) => {
+  const handleStreamMessage = useCallback((rawData: string) => {
       if (!isMountedRef.current) return;
       (window as any).lastStreamMessage = Date.now(); // Keep track of last message time
 
@@ -387,7 +386,7 @@ export function useAgentStream(
       callbacks,
       finalizeStream,
       updateStatus,
-    ],
+    ]
   );
 
   const handleStreamError = useCallback(
