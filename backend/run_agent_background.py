@@ -1,15 +1,40 @@
 import sys
 import os
+import logging
 
-# Ensure the '/app' directory (project root inside the container) is in sys.path
-# This allows top-level imports like 'from backend...' , 'from utils...' etc.
-# when the script is run by Dramatiq, which might not inherit Python's default
-# behavior of adding the script's CWD to sys.path for module resolution.
-project_root = '/app' # Standardized in Dockerfile
+# Configure a temporary logger for diagnostics if the main logger isn't ready
+diag_logger = logging.getLogger('run_agent_background_diag')
+diag_handler = logging.StreamHandler(sys.stdout)
+diag_formatter = logging.Formatter('[DIAGNOSTIC] %(asctime)s - %(levelname)s - %(message)s')
+diag_handler.setFormatter(diag_formatter)
+diag_logger.addHandler(diag_handler)
+diag_logger.setLevel(logging.INFO)
+
+diag_logger.info(f"--- DIAGNOSTICS START for run_agent_background.py ---")
+diag_logger.info(f"Initial Current Working Directory: {os.getcwd()}")
+diag_logger.info(f"Initial sys.path: {sys.path}")
+
+try:
+    diag_logger.info(f"Contents of /app: {os.listdir('/app')}")
+except Exception as e:
+    diag_logger.error(f"Error listing /app: {e}")
+
+diag_logger.info(f"Exists /app/backend: {os.path.exists('/app/backend')}")
+diag_logger.info(f"Is dir /app/backend: {os.path.isdir('/app/backend')}")
+
+# The previous sys.path modification attempt:
+project_root = '/app'
+diag_logger.info(f"Attempting to add '{project_root}' to sys.path...")
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+    diag_logger.info(f"'{project_root}' was ADDED to sys.path.")
+else:
+    diag_logger.info(f"'{project_root}' was ALREADY in sys.path.")
 
-# The rest of the script's imports and code will follow.
+diag_logger.info(f"sys.path AFTER modification attempt: {sys.path}")
+diag_logger.info(f"--- DIAGNOSTICS END for run_agent_background.py ---")
+
+# Original script content follows...
 import sentry
 import asyncio
 import json
