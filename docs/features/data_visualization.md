@@ -70,9 +70,10 @@ The recommended approach for displaying visualizations on the frontend is:
 
 To effectively manage resources and prevent excessive memory or quota consumption by Daytona sandboxes, several automated mechanisms are implemented throughout the sandbox lifecycle. While these processes are generally applicable to all sandboxes used by the agent, they are particularly relevant when considering features like data visualization that rely heavily on sandbox operations.
 
-*   **Automatic Stopping of Sandboxes**:
-    *   When an agent run, processed by `backend/run_agent_background.py`, concludes (whether it completes successfully, fails, or is explicitly stopped by a user/system signal), the associated Daytona sandbox is automatically sent a "stop" command.
-    *   This action transitions the sandbox from a running state to a stopped state, conserving active resources and making it eligible for subsequent archival processes.
+*   **Actions on Agent Run Completion**:
+    *   When an agent run, processed by `backend/run_agent_background.py`, concludes (whether it completes successfully, fails, or is explicitly stopped by a user/system signal), several actions are taken:
+        *   **Workspace Cleanup**: First, an automated cleanup process is initiated within the `/workspace` directory of the sandbox. This process attempts to delete common temporary files (e.g., `*.tmp`, `temp_*`, `*_temp.*`) and any empty directories. This helps to reclaim space and maintain a tidy environment before the sandbox is stopped.
+        *   **Automatic Stopping**: Following the workspace cleanup, the associated Daytona sandbox is automatically sent a "stop" command. This action transitions the sandbox from a running state to a stopped state, conserving active resources and making it eligible for subsequent archival processes.
 
 *   **Automated Archiving of Stopped Sandboxes**:
     *   The system includes utility scripts (e.g., `archive_inactive_sandboxes.py`, `archive_old_sandboxes.py`) that are typically run on a schedule.

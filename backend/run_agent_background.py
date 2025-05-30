@@ -18,6 +18,7 @@ from services.langfuse import langfuse
 # Imports for sandbox stopping
 from backend.sandbox.sandbox import get_or_start_sandbox, daytona
 from daytona_api_client.models.workspace_state import WorkspaceState
+from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
 
 rabbitmq_host = os.getenv('RABBITMQ_HOST', 'rabbitmq')
@@ -234,44 +235,81 @@ async def run_agent_background(
 
         # Remove the instance-specific active run key
         await _cleanup_redis_instance_key(agent_run_id)
-
-        # --- Add Sandbox Stopping Logic ---
-        logger.info(f"Attempting to stop sandbox for project_id: {project_id} after agent run {agent_run_id} completion.")
+        
+        # --- Workspace Cleanup and Sandbox Stopping ---
         try:
+            logger.info(f"Starting workspace cleanup and sandbox stop for project: {project_id} in run {agent_run_id}")
             client = await db.client 
             project_result = await client.table('projects').select('sandbox').eq('project_id', project_id).maybe_single().execute()
-            
-            sandbox_id_to_stop = None
-            if project_result and project_result.data and project_result.data.get('sandbox'):
-                sandbox_id_to_stop = project_result.data['sandbox'].get('id')
-            else:
-                logger.warning(f"Could not find project or sandbox information for project_id: {project_id} to stop sandbox.")
+            sandbox_id_for_cleanup_and_stop = None
 
-            if sandbox_id_to_stop:
-                logger.info(f"Found sandbox_id: {sandbox_id_to_stop} for project_id: {project_id}. Attempting to stop.")
+            if project_result and project_result.data and project_result.data.get('sandbox'):
+                sandbox_id_for_cleanup_and_stop = project_result.data['sandbox'].get('id')
+            
+            if sandbox_id_for_cleanup_and_stop:
+                sandbox_instance = None # Define here to ensure it's in scope for stopping if cleanup fails partially
                 try:
-                    # get_or_start_sandbox might start it if it's stopped/archived, 
-                    # but daytona.stop should handle already stopped instances gracefully.
-                    sandbox_instance = await get_or_start_sandbox(sandbox_id_to_stop)
+                    logger.info(f"Fetching sandbox instance for ID: {sandbox_id_for_cleanup_and_stop}")
+                    sandbox_instance = await get_or_start_sandbox(sandbox_id_for_cleanup_and_stop)
+                    
                     if sandbox_instance:
+                        # 1. Perform Workspace Cleanup
+                        logger.info(f"Attempting workspace cleanup for sandbox: {sandbox_id_for_cleanup_and_stop}")
+                        cleanup_session_id = f"cleanup_ws_{uuid.uuid4().hex[:8]}"
+                        try:
+                            sandbox_instance.process.create_session(cleanup_session_id)
+                            logger.debug(f"Created session {cleanup_session_id} for workspace cleanup.")
+                            
+                            cleanup_commands = [
+                                "find /workspace -type f -name '*.tmp' -print -delete",
+                                "find /workspace -type f -name 'temp_*' -print -delete",
+                                "find /workspace -type f -name '*_temp.*' -print -delete",
+                                "find /workspace -depth -type d -empty -print -delete"
+                            ]
+                            
+                            for cmd in cleanup_commands:
+                                logger.debug(f"Executing cleanup command in session {cleanup_session_id}: {cmd}")
+                                exec_req = SessionExecuteRequest(command=cmd, var_async=False, cwd="/workspace")
+                                response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
+                                # Getting logs for find -print -delete can be very verbose, only get if non-zero exit or for debugging
+                                if response.exit_code == 0:
+                                    logger.info(f"Cleanup command '{cmd}' successful.")
+                                    # Optionally log output if needed:
+                                    # logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    # logger.debug(f"Logs for '{cmd}': {logs}")
+                                else:
+                                    logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response.exit_code}. Logs: {logs}")
+                        except Exception as e_cleanup_ws:
+                            logger.error(f"Error during workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
+                        finally:
+                            try:
+                                logger.debug(f"Deleting cleanup session {cleanup_session_id} for sandbox {sandbox_id_for_cleanup_and_stop}.")
+                                sandbox_instance.process.delete_session(cleanup_session_id)
+                            except Exception as e_del_session:
+                                logger.error(f"Error deleting cleanup session {cleanup_session_id}: {e_del_session}", exc_info=True)
+                                # Pass here as we don't want this to hide original error or stop sandbox stopping
+
+                        # 2. Stop the Sandbox
+                        logger.info(f"Attempting to stop sandbox: {sandbox_id_for_cleanup_and_stop} after cleanup.")
                         current_state = sandbox_instance.info().state
-                        logger.info(f"Sandbox {sandbox_id_to_stop} current state: {current_state}")
-                        # Check if it's already in a non-running state
+                        logger.info(f"Sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
                         if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
-                            logger.info(f"Stopping sandbox {sandbox_id_to_stop}...")
-                            await daytona.stop(sandbox_instance) # Use await for async daytona methods
-                            logger.info(f"Successfully initiated stop for sandbox {sandbox_id_to_stop}.")
+                            await daytona.stop(sandbox_instance)
+                            logger.info(f"Successfully sent stop command to sandbox {sandbox_id_for_cleanup_and_stop}")
                         else:
-                            logger.info(f"Sandbox {sandbox_id_to_stop} is already in a non-running state ({current_state}). No stop action needed.")
+                            logger.info(f"Sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
                     else:
-                        logger.warning(f"Could not retrieve sandbox instance for sandbox_id: {sandbox_id_to_stop}.")
-                except Exception as e:
-                    logger.error(f"Error stopping sandbox {sandbox_id_to_stop}: {str(e)}", exc_info=True)
+                        logger.warning(f"Could not retrieve sandbox instance for ID: {sandbox_id_for_cleanup_and_stop}. Skipping cleanup and stop.")
+
+                except Exception as e_get_stop_sandbox:
+                    logger.error(f"Error during getting, cleaning, or stopping sandbox {sandbox_id_for_cleanup_and_stop}: {e_get_stop_sandbox}", exc_info=True)
             else:
-                logger.info(f"No sandbox_id found for project_id: {project_id}, skipping sandbox stop.")
-        except Exception as e:
-            logger.error(f"Outer error during sandbox stopping logic for project_id {project_id}: {str(e)}", exc_info=True)
-        # --- End Sandbox Stopping Logic ---
+                logger.warning(f"No sandbox_id found for project {project_id}; skipping workspace cleanup and stop.")
+
+        except Exception as e_outer_finally:
+            logger.error(f"Outer error in finally block for workspace cleanup/stop for project {project_id}: {e_outer_finally}", exc_info=True)
+        # --- End Workspace Cleanup and Sandbox Stopping ---
 
         logger.info(f"Agent run background task fully completed for: {agent_run_id} (Instance: {instance_id}) with final status: {final_status}")
 
