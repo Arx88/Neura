@@ -324,7 +324,7 @@ export function FileAttachment({
                         console.log("Image loaded successfully:", filename);
                     }}
                     onError={(e) => {
-                        // @ts-ignore
+                        // @ts-expect-error
                         // Avoid logging the error for all instances of the same image
                         console.error('Image load error for:', filename);
 

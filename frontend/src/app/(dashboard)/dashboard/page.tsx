@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, Suspense, useEffect, useRef } from 'react';
+import React, { useState, Suspense, useEffect, useRef, useCallback } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRouter } from 'next/navigation';
 import { Menu } from 'lucide-react';
@@ -49,7 +49,7 @@ function DashboardContent() {
   const secondaryGradient =
     'bg-gradient-to-r from-blue-500 to-blue-500 bg-clip-text text-transparent';
 
-  const handleSubmit = async (
+  const handleSubmit = useCallback(async (
     message: string,
     options?: {
       model_name?: string;
@@ -104,7 +104,7 @@ function DashboardContent() {
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [isSubmitting, setIsSubmitting, initiateAgentMutation, router, onOpen, chatInputRef]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
