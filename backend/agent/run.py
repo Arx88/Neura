@@ -77,6 +77,7 @@ async def run_agent(
     enable_thinking: Optional[bool] = False,
     reasoning_effort: Optional[str] = 'low',
     enable_context_manager: bool = True,
+    tool_orchestrator: ToolOrchestrator, # New parameter
     trace: Optional[StatefulTraceClient] = None
 ):
     """Run the development agent with specified configuration."""
@@ -91,7 +92,7 @@ async def run_agent(
             logger.debug("Using existing trace for run_agent.")
         
         logger.debug("Initializing ThreadManager...")
-        thread_manager = ThreadManager(trace=trace)
+        thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace)
         client = await thread_manager.db.client
         logger.debug("ThreadManager initialized and database client obtained.")
 

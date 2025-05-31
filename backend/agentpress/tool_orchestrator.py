@@ -9,7 +9,7 @@ from agentpress.tool import Tool, ToolResult, openapi_schema # Added openapi_sch
 from utils.logger import logger # Changed import
 
 # Define a default plugin directory at the module level or pass to orchestrator
-DEFAULT_PLUGINS_DIR = "backend/agentpress/plugins"
+DEFAULT_PLUGINS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "plugins"))
 
 
 class ToolOrchestrator:

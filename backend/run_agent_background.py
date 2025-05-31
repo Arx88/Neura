@@ -15,6 +15,7 @@ from services import redis
 from dramatiq.brokers.rabbitmq import RabbitmqBroker
 import os
 from services.langfuse import langfuse
+from agentpress.tool_orchestrator import ToolOrchestrator
 # Imports for sandbox stopping
 from sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
@@ -57,7 +58,8 @@ async def run_agent_background(
     enable_thinking: Optional[bool],
     reasoning_effort: Optional[str],
     stream: bool,
-    enable_context_manager: bool
+    enable_context_manager: bool,
+    tool_orchestrator: ToolOrchestrator
 ):
     """Run the agent in the background using Redis for state."""
     logger.info(f"Entering run_agent_background task for agent_run_id: {agent_run_id}, thread_id: {thread_id}, project_id: {project_id}, model: {model_name}")
@@ -128,6 +130,7 @@ async def run_agent_background(
                 model_name=model_name,
                 enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
                 enable_context_manager=enable_context_manager,
+                tool_orchestrator=tool_orchestrator,
                 trace=trace
             )
         except Exception as e_agent_init:
