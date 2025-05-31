@@ -108,9 +108,7 @@ def setup_logger(name: str = 'agentpress') -> logging.Logger:
         else:
             console_handler.setLevel(logging.DEBUG)
         
-        console_formatter = logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-        )
+        console_formatter = JSONFormatter()
         console_handler.setFormatter(console_formatter)
         
         # Add console handler to logger

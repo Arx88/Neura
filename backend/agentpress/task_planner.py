@@ -63,13 +63,14 @@ You are an expert task planner. Your role is to break down a given task descript
 For each subtask, provide a name, a detailed description, a list of tools (from the provided list) that might be useful for this subtask, and a list of dependencies on other subtasks you are defining in this list (using their 0-based index).
 
 Available tools:
+Each tool is listed with its unique identifier (in the format ToolID__methodName) followed by its description. When assigning tools to a subtask, you MUST use these exact unique identifiers.
 {formatted_tools}
 
 Please output your plan as a JSON array of objects. Each object should have the following fields:
 - "name": A concise name for the subtask (string).
 - "description": A detailed step-by-step description of what needs to be done for this subtask (string).
 - "dependencies": A list of 0-based indices of other subtasks in this plan that this subtask depends on. An empty list means no dependencies within this plan (List[int]).
-- "assigned_tools": A list of tool names (from the 'Available tools' list) that are most relevant for this subtask. If no specific tool is relevant, provide an empty list or suggest a general capability (List[str]).
+- "assigned_tools": A list of unique tool identifiers (e.g., ToolID__methodName, from the 'Available tools' list) that are most relevant for this subtask. If no specific tool is relevant, provide an empty list. (List[str]).
 
 Example JSON output for a task "Develop a new feature X":
 [
@@ -77,19 +78,19 @@ Example JSON output for a task "Develop a new feature X":
     "name": "Design feature X",
     "description": "Create detailed design documents and mockups for feature X.",
     "dependencies": [],
-    "assigned_tools": ["design_tool_A", "collaboration_platform_B"]
+    "assigned_tools": ["GraphicsGenerator__create_mockup", "CollaborationSuite__share_document"]
   }},
   {{
     "name": "Implement backend for feature X",
     "description": "Develop the server-side logic and APIs for feature X.",
     "dependencies": [0],
-    "assigned_tools": ["code_editor_C", "api_testing_tool_D"]
+    "assigned_tools": ["CodeRepository__commit_changes", "APIDevelopmentTool__create_endpoint"]
   }},
   {{
     "name": "Implement frontend for feature X",
     "description": "Develop the user interface for feature X.",
     "dependencies": [0, 1],
-    "assigned_tools": ["code_editor_C", "frontend_framework_E"]
+    "assigned_tools": ["CodeRepository__commit_changes", "UIFramework__generate_component"]
   }}
 ]
 Ensure the output is a valid JSON array.
@@ -104,6 +105,7 @@ Ensure the output is a valid JSON array.
         try:
             # TODO: Determine appropriate model, temperature, max_tokens for planning.
             # Using a capable model is important for good decomposition.
+            logger.debug(f"TaskPlanner._decompose_task: Available tools for LLM: {json.dumps(available_tools, indent=2)}")
             llm_response_str = await make_llm_api_call(
                 messages=prompt_messages,
                 llm_model="gpt-4o", # Or another suitable model like gpt-3.5-turbo
