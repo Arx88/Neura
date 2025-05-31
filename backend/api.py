@@ -18,12 +18,12 @@ import time
 from collections import OrderedDict
 
 # AgentPress specific imports
-from backend.agentpress.task_types import TaskState # For direct use if needed
-from backend.agentpress.task_storage_supabase import SupabaseTaskStorage
-from backend.agentpress.task_state_manager import TaskStateManager
-from backend.agentpress.tool_orchestrator import ToolOrchestrator
-from backend.agentpress.task_planner import TaskPlanner
-from backend.agentpress.api_models_tasks import (
+from agentpress.task_types import TaskState # For direct use if needed
+from agentpress.task_storage_supabase import SupabaseTaskStorage
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.task_planner import TaskPlanner
+from agentpress.api_models_tasks import (
     CreateTaskPayload,
     UpdateTaskPayload,
     PlanTaskPayload,
