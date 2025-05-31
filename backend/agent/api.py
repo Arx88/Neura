@@ -23,6 +23,7 @@ from sandbox.sandbox import create_sandbox, get_or_start_sandbox
 from services.llm import make_llm_api_call
 from run_agent_background import run_agent_background, _cleanup_redis_response_list, update_agent_run_status
 from utils.constants import MODEL_NAME_ALIASES
+from backend.api import tool_orchestrator as global_tool_orchestrator
 # Initialize shared resources
 router = APIRouter()
 db = None
@@ -890,7 +891,8 @@ async def initiate_agent_with_files(
             project_id=project_id,
             model_name=model_name,  # Already resolved above
             enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-            stream=stream, enable_context_manager=enable_context_manager
+            stream=stream, enable_context_manager=enable_context_manager,
+            tool_orchestrator=global_tool_orchestrator
         )
 
         return {"thread_id": thread_id, "agent_run_id": agent_run_id}

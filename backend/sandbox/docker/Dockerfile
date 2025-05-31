@@ -71,6 +71,7 @@ RUN apt-get update && apt-get install -y \
     # OCR Tools
     tesseract-ocr \
     tesseract-ocr-eng \
+    findutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js and npm

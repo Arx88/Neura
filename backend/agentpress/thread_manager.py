@@ -37,17 +37,20 @@ class ThreadManager:
     XML-based tool execution patterns.
     """
 
-    def __init__(self, trace: Optional[StatefulTraceClient] = None):
+    def __init__(self, tool_orchestrator: ToolOrchestrator, trace: Optional[StatefulTraceClient] = None):
         """Initialize ThreadManager.
 
+        Args:
+            tool_orchestrator: An instance of ToolOrchestrator.
+            trace: Optional Langfuse trace client.
         """
         self.db = DBConnection()
-        self.tool_orchestrator = ToolOrchestrator() # Changed attribute
+        self.tool_orchestrator = tool_orchestrator # Use the passed instance
         self.trace = trace
         if not self.trace:
             self.trace = langfuse.trace(name="anonymous:thread_manager")
         self.response_processor = ResponseProcessor(
-            tool_orchestrator=self.tool_orchestrator, # Changed argument
+            tool_orchestrator=self.tool_orchestrator, # Ensure this uses the passed instance
             add_message_callback=self.add_message,
             trace=self.trace
         )

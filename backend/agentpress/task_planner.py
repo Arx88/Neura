@@ -212,6 +212,12 @@ Ensure the output is a valid JSON array.
             # Use get_tool_schemas_for_llm which is formatted for this purpose.
             available_tools_schemas = self.tool_orchestrator.get_tool_schemas_for_llm()
 
+            logger.debug(f"TaskPlanner: Available tool schemas for LLM planning ({len(available_tools_schemas)} total):")
+            for schema in available_tools_schemas:
+                logger.debug(f"  - Tool: {schema.get('name')}")
+            if not available_tools_schemas:
+                logger.debug("  - No tools available to the planner.")
+
             # 3. Decompose the task into subtasks
             subtasks_data_list = await self._decompose_task(task_description, available_tools_schemas, context)
 
