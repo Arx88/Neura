@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
-from supabase.lib.client_options import APIError # Add this import
+from supabase.lib.exceptions import APIError # Changed import
 from services.supabase import DBConnection
 from agentpress.task_types import TaskState, TaskStorage
 from utils.logger import logger
@@ -69,10 +69,10 @@ class SupabaseTaskStorage(TaskStorage):
                 # If data is critical, this might need specific handling or ensuring preferences demand data.
                 logger.warning(f"Supabase upsert for task {task.id} returned no data. Response: {response}")
         except APIError as e:
-            logger.error(f"Supabase APIError saving/updating task {task.id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise # Re-raise the specific Supabase error
         except Exception as e:
-            logger.error(f"Unexpected error saving/updating task {task.id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise # Re-raise other errors
 
     async def load_task(self, task_id: str) -> Optional[TaskState]:
@@ -85,10 +85,10 @@ class SupabaseTaskStorage(TaskStorage):
             # No data and no error from maybe_single() means task not found.
             return None
         except APIError as e:
-            logger.error(f"Supabase APIError loading task {task_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error loading task {task_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
     async def load_all_tasks(self) -> List[TaskState]:
@@ -101,10 +101,10 @@ class SupabaseTaskStorage(TaskStorage):
             # If no data and no error, it's an empty list, not an error.
             return []
         except APIError as e:
-            logger.error(f"Supabase APIError loading all tasks: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error loading all tasks: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
     async def delete_task(self, task_id: str) -> None:
@@ -117,10 +117,10 @@ class SupabaseTaskStorage(TaskStorage):
             # If execute() does not raise, assume success.
             logger.info(f"Task {task_id} deleted (or did not exist).")
         except APIError as e:
-            logger.error(f"Supabase APIError deleting task {task_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error deleting task {task_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
     async def update_task(self, task_id: str, updates: Dict[str, Any]) -> Optional[TaskState]:
@@ -159,10 +159,10 @@ class SupabaseTaskStorage(TaskStorage):
                 logger.warning(f"Update for task {task_id} returned no data. Task may not exist or check PostgREST preferences.")
                 return None
         except APIError as e:
-            logger.error(f"Supabase APIError updating task {task_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error updating task {task_id} in Supabase: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
     async def get_tasks_by_status(self, status: str) -> List[TaskState]:
@@ -174,10 +174,10 @@ class SupabaseTaskStorage(TaskStorage):
                 return [self._from_db_format(item) for item in response.data]
             return [] # No tasks found with this status
         except APIError as e:
-            logger.error(f"Supabase APIError loading tasks with status {status}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error loading tasks with status {status}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
     async def get_subtasks(self, parent_id: str) -> List[TaskState]:
@@ -189,8 +189,8 @@ class SupabaseTaskStorage(TaskStorage):
                 return [self._from_db_format(item) for item in response.data]
             return [] # No subtasks found for this parent
         except APIError as e:
-            logger.error(f"Supabase APIError loading subtasks for parent {parent_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error loading subtasks for parent {parent_id}: {e}", exc_info=True)
+            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
