@@ -894,8 +894,7 @@ async def initiate_agent_with_files(
             project_id=project_id,
             model_name=model_name,  # Already resolved above
             enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-            stream=stream, enable_context_manager=enable_context_manager,
-            tool_orchestrator=agent_tool_orchestrator
+            stream=stream, enable_context_manager=enable_context_manager
         )
 
         return {"thread_id": thread_id, "agent_run_id": agent_run_id}
