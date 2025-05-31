@@ -1516,20 +1516,34 @@ def configure_frontend_env(env_vars, use_docker=True):
     print_success(f"Frontend .env.local file created at {env_path}")
     print_info(f"Backend URL is set to: {backend_url}")
 
-def setup_supabase(existing_config={}, setup_completed=False):
-    """Setup Supabase database, allowing skipping if previously completed."""
-    if setup_completed:
-        print_info("Supabase setup was previously completed. Skipping.")
-        return
+def setup_supabase(existing_config, state): # state is the global state object
+    """Setup Supabase database, managing state and allowing re-run."""
+    if state.get('supabase_setup_completed', False):
+        print_info("Supabase setup was previously marked as completed.")
+        user_force_rerun = input(f"{Colors.YELLOW}Do you want to re-run Supabase setup anyway? (yes/no, default: no): {Colors.ENDC}").strip().lower()
+        if user_force_rerun not in ['yes', 'y']:
+            print_info("Skipping Supabase setup.")
+            return
+        else:
+            print_info("User opted to re-run Supabase setup.")
+            state['supabase_setup_completed'] = False # Reset before proceeding
+            # Save state immediately to reflect the decision to re-run, even if script exits before try block
+            save_state(state)
 
     print_info("Setting up Supabase database...")
-    
+
+    # Pre-command state setting: Assume failure until all steps pass.
+    # This ensures that if the script exits unexpectedly during CLI ops, state isn't wrongly True.
+    state['supabase_setup_completed'] = False
+    save_state(state) # Persist the "attempting setup" state
+
     supabase_url = existing_config.get('SUPABASE_URL')
     if not supabase_url:
         print_error("Supabase URL not found in the provided configuration. This is required for Supabase setup.")
         print_info("Please ensure Supabase information is collected correctly before this step.")
+        # No need to save state here as it's already False and saved.
         sys.exit(1)
-    
+
     # Check if the Supabase CLI is installed
     try:
         subprocess.run(
@@ -1703,45 +1717,71 @@ def setup_supabase(existing_config={}, setup_completed=False):
         project_ref = input("Please enter your Supabase project reference: ").strip()
         if not project_ref:
             print_error("Supabase project reference is required. Exiting.")
+            # State is already False and saved.
             sys.exit(1)
     
     # Change the working directory to backend
     backend_dir = os.path.join(os.getcwd(), 'backend')
-    print_info(f"Changing to backend directory: {backend_dir}")
+    # No need to print "Changing to backend directory" here as individual commands will show CWD or context.
     
+    # Critical section starts here
     try:
         # Login to Supabase CLI (interactive)
         print_info("Logging into Supabase CLI...")
+        # `check=True` will raise SubprocessError if login fails (e.g., user cancels, network issue)
         subprocess.run(['supabase', 'login'], check=True, shell=IS_WINDOWS)
+        print_success("Logged into Supabase CLI.")
         
         # Link to project
         print_info(f"Linking to Supabase project {project_ref}...")
         subprocess.run(
             ['supabase', 'link', '--project-ref', project_ref],
             cwd=backend_dir,
-            check=True,
+            check=True, # Raises SubprocessError on failure
             shell=IS_WINDOWS
         )
+        print_success(f"Linked to Supabase project {project_ref}.")
         
         # Push database migrations
         print_info("Pushing database migrations...")
         subprocess.run(
             ['supabase', 'db', 'push'],
             cwd=backend_dir,
-            check=True,
+            check=True, # Raises SubprocessError on failure
             shell=IS_WINDOWS
         )
-        
-        print_success("Supabase database setup completed")
+        print_success("Database migrations pushed successfully.")
+
+        # If all above commands succeed:
+        print_success("Supabase database setup operations completed successfully.")
+        state['supabase_setup_completed'] = True
+        save_state(state) # Persist success
         
         # Reminder for manual step
-        print_warning("IMPORTANT: You need to manually expose the 'basejump' schema in Supabase")
-        print_info("Go to the Supabase web platform -> choose your project -> Project Settings -> Data API")
-        print_info("In the 'Exposed Schema' section, add 'basejump' if not already there")
+        print_warning("IMPORTANT: You need to manually expose the 'basejump' schema in Supabase...")
+        print_info("  Go to the Supabase web platform -> choose your project -> Project Settings -> Data API")
+        print_info("  In the 'Exposed Schema' section, add 'basejump' if it's not already listed.")
         input("Press Enter once you've completed this step...")
         
     except subprocess.SubprocessError as e:
-        print_error(f"Failed to setup Supabase: {e}")
+        command_str = " ".join(e.cmd) if isinstance(e.cmd, list) else str(e.cmd)
+        print_error(f"A Supabase command ('{command_str}') failed: {e}")
+        if hasattr(e, 'stdout') and e.stdout: print_info(f"Stdout: {e.stdout.decode(errors='ignore')}")
+        if hasattr(e, 'stderr') and e.stderr: print_error(f"Stderr: {e.stderr.decode(errors='ignore')}")
+
+        # state['supabase_setup_completed'] is already False and was saved before the try block.
+        # We can save it again to be absolutely sure, though it's technically redundant if no other state changed.
+        state['supabase_setup_completed'] = False # Explicitly ensure it's False
+        save_state(state) # Persist failure status
+        print_error("Supabase setup failed. Please check the error messages above and try again.")
+        print_info("You may need to resolve issues with your Supabase account, CLI, or project configuration.")
+        sys.exit(1)
+    except Exception as e_general: # Catch other unexpected errors during the setup
+        print_error(f"An unexpected error occurred during Supabase setup: {e_general}")
+        # Ensure state is marked as False and saved, even for unexpected errors.
+        state['supabase_setup_completed'] = False
+        save_state(state)
+        print_error("Supabase setup failed due to an unexpected error. Please review the output.")
         sys.exit(1)
 
 def install_dependencies(dependencies_installed=False, state=None): # Added state
@@ -2457,15 +2497,11 @@ def main():
     current_step += 1
     
     # Setup Supabase database
-    # Pass state['env_vars'] for Supabase config, and use 'supabase_setup_completed' from state directly
+    # Pass state['env_vars'] for Supabase config, and the whole state object
     supabase_config_to_use = state['env_vars'].get('supabase', {})
-    supabase_previously_completed = state.get('supabase_setup_completed', False)
-    setup_supabase(supabase_config_to_use, supabase_previously_completed) 
-    
-    if not supabase_previously_completed:
-        print_info("Marking Supabase setup as completed in state.")
-        state['supabase_setup_completed'] = True
-        save_state(state)
+    # The setup_supabase function now manages the 'supabase_setup_completed' flag in the state object directly.
+    setup_supabase(supabase_config_to_use, state)
+    # No need to check supabase_previously_completed or set state here, setup_supabase handles it.
     current_step += 1
     
     # Install dependencies before starting Suna
