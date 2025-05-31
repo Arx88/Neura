@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
+from datetime import datetime, timezone # Added
 # Removed APIError import
 from services.supabase import DBConnection
 from agentpress.task_types import TaskState, TaskStorage
@@ -28,27 +29,63 @@ class SupabaseTaskStorage(TaskStorage):
                 # If direct dicts cause issues, uncomment json.dumps:
                 # db_dict[field] = json.dumps(db_dict[field])
                 pass
+
+        # Convert numerical timestamps (floats) to ISO 8601 strings for Supabase
+        if 'startTime' in db_dict and isinstance(db_dict['startTime'], (int, float)):
+            dt_object = datetime.fromtimestamp(db_dict['startTime'], timezone.utc)
+            db_dict['startTime'] = dt_object.isoformat()
+
+        if 'endTime' in db_dict and db_dict['endTime'] is not None:
+            if isinstance(db_dict['endTime'], (int, float)):
+                dt_object = datetime.fromtimestamp(db_dict['endTime'], timezone.utc)
+                db_dict['endTime'] = dt_object.isoformat()
+        elif 'endTime' in db_dict and db_dict['endTime'] is None:
+            # Ensure None is passed as null if the field exists and is None
+            db_dict['endTime'] = None
+
         return db_dict
 
     def _from_db_format(self, data: Dict[str, Any]) -> TaskState:
         """Converts a dictionary from Supabase to a TaskState object."""
-        # Ensure all fields expected by TaskState are present, fill with defaults if not.
-        # This is mostly handled by TaskState's default_factory or defaults.
+        # Create a mutable copy for modifications
+        task_data = data.copy()
 
-        # Supabase might return JSON fields as strings; ensure they are parsed.
-        # However, python-supabase typically returns dicts for JSONB.
+        # Convert ISO 8601 string timestamps from Supabase back to float Unix timestamps
+        raw_start_time = task_data.get('startTime')
+        if isinstance(raw_start_time, str):
+            try:
+                # Handle both 'Z' and '+00:00' if Supabase returns varying formats
+                iso_time_str = raw_start_time.replace('Z', '+00:00')
+                task_data['startTime'] = datetime.fromisoformat(iso_time_str).timestamp()
+            except ValueError as e:
+                logger.error(f"Error parsing startTime '{raw_start_time}': {e}")
+                task_data['startTime'] = 0.0 # Fallback or raise error
+        elif isinstance(raw_start_time, (int, float)): # If it's already a number
+             task_data['startTime'] = float(raw_start_time)
+        # If it's None or other types, TaskState default_factory for startTime should handle it or raise error if not Optional
+
+        raw_end_time = task_data.get('endTime')
+        if isinstance(raw_end_time, str):
+            try:
+                iso_time_str = raw_end_time.replace('Z', '+00:00')
+                task_data['endTime'] = datetime.fromisoformat(iso_time_str).timestamp()
+            except ValueError as e:
+                logger.error(f"Error parsing endTime '{raw_end_time}': {e}")
+                task_data['endTime'] = None # Fallback or raise error
+        elif isinstance(raw_end_time, (int, float)): # If it's already a number
+             task_data['endTime'] = float(raw_end_time)
+        else: # Handles None or if field is missing
+            task_data['endTime'] = None
+
+        # Ensure other JSONB fields are parsed if they are strings (though client usually handles this)
         # for field in ["subtasks", "dependencies", "assignedTools", "artifacts", "metadata", "result"]:
-        #     if field in data and isinstance(data[field], str):
+        #     if field in task_data and isinstance(task_data[field], str):
         #         try:
-        #             data[field] = json.loads(data[field])
+        #             task_data[field] = json.loads(task_data[field])
         #         except json.JSONDecodeError:
-        #             logger.warning(f"Failed to parse JSON string for field {field} in task {data.get('id')}")
-        #             # Keep as string or set to default? For now, keep potentially malformed string.
+        #             logger.warning(f"Failed to parse JSON string for field {field} in task {task_data.get('id')}")
 
-        # Convert dict to TaskState. This will use __init__ of TaskState.
-        # Ensure all keys match TaskState attributes.
-        # The `id` field is `default_factory=str(uuid.uuid4())`, but when loading, we use the db `id`.
-        return TaskState(**data)
+        return TaskState(**task_data)
 
 
     async def save_task(self, task: TaskState) -> None:
