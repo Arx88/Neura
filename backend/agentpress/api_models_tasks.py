@@ -48,8 +48,7 @@ class TaskResponse(TaskStateBase):
     subtasks: List[str] = Field(default_factory=list) # IDs of subtasks
 
     class Config:
-        orm_mode = True # For compatibility if creating from ORM objects (like TaskState dataclass)
-        # Pydantic v2 uses `from_attributes = True`
+        from_attributes = True # For compatibility if creating from ORM objects (like TaskState dataclass)
 
 # Payload for the /plan endpoint
 class PlanTaskPayload(BaseModel):
@@ -84,7 +83,6 @@ class FullTaskStateResponse(BaseModel):
 
     class Config:
         from_attributes = True # Pydantic v2
-        # orm_mode = True # Pydantic v1
 
 class FullTaskListResponse(BaseModel):
     tasks: List[FullTaskStateResponse]
