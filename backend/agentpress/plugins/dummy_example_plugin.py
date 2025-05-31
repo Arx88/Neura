@@ -1,4 +1,4 @@
-from backend.agentpress.tool import Tool, openapi_schema
+from agentpress.tool import Tool, openapi_schema
 from utils.logger import logger
 import os
 
