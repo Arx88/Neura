@@ -57,10 +57,12 @@ export function ImageRenderer({ url, className }: ImageRendererProps) {
     let naturalWidth = 0;
     let naturalHeight = 0;
 
-    if (event && 'naturalWidth' in event && 'naturalHeight' in event) {
+    if (event && 'naturalWidth' in event && 'naturalHeight' in event && !('target' in event)) { // Check if it's the simple object type
       naturalWidth = event.naturalWidth;
       naturalHeight = event.naturalHeight;
-    } else if (event && event.target && 'naturalWidth' in event.target && 'naturalHeight' in event.target) {
+    } else if (event && 'target' in event && event.target &&
+               'naturalWidth' in event.target &&
+               'naturalHeight' in event.target) {
       // This case handles the SyntheticEvent from an HTMLImageElement
       const target = event.target as HTMLImageElement;
       naturalWidth = target.naturalWidth;

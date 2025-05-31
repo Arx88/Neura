@@ -108,10 +108,8 @@ export const MarkdownRenderer = forwardRef<
               // For layout="responsive" or "intrinsic", width and height are needed.
               // Markdown typically doesn't provide these easily unless custom syntax is used.
               // Using placeholder values.
-              // @ts-expect-error width property may not exist on node
-              const width = node?.properties?.width || 500; // Placeholder
-              // @ts-expect-error height property may not exist on node
-              const height = node?.properties?.height || 300; // Placeholder
+               const width = parseInt(String(node?.properties?.width)) || 500; // Placeholder
+               const height = parseInt(String(node?.properties?.height)) || 300; // Placeholder
               const src = props.src || '';
               const alt = props.alt || '';
 
