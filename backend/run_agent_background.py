@@ -334,21 +334,21 @@ async def run_agent_background(
                                     # LocalSandbox's execute_session_command is synchronous and does not accept timeout
                                     response = sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req)
 
-                                if response.exit_code == 0:
+                                if response['exit_code'] == 0:
                                     logger.info(f"Cleanup command '{cmd}' successful.")
                                 else:
                                     logs_output = "Could not retrieve logs." # Default if log retrieval fails
                                     try:
                                         if use_daytona():
-                                            logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                            logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response['cmd_id'])
                                             logs_output = logs.stdout if logs and logs.stdout else (logs.stderr if logs and logs.stderr else "No output captured")
                                         else:
                                             # LocalSandbox's get_session_command_logs is synchronous
-                                            logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
+                                            logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response['cmd_id'])
                                             logs_output = logs['stdout'] if logs and logs['stdout'] else (logs['stderr'] if logs and logs['stderr'] else "No output captured")
                                     except Exception as e_logs:
                                         logger.error(f"Error retrieving logs for failed cleanup command '{cmd}': {e_logs}")
-                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response.exit_code}. Logs: {logs_output}")
+                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response['exit_code']}. Logs: {logs_output}")
                         except Exception as e_cleanup_ws:
                             logger.error(f"Error during workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
                         finally:
