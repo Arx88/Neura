@@ -279,7 +279,8 @@ async def run_agent(
                         planning_process_orchestrator.load_tools_from_directory() # Load tools from the default plugin directory.
 
                         # TaskStateManager requires a storage backend.
-                        task_storage = SupabaseTaskStorage(db_client=client)
+                        # The `thread_manager.db` is the DBConnection instance.
+                        task_storage = SupabaseTaskStorage(db_connection=thread_manager.db)
                         task_manager = TaskStateManager(storage=task_storage)
                         await task_manager.initialize() # Initialize to load any existing task data if needed.
 
