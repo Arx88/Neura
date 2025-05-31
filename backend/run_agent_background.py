@@ -258,7 +258,10 @@ async def run_agent_background(
                         logger.info(f"Attempting workspace cleanup for sandbox: {sandbox_id_for_cleanup_and_stop}")
                         cleanup_session_id = f"cleanup_ws_{uuid.uuid4().hex[:8]}"
                         try:
-                            sandbox_instance.process.create_session(cleanup_session_id)
+                            if use_daytona():
+                                sandbox_instance.process.create_session(cleanup_session_id)
+                            else:
+                                sandbox_instance['process']['create_session'](cleanup_session_id)
                             logger.debug(f"Created session {cleanup_session_id} for workspace cleanup.")
                             
                             cleanup_commands = [
@@ -271,22 +274,34 @@ async def run_agent_background(
                             for cmd in cleanup_commands:
                                 logger.debug(f"Executing cleanup command in session {cleanup_session_id}: {cmd}")
                                 exec_req = SessionExecuteRequest(command=cmd, var_async=False, cwd="/workspace")
-                                response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
-                                # Getting logs for find -print -delete can be very verbose, only get if non-zero exit or for debugging
+                                if use_daytona():
+                                    response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
+                                else:
+                                    response = await sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req, timeout=60)
+
                                 if response.exit_code == 0:
                                     logger.info(f"Cleanup command '{cmd}' successful.")
                                     # Optionally log output if needed:
-                                    # logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    # if use_daytona():
+                                    #     logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    # else:
+                                    #     logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
                                     # logger.debug(f"Logs for '{cmd}': {logs}")
                                 else:
-                                    logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    if use_daytona():
+                                        logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                    else:
+                                        logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
                                     logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response.exit_code}. Logs: {logs}")
                         except Exception as e_cleanup_ws:
                             logger.error(f"Error during workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
                         finally:
                             try:
                                 logger.debug(f"Deleting cleanup session {cleanup_session_id} for sandbox {sandbox_id_for_cleanup_and_stop}.")
-                                sandbox_instance.process.delete_session(cleanup_session_id)
+                                if use_daytona():
+                                    sandbox_instance.process.delete_session(cleanup_session_id)
+                                else:
+                                    sandbox_instance['process']['delete_session'](cleanup_session_id)
                             except Exception as e_del_session:
                                 logger.error(f"Error deleting cleanup session {cleanup_session_id}: {e_del_session}", exc_info=True)
                                 # Pass here as we don't want this to hide original error or stop sandbox stopping

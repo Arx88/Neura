@@ -107,19 +107,40 @@ async def run_agent(
         logger.debug(f"Sandbox ID {sandbox_info.get('id')} retrieved for project {project_id}.")
 
         logger.debug("Initializing tools...")
-        thread_manager.add_tool(SandboxShellTool, project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(SandboxFilesTool, project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(SandboxBrowserTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-        thread_manager.add_tool(SandboxDeployTool, project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(SandboxExposeTool, project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(MessageTool) 
-        thread_manager.add_tool(SandboxWebSearchTool, project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(SandboxVisionTool, project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-        thread_manager.add_tool(PythonTool, project_id=project_id, thread_manager=thread_manager) # Register PythonTool
-        thread_manager.add_tool(DataVisualizationTool, project_id=project_id, thread_manager=thread_manager) # Register DataVisualizationTool
+        shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(shell_tool)
+
+        files_tool = SandboxFilesTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(files_tool)
+
+        browser_tool = SandboxBrowserTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
+        thread_manager.add_tool(browser_tool)
+
+        deploy_tool = SandboxDeployTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(deploy_tool)
+
+        expose_tool = SandboxExposeTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(expose_tool)
+
+        message_tool = MessageTool()
+        thread_manager.add_tool(message_tool)
+
+        web_search_tool = SandboxWebSearchTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(web_search_tool)
+
+        vision_tool = SandboxVisionTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
+        thread_manager.add_tool(vision_tool)
+
+        python_tool = PythonTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(python_tool)
+
+        visualization_tool = DataVisualizationTool(project_id=project_id, thread_manager=thread_manager)
+        thread_manager.add_tool(visualization_tool)
+
         if config.RAPID_API_KEY:
             logger.debug("RAPID_API_KEY found, adding DataProvidersTool.")
-            thread_manager.add_tool(DataProvidersTool)
+            data_providers_tool = DataProvidersTool()
+            thread_manager.add_tool(data_providers_tool)
         else:
             logger.debug("No RAPID_API_KEY found, skipping DataProvidersTool.")
         logger.debug("Tools initialized.")
