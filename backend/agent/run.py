@@ -274,9 +274,11 @@ async def run_agent(
 
                     try:
                         # Instantiate dependencies for the planning and execution process.
-                        # A dedicated ToolOrchestrator for this process ensures it has the correct set of tools (plugins).
-                        planning_process_orchestrator = ToolOrchestrator()
-                        planning_process_orchestrator.load_tools_from_directory() # Load tools from the default plugin directory.
+                        # Use the ToolOrchestrator from the ThreadManager, which has all agent tools registered.
+                        # This ensures the planner is aware of the same tools as the main agent.
+                        planning_process_orchestrator = thread_manager.tool_orchestrator
+                        # No need to call planning_process_orchestrator.load_tools_from_directory() here,
+                        # as the main agent's ToolOrchestrator should already be populated.
 
                         # TaskStateManager requires a storage backend.
                         # The `thread_manager.db` is the DBConnection instance.
@@ -285,7 +287,7 @@ async def run_agent(
                         await task_manager.initialize() # Initialize to load any existing task data if needed.
 
                         # Instantiate the TaskPlanner.
-                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=planning_process_orchestrator)
+                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=planning_process_orchestrator) # Pass the correct orchestrator
                         # Create the plan (main task and subtasks).
                         main_planned_task = await planner.plan_task(task_description=actual_task_description)
 
