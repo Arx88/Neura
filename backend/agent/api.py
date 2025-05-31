@@ -23,11 +23,12 @@ from sandbox.sandbox import create_sandbox, get_or_start_sandbox
 from services.llm import make_llm_api_call
 from run_agent_background import run_agent_background, _cleanup_redis_response_list, update_agent_run_status
 from utils.constants import MODEL_NAME_ALIASES
-from api import tool_orchestrator as global_tool_orchestrator
+from agentpress.tool_orchestrator import ToolOrchestrator # Added import
 # Initialize shared resources
 router = APIRouter()
 db = None
 instance_id = None # Global instance ID for this backend instance
+agent_tool_orchestrator: Optional[ToolOrchestrator] = None # New module-level global
 
 # TTL for Redis response lists (24 hours)
 REDIS_RESPONSE_LIST_TTL = 3600 * 24
@@ -46,11 +47,13 @@ class InitiateAgentResponse(BaseModel):
 
 def initialize(
     _db: DBConnection,
+    _tool_orchestrator: ToolOrchestrator, # Added _tool_orchestrator
     _instance_id: str = None
 ):
     """Initialize the agent API with resources from the main API."""
-    global db, instance_id
+    global db, instance_id, agent_tool_orchestrator # Added agent_tool_orchestrator to global
     db = _db
+    agent_tool_orchestrator = _tool_orchestrator # Assign to module-level global
 
     # Use provided instance_id or generate a new one
     if _instance_id:
@@ -892,7 +895,7 @@ async def initiate_agent_with_files(
             model_name=model_name,  # Already resolved above
             enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
             stream=stream, enable_context_manager=enable_context_manager,
-            tool_orchestrator=global_tool_orchestrator
+            tool_orchestrator=agent_tool_orchestrator
         )
 
         return {"thread_id": thread_id, "agent_run_id": agent_run_id}
