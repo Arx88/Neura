@@ -33,12 +33,15 @@ class ToolOrchestrator:
             tool_id = getattr(tool_instance.__class__, 'PLUGIN_TOOL_ID', tool_instance.__class__.__name__)
 
         if tool_id in self.tools:
-            logger.warning(f"Tool with ID '{tool_id}' is already registered. Overwriting.")
+            logger.warning(f"TOOL_ORCHESTRATOR_REGISTER: Tool with ID '{tool_id}' is already registered. Overwriting with new instance from source: {plugin_path or 'Direct'}.")
+        else: # Added else to log new registrations separately from overwrites for clarity
+            logger.info(f"TOOL_ORCHESTRATOR_REGISTER: Tool '{tool_id}' registered (Source: {plugin_path or 'Direct'}).")
+
 
         self.tools[tool_id] = tool_instance
         if plugin_path:
             self.plugin_sources[tool_id] = plugin_path
-        logger.info(f"Tool '{tool_id}' registered successfully (Source: {plugin_path or 'Direct'}).")
+        # Removed the original generic log as it's now covered by the conditional logging above.
 
     def unload_tool(self, tool_id: str):
         """Removes a tool from the orchestrator."""
@@ -56,14 +59,15 @@ class ToolOrchestrator:
         instantiates them, and registers them.
         """
         if not os.path.isdir(directory_path):
-            logger.warning(f"Plugin directory '{directory_path}' not found. Skipping plugin loading.")
+            logger.warning(f"TOOL_ORCHESTRATOR_LOAD: Plugin directory '{directory_path}' not found. Skipping plugin loading.")
             return
 
-        logger.info(f"Scanning for tool plugins in directory: {directory_path}")
+        logger.info(f"TOOL_ORCHESTRATOR_LOAD: Scanning for tool plugins in directory: {directory_path}")
         for filename in os.listdir(directory_path):
             if filename.endswith(".py") and not filename.startswith("_"):
                 file_path = os.path.join(directory_path, filename)
-                module_name = f"backend.agentpress.plugins.{filename[:-3]}" # Needs to be unique and importable
+                logger.debug(f"TOOL_ORCHESTRATOR_LOAD: Attempting to load tools from plugin file: {file_path}")
+                module_name = f"backend.agentpress.plugins.{filename[:-3]}"
 
                 try:
                     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -74,19 +78,22 @@ class ToolOrchestrator:
                         for attribute_name in dir(module):
                             attribute = getattr(module, attribute_name)
                             if inspect.isclass(attribute) and issubclass(attribute, Tool) and attribute is not Tool:
-                                # Found a Tool subclass
+                                logger.debug(f"TOOL_ORCHESTRATOR_LOAD: Found Tool subclass '{attribute.__name__}' in '{filename}'. Attempting instantiation.")
                                 try:
-                                    tool_instance = attribute() # Assumes no-args constructor for plugins
-                                    # Use PLUGIN_TOOL_ID if defined, else class name
+                                    tool_instance = attribute()
                                     plugin_tool_id = getattr(attribute, 'PLUGIN_TOOL_ID', attribute.__name__)
+                                    # register_tool now handles its own logging, but we can add a specific "loaded from plugin" log here
                                     self.register_tool(tool_instance, tool_id=plugin_tool_id, plugin_path=file_path)
+                                    # Check if the tool was actually registered (e.g. not an overwrite of a non-plugin tool if we want to prevent that)
+                                    if plugin_tool_id in self.tools and self.plugin_sources.get(plugin_tool_id) == file_path:
+                                        logger.info(f"TOOL_ORCHESTRATOR_LOAD: Successfully loaded and registered tool '{plugin_tool_id}' from plugin '{filename}'.")
                                 except Exception as e:
-                                    logger.error(f"Failed to instantiate or register tool '{attribute.__name__}' from plugin '{filename}': {e}")
+                                    logger.error(f"TOOL_ORCHESTRATOR_LOAD: Failed to instantiate/register tool '{attribute.__name__}' from plugin '{filename}': {e}")
                     else:
-                        logger.error(f"Could not create module spec for plugin: {filename}")
+                        logger.error(f"TOOL_ORCHESTRATOR_LOAD: Could not create module spec for plugin: {filename}")
                 except Exception as e:
-                    logger.error(f"Error loading plugin '{filename}': {e}", exc_info=True)
-        logger.info("Finished scanning for tool plugins.")
+                    logger.error(f"TOOL_ORCHESTRATOR_LOAD: Error loading plugin '{filename}': {e}", exc_info=True)
+        logger.info(f"TOOL_ORCHESTRATOR_LOAD: Finished scanning for tool plugins in {directory_path}.")
 
     def reload_tool(self, tool_id: str) -> bool:
         """Reloads a tool if it was loaded from a plugin file."""

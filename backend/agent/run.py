@@ -166,6 +166,7 @@ async def run_agent(
             system_message = { "role": "system", "content": get_system_prompt() + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>" }
             logger.debug(f"Using default system prompt with sample response for {model_name}.")
         logger.debug("System prompt generated.")
+        logger.debug(f"SYSTEM_PROMPT_LOG: Constructed system_message: {json.dumps(system_message, indent=2)}")
 
         logger.debug(f"Performing initial billing check for account {account_id}...")
         can_run_initial, message_initial, _ = await check_billing_status(client, account_id)
