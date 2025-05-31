@@ -10,7 +10,8 @@ import json
 
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState, ToolResult # Assuming ToolResult is in task_types
+from agentpress.task_types import TaskState # Correctly import TaskState
+from agentpress.tool import ToolResult # Correctly import ToolResult
 from services.llm import make_llm_api_call
 from utils.logger import logger
 
