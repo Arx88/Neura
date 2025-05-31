@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
-from supabase.lib.exceptions import APIError # Changed import
+# Removed APIError import
 from services.supabase import DBConnection
 from agentpress.task_types import TaskState, TaskStorage
 from utils.logger import logger
@@ -68,10 +68,7 @@ class SupabaseTaskStorage(TaskStorage):
                 # depending on preference settings (e.g. return="minimal").
                 # If data is critical, this might need specific handling or ensuring preferences demand data.
                 logger.warning(f"Supabase upsert for task {task.id} returned no data. Response: {response}")
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise # Re-raise the specific Supabase error
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise # Re-raise other errors
 
@@ -84,10 +81,7 @@ class SupabaseTaskStorage(TaskStorage):
                 return self._from_db_format(response.data)
             # No data and no error from maybe_single() means task not found.
             return None
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
@@ -100,10 +94,7 @@ class SupabaseTaskStorage(TaskStorage):
                 return [self._from_db_format(item) for item in response.data]
             # If no data and no error, it's an empty list, not an error.
             return []
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
@@ -116,10 +107,7 @@ class SupabaseTaskStorage(TaskStorage):
             await client.table(self._table_name).delete().eq("id", task_id).execute()
             # If execute() does not raise, assume success.
             logger.info(f"Task {task_id} deleted (or did not exist).")
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
@@ -158,10 +146,7 @@ class SupabaseTaskStorage(TaskStorage):
                 # Or if PostgREST preference is `return=minimal`.
                 logger.warning(f"Update for task {task_id} returned no data. Task may not exist or check PostgREST preferences.")
                 return None
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
@@ -173,10 +158,7 @@ class SupabaseTaskStorage(TaskStorage):
             if response.data:
                 return [self._from_db_format(item) for item in response.data]
             return [] # No tasks found with this status
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
 
@@ -188,9 +170,6 @@ class SupabaseTaskStorage(TaskStorage):
             if response.data:
                 return [self._from_db_format(item) for item in response.data]
             return [] # No subtasks found for this parent
-        except APIError as e:
-            logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
-            raise
-        except Exception as e:
+        except Exception as e: # Changed from APIError to Exception
             logger.error(f"Supabase client operation failed with error type: {type(e).__name__} - {e}", exc_info=True)
             raise
