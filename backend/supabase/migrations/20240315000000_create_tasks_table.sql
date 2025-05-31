@@ -92,5 +92,3 @@ CREATE POLICY "Allow all for authenticated users" ON public.tasks
 -- GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role; -- service_role has this by default
 -- GRANT SELECT, INSERT, UPDATE, DELETE ON public.tasks TO authenticated;
 -- GRANT SELECT ON public.tasks TO anon; -- If public read access is desired
-
-logger.info('Supabase migration for tasks table created.');
