@@ -33,7 +33,7 @@ class TestPluginTool(Tool):
 
         if not directory_path or not isinstance(directory_path, str):
             logger.warning("Directory path is invalid.")
-            # Using self.fail_response (which is now part of Tool base class via EnhancedToolResult logic)
+            # Using self.fail_response (which is now part of Tool base class via ToolResult logic)
             # The orchestrator will call this if an exception is raised.
             # So, we can just raise an error or return data for success_response.
             raise ValueError("A valid directory path must be provided.")

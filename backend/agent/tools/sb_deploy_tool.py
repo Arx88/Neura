@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from agentpress.tool import EnhancedToolResult as ToolResult, openapi_schema, xml_schema
+from agentpress.tool import ToolResult, openapi_schema, xml_schema
 from sandbox.tool_base import SandboxToolsBase
 from utils.files_utils import clean_path
 from agentpress.thread_manager import ThreadManager

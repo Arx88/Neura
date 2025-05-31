@@ -84,7 +84,7 @@ class ToolSchema:
     xml_schema: Optional[XMLTagSchema] = None
 
 @dataclass
-class EnhancedToolResult:
+class ToolResult:
     """Enhanced container for tool execution results."""
     tool_id: str
     execution_id: str
@@ -155,7 +155,7 @@ class Tool(ABC):
         """
         return self._schemas
 
-    def success_response(self, tool_id: str, execution_id: str, data: Union[Dict[str, Any], str]) -> EnhancedToolResult:
+    def success_response(self, tool_id: str, execution_id: str, data: Union[Dict[str, Any], str]) -> ToolResult:
         """Create a successful tool result.
         
         Args:
@@ -164,14 +164,14 @@ class Tool(ABC):
             data: Result data (dictionary or string)
             
         Returns:
-            EnhancedToolResult with status='completed' and formatted result
+            ToolResult with status='completed' and formatted result
         """
         if isinstance(data, str):
             text = data
         else:
             text = json.dumps(data, indent=2)
         logger.debug(f"Created success response for {self.__class__.__name__}")
-        return EnhancedToolResult(
+        return ToolResult(
             tool_id=tool_id,
             execution_id=execution_id,
             status="completed",
@@ -180,7 +180,7 @@ class Tool(ABC):
             end_time=time.time()
         )
 
-    def fail_response(self, tool_id: str, execution_id: str, msg: str) -> EnhancedToolResult:
+    def fail_response(self, tool_id: str, execution_id: str, msg: str) -> ToolResult:
         """Create a failed tool result.
         
         Args:
@@ -189,10 +189,10 @@ class Tool(ABC):
             msg: Error message describing the failure
             
         Returns:
-            EnhancedToolResult with status='failed' and error message
+            ToolResult with status='failed' and error message
         """
         logger.debug(f"Tool {self.__class__.__name__} returned failed result: {msg}")
-        return EnhancedToolResult(
+        return ToolResult(
             tool_id=tool_id,
             execution_id=execution_id,
             status="failed",

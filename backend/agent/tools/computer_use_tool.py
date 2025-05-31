@@ -7,7 +7,7 @@ import logging
 from typing import Optional, Dict
 import os
 
-from agentpress.tool import Tool, EnhancedToolResult as ToolResult, openapi_schema, xml_schema
+from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
 from sandbox.tool_base import SandboxToolsBase, Sandbox
 
 KEYBOARD_KEYS = [

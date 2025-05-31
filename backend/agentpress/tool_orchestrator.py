@@ -5,7 +5,7 @@ import os # Added
 import importlib.util # Added
 import inspect # Added
 from typing import Dict, Any, Optional, List, Type # Added List, Type
-from agentpress.tool import Tool, EnhancedToolResult, openapi_schema # Added openapi_schema for dummy tool
+from agentpress.tool import Tool, ToolResult, openapi_schema # Added openapi_schema for dummy tool
 from utils.logger import logger # Changed import
 
 # Define a default plugin directory at the module level or pass to orchestrator
@@ -145,7 +145,7 @@ class ToolOrchestrator:
             logger.error(f"Error reloading plugin for tool '{tool_id}': {e}", exc_info=True)
             return False
 
-    async def execute_tool(self, tool_id: str, method_name: str, params: Dict[str, Any]) -> EnhancedToolResult:
+    async def execute_tool(self, tool_id: str, method_name: str, params: Dict[str, Any]) -> ToolResult:
         """
         Executes a specific method of a registered tool asynchronously.
 
@@ -155,7 +155,7 @@ class ToolOrchestrator:
             params: A dictionary of parameters to pass to the tool method.
 
         Returns:
-            An EnhancedToolResult object representing the outcome of the execution.
+            A ToolResult object representing the outcome of the execution.
         """
         execution_id = str(uuid.uuid4())
         start_time = time.time()
@@ -164,9 +164,9 @@ class ToolOrchestrator:
             logger.error(f"Tool with ID '{tool_id}' not found.")
             # Create a dummy tool instance for fail_response, or handle directly
             # This assumes Tool class can be instantiated without specific args for this purpose,
-            # or we construct EnhancedToolResult directly.
+            # or we construct ToolResult directly.
             # For now, let's assume direct construction or a generic fail response.
-            return EnhancedToolResult(
+            return ToolResult(
                 tool_id=tool_id,
                 execution_id=execution_id,
                 status="failed",
@@ -186,7 +186,7 @@ class ToolOrchestrator:
 
         method_to_call = getattr(tool_instance, method_name)
 
-        enhanced_result = EnhancedToolResult(
+        enhanced_result = ToolResult(
             tool_id=tool_id, # or tool_instance.get_id()
             execution_id=execution_id,
             start_time=start_time
@@ -197,8 +197,8 @@ class ToolOrchestrator:
             logger.info(f"Executing method '{method_name}' on tool '{tool_id}' with params: {params}")
             # This is where the actual tool method is called.
             # Tool methods themselves are not async, so we run them in the default executor.
-            # The `success_response` or `fail_response` from the tool method will create an EnhancedToolResult.
-            # However, the tool's own methods return an EnhancedToolResult directly now.
+            # The `success_response` or `fail_response` from the tool method will create a ToolResult.
+            # However, the tool's own methods return a ToolResult directly now.
 
             # We need to adapt how parameters are passed if they are not directly kwargs
             # For now, assuming they are kwargs.
@@ -208,7 +208,7 @@ class ToolOrchestrator:
             # actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params)) # This was incorrect for async tool methods
             actual_result_data = await method_to_call(**params)
 
-            # The `method_to_call` should now return an EnhancedToolResult.
+            # The `method_to_call` should now return a ToolResult.
             # We need to ensure the tool_id and execution_id are correctly passed into it.
             # The tool methods themselves don't know their `tool_id` (as registered in orchestrator)
             # or the `execution_id`.
@@ -217,10 +217,10 @@ class ToolOrchestrator:
 
             # Let's adjust the design: the tool method itself should not call success/fail_response.
             # It should return the raw data or raise an exception.
-            # The orchestrator then wraps this into an EnhancedToolResult.
+            # The orchestrator then wraps this into a ToolResult.
             # This contradicts the previous subtask's changes to Tool.success/fail_response.
             # For now, I will assume the tool method returns raw data or raises an exception,
-            # and the orchestrator will create the EnhancedToolResult.
+            # and the orchestrator will create the ToolResult.
             # This means I'll need to revert/adjust the success/fail_response in Tool later or here.
 
             # Let's stick to the new `Tool.success_response` and `Tool.fail_response` for now.
@@ -230,21 +230,21 @@ class ToolOrchestrator:
 
             # The prompt says "tool_instance.execute(**params)". This is simpler.
             # This implies that the Tool class should have a generic execute method,
-            # or each tool method is directly callable and expected to return the EnhancedToolResult.
+            # or each tool method is directly callable and expected to return the ToolResult.
             # The latter is what I've implemented in the previous step for success_response/fail_response.
 
-            # So, the `method_to_call(**params)` should ideally return an EnhancedToolResult.
+            # So, the `method_to_call(**params)` should ideally return a ToolResult.
             # But it won't have tool_id and execution_id unless we pass them in.
             # This is getting complicated.
 
             # Let's refine: The `method_to_call` is the actual user-defined tool function.
             # It should return its raw result or raise an exception.
             # The `ToolOrchestrator` then uses `tool_instance.success_response` or `tool_instance.fail_response`
-            # to construct the `EnhancedToolResult`.
+            # to construct the `ToolResult`.
 
             # actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params)) # This was moved up
 
-            # Now, use the tool's success_response to build the EnhancedToolResult
+            # Now, use the tool's success_response to build the ToolResult
             final_enhanced_result = tool_instance.success_response(
                 tool_id=tool_id, # The ID known to the orchestrator
                 execution_id=execution_id,
@@ -277,7 +277,7 @@ class ToolOrchestrator:
             if not task.done():
                 task.cancel()
                 logger.info(f"Attempted to cancel tool execution ID: {execution_id}")
-                # Optionally, update the EnhancedToolResult status to 'cancelled'
+                # Optionally, update the ToolResult status to 'cancelled'
                 # This requires storing/accessing the result object by execution_id
             else:
                 logger.info(f"Tool execution ID: {execution_id} already completed or cancelled.")
