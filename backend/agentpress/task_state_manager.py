@@ -4,7 +4,7 @@ import uuid
 import time
 import asyncio
 
-from backend.agentpress.task_types import TaskState, TaskStorage
+from agentpress.task_types import TaskState, TaskStorage
 from backend.utils.logger import logger # Changed import
 
 # For Partial[TaskState] equivalent if needed for subtask_data without Pydantic/TypedDict features
