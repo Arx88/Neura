@@ -27,6 +27,7 @@ class EnvMode(Enum):
     LOCAL = "local"
     STAGING = "staging"
     PRODUCTION = "production"
+    DEV = "dev"
 
 class Configuration:
     """
