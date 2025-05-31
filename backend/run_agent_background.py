@@ -324,40 +324,89 @@ async def run_agent_background(
                                 sandbox_instance['process']['create_session'](cleanup_session_id)
                             logger.debug(f"Created session {cleanup_session_id} for workspace cleanup.")
 
-                            base_cleanup_prefix = "apt-get update -y && apt-get install -y findutils || true; "
-                            cleanup_commands = [
-                                base_cleanup_prefix + "find /workspace -type f -name '*.tmp' -print -delete",
-                                base_cleanup_prefix + "find /workspace -type f -name 'temp_*' -print -delete",
-                                base_cleanup_prefix + "find /workspace -type f -name '*_temp.*' -print -delete",
-                                base_cleanup_prefix + "find /workspace -depth -type d -empty -print -delete"
-                            ]
+                            cleanup_script_str = """
+import os
+import shutil # Keep for rmtree just in case, though os.rmdir is preferred for empty.
 
-                            for cmd in cleanup_commands:
-                                logger.debug(f"Executing cleanup command in session {cleanup_session_id}: {cmd}")
-                                exec_req = SessionExecuteRequest(command=cmd, var_async=False, cwd="/workspace")
+def robust_remove(path):
+    try:
+        if os.path.isfile(path) or os.path.islink(path):
+            os.remove(path)
+            print(f"Deleted file/link: {path}")
+        elif os.path.isdir(path):
+            # For safety, only remove if it's truly empty or use shutil.rmtree if non-empty is intended for some patterns
+            # The original find commands were specific about deleting empty dirs or files by pattern.
+            # Let's stick to os.remove for files and os.rmdir for empty dirs.
+            pass # Handled by directory walk
+    except OSError as e:
+        print(f"Error deleting {path}: {e}")
+
+workspace_root = "/workspace"
+files_deleted_count = 0
+dirs_deleted_count = 0
+
+# Delete specific patterned files
+patterns_to_delete = ["*.tmp", "temp_*", "*_temp.*"]
+print(f"Starting file deletion pass for patterns: {patterns_to_delete}")
+for dirpath, dirnames, filenames in os.walk(workspace_root):
+    for filename in filenames:
+        full_path = os.path.join(dirpath, filename)
+        if filename.endswith(".tmp"):
+            robust_remove(full_path)
+            files_deleted_count += 1
+        elif filename.startswith("temp_"):
+            robust_remove(full_path)
+            files_deleted_count += 1
+        elif "_temp." in filename: # Simplified from '*_temp.*' to catch 'name_temp.ext'
+            robust_remove(full_path)
+            files_deleted_count += 1
+print(f"Completed file deletion pass. Files deleted: {files_deleted_count}")
+
+# Delete empty directories (bottom-up)
+print("Starting empty directory deletion pass...")
+for dirpath, dirnames, filenames in os.walk(workspace_root, topdown=False):
+    if not os.listdir(dirpath): # Check if directory is empty
+        try:
+            os.rmdir(dirpath)
+            print(f"Deleted empty directory: {dirpath}")
+            dirs_deleted_count += 1
+        except OSError as e:
+            print(f"Error deleting directory {dirpath}: {e}")
+print(f"Completed empty directory deletion pass. Directories deleted: {dirs_deleted_count}")
+
+print(f"Python cleanup script finished. Total files deleted: {files_deleted_count}, Total empty dirs deleted: {dirs_deleted_count}")
+"""
+                            # Escape the script for shell command line execution
+                            escaped_python_script = cleanup_script_str.replace('\\', '\\\\').replace('"', '\\"')
+                            python_exec_command = f"python3 -c \"{escaped_python_script}\""
+
+                            logger.debug(f"Executing Python cleanup script in session {cleanup_session_id}")
+                            exec_req_python = SessionExecuteRequest(command=python_exec_command, var_async=False, cwd="/workspace")
+
+                            if use_daytona():
+                                response_python_clean = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req_python, timeout=120)
+                            else:
+                                response_python_clean = sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req_python)
+
+                            if response_python_clean['exit_code'] == 0:
+                                logger.info("Python-based sandbox cleanup script executed successfully.")
+                            else:
+                                logger.warning(f"Python-based sandbox cleanup script failed. Exit: {response_python_clean['exit_code']}.")
+
+                            try:
+                                logs_output_python = "Could not retrieve logs from Python cleanup."
                                 if use_daytona():
-                                    response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
+                                    logs_python = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_python_clean['cmd_id'])
+                                    logs_output_python = logs_python.stdout if logs_python and logs_python.stdout else (logs_python.stderr if logs_python and logs_python.stderr else "No output captured from Python script")
                                 else:
-                                    # LocalSandbox's execute_session_command is synchronous and does not accept timeout
-                                    response = sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req)
+                                    logs_python = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_python_clean['cmd_id'])
+                                    logs_output_python = logs_python['stdout'] if logs_python and logs_python['stdout'] else (logs_python['stderr'] if logs_python and logs_python['stderr'] else "No output captured from Python script")
+                                logger.info(f"Python cleanup script output:\n{logs_output_python}")
+                            except Exception as e_logs_python:
+                                logger.error(f"Error retrieving logs for Python cleanup script: {e_logs_python}")
 
-                                if response['exit_code'] == 0:
-                                    logger.info(f"Cleanup command '{cmd}' successful.")
-                                else:
-                                    logs_output = "Could not retrieve logs." # Default if log retrieval fails
-                                    try:
-                                        if use_daytona():
-                                            logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response['cmd_id'])
-                                            logs_output = logs.stdout if logs and logs.stdout else (logs.stderr if logs and logs.stderr else "No output captured")
-                                        else:
-                                            # LocalSandbox's get_session_command_logs is synchronous
-                                            logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response['cmd_id'])
-                                            logs_output = logs['stdout'] if logs and logs['stdout'] else (logs['stderr'] if logs and logs['stderr'] else "No output captured")
-                                    except Exception as e_logs:
-                                        logger.error(f"Error retrieving logs for failed cleanup command '{cmd}': {e_logs}")
-                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response['exit_code']}. Logs: {logs_output}")
                         except Exception as e_cleanup_ws:
-                            logger.error(f"Error during workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
+                            logger.error(f"Error during Python-based workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
                         finally:
                             # Ensure sandbox_instance is still valid before trying to delete session
                             if sandbox_instance:
