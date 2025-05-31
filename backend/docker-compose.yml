@@ -17,6 +17,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      supabase:
+        condition: service_healthy
     networks:
       - app-network
     environment:
@@ -54,6 +56,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      supabase:
+        condition: service_healthy
     networks:
       - app-network
     environment:
@@ -68,6 +72,25 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  supabase:
+    image: supabase/postgres:15.1.0.118
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: your_strong_password # Replace with a strong password
+      POSTGRES_USER: supabase
+      POSTGRES_DB: postgres
+    volumes:
+      - supabase_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supabase -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -120,3 +143,4 @@ networks:
 volumes:
   redis_data:
   rabbitmq_data:
+  supabase_data:

@@ -83,6 +83,44 @@ RABBITMQ_PORT=5672
 
 ---
 
+## Supabase Setup
+
+This project uses Supabase for its database. You can set it up locally using Docker or use a cloud-hosted Supabase instance.
+
+### Local Setup (Docker)
+
+1.  **Ensure Docker is running.**
+2.  **Configure Supabase in `backend/docker-compose.yml`:**
+    *   A Supabase service definition is included in `backend/docker-compose.yml`.
+    *   Make sure to set a strong password for `POSTGRES_PASSWORD` in this file.
+3.  **Configure Supabase connection details in `backend/.env`:**
+    *   Copy `backend/.env.example` to `backend/.env`.
+    *   Update `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` with the appropriate values for your local Supabase setup.
+        *   `SUPABASE_URL`: Typically `http://localhost:5432` if using the default port mapping.
+        *   `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`: You can get these from the Supabase Studio (usually available at `http://localhost:8000` after starting Supabase) or via the Supabase CLI.
+4.  **Start all services:**
+    ```bash
+    cd backend
+    docker-compose up -d --build
+    ```
+5.  **Run database migrations:**
+    *   Install the Supabase CLI if you haven't already: `npm install supabase --save-dev` (or globally).
+    *   Link your local Supabase instance: `npx supabase link --project-ref <your-project-id>` (You can find `<your-project-id>` in `backend/supabase/config.toml` or when you initialize Supabase).
+    *   Apply migrations: `npx supabase db push`
+
+### Cloud-Hosted Supabase
+
+1.  **Create a Supabase project** on [supabase.com](https://supabase.com).
+2.  **Configure Supabase connection details in `backend/.env`:**
+    *   Copy `backend/.env.example` to `backend/.env`.
+    *   Update `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` with the values from your Supabase project settings.
+3.  **Run database migrations:**
+    *   Install the Supabase CLI.
+    *   Link your Supabase project: `npx supabase link --project-ref <your-project-ref>`
+    *   Apply migrations: `npx supabase db push`
+
+---
+
 ## Production Setup
 
 For production deployments, use the following command to set resource limits
