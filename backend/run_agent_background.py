@@ -331,8 +331,8 @@ async def run_agent_background(
                                 if use_daytona():
                                     response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
                                 else:
-                                    # LocalSandbox's execute_session_command does not accept timeout
-                                    response = await sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req)
+                                    # LocalSandbox's execute_session_command is synchronous and does not accept timeout
+                                    response = sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req)
 
                                 if response.exit_code == 0:
                                     logger.info(f"Cleanup command '{cmd}' successful.")
@@ -343,7 +343,8 @@ async def run_agent_background(
                                             logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
                                             logs_output = logs.stdout if logs and logs.stdout else (logs.stderr if logs and logs.stderr else "No output captured")
                                         else:
-                                            logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
+                                        # LocalSandbox's get_session_command_logs is synchronous
+                                        logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
                                             logs_output = logs['stdout'] if logs and logs['stdout'] else (logs['stderr'] if logs and logs['stderr'] else "No output captured")
                                     except Exception as e_logs:
                                         logger.error(f"Error retrieving logs for failed cleanup command '{cmd}': {e_logs}")

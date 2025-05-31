@@ -29,7 +29,7 @@ class SandboxDeployTool(SandboxToolsBase):
         "type": "function",
         "function": {
             "name": "deploy",
-            "description": "Deploy a static website (HTML+CSS+JS) from a directory in the sandbox to Cloudflare Pages. Only use this tool when permanent deployment to a production environment is needed. The directory path must be relative to /workspace. The website will be deployed to {name}.kortix.cloud.",
+            "description": "Deploy a **static web application** (HTML, CSS, JavaScript files and assets) from a specified directory in the sandbox to Cloudflare Pages for public web hosting. This tool is **exclusively for static site deployments** and cannot be used for deploying backend servers, databases, virtual machines, or other infrastructure. Only use this tool when permanent deployment of static web content to a production environment is needed. The directory path must be relative to /workspace. The website will be deployed to {name}.kortix.cloud.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -57,6 +57,7 @@ class SandboxDeployTool(SandboxToolsBase):
         IMPORTANT: Only use this tool when:
         1. The user explicitly requests permanent deployment to production
         2. You have a complete, ready-to-deploy directory 
+        - The content is a static website (HTML/CSS/JS). This tool cannot deploy VMs or servers.
         
         NOTE: If the same name is used, it will redeploy to the same project as before
                 -->
