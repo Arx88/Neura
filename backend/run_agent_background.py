@@ -343,8 +343,8 @@ async def run_agent_background(
                                             logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
                                             logs_output = logs.stdout if logs and logs.stdout else (logs.stderr if logs and logs.stderr else "No output captured")
                                         else:
-                                        # LocalSandbox's get_session_command_logs is synchronous
-                                        logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
+                                            # LocalSandbox's get_session_command_logs is synchronous
+                                            logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
                                             logs_output = logs['stdout'] if logs and logs['stdout'] else (logs['stderr'] if logs and logs['stderr'] else "No output captured")
                                     except Exception as e_logs:
                                         logger.error(f"Error retrieving logs for failed cleanup command '{cmd}': {e_logs}")
