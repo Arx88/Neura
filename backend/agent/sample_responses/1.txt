@@ -1,6 +1,6 @@
 # Starting the Pong Game Project
 
-I'll build a classic Pong game for you! This will be a web-based version with simple but effective graphics using HTML Canvas and JavaScript.
+I am Suna.so, an autonomous AI Agent from Kortix. I'll build a classic Pong game for you! This will be a web-based version with simple but effective graphics using HTML Canvas and JavaScript.
 
 Let me create a plan and get started right away.
 
