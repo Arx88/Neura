@@ -58,8 +58,7 @@ async def run_agent_background(
     enable_thinking: Optional[bool],
     reasoning_effort: Optional[str],
     stream: bool,
-    enable_context_manager: bool,
-    tool_orchestrator: ToolOrchestrator
+    enable_context_manager: bool
 ):
     """Run the agent in the background using Redis for state."""
     logger.info(f"Entering run_agent_background task for agent_run_id: {agent_run_id}, thread_id: {thread_id}, project_id: {project_id}, model: {model_name}")
@@ -124,13 +123,19 @@ async def run_agent_background(
         agent_gen = None # Initialize agent_gen to None
 
         try:
+            # Initialize ToolOrchestrator locally for this worker context
+            logger.info("RUN_AGENT_BACKGROUND: Initializing ToolOrchestrator for worker...")
+            local_tool_orchestrator = ToolOrchestrator()
+            local_tool_orchestrator.load_tools_from_directory() # This uses the corrected absolute path
+            logger.info(f"RUN_AGENT_BACKGROUND: ToolOrchestrator for worker initialized. {len(local_tool_orchestrator.get_tool_schemas_for_llm())} tools loaded.")
+
             # Initialize agent generator
             agent_gen = run_agent(
                 thread_id=thread_id, project_id=project_id, stream=stream,
                 model_name=model_name,
                 enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
                 enable_context_manager=enable_context_manager,
-                tool_orchestrator=tool_orchestrator,
+                tool_orchestrator=local_tool_orchestrator, # Use the new local instance
                 trace=trace
             )
         except Exception as e_agent_init:
