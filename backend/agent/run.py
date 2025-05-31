@@ -286,8 +286,13 @@ async def run_agent(
                         task_manager = TaskStateManager(storage=task_storage)
                         await task_manager.initialize() # Initialize to load any existing task data if needed.
 
+                        # Log the schemas from the orchestrator instance being passed to the planner.
+                        tool_orch_for_planner = planning_process_orchestrator # This is thread_manager.tool_orchestrator
+                        schemas_for_planner_llm = tool_orch_for_planner.get_tool_schemas_for_llm()
+                        logger.debug(f"PLANNER_ORCHESTRATOR_CHECK: Tool Orchestrator for TaskPlanner has {len(schemas_for_planner_llm)} schemas. Schemas: {json.dumps(schemas_for_planner_llm, indent=2)}")
+
                         # Instantiate the TaskPlanner.
-                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=planning_process_orchestrator) # Pass the correct orchestrator
+                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=tool_orch_for_planner) # Pass the correct orchestrator
                         # Create the plan (main task and subtasks).
                         main_planned_task = await planner.plan_task(task_description=actual_task_description)
 
