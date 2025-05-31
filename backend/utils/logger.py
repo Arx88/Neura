@@ -18,7 +18,7 @@ from functools import wraps
 import traceback
 from logging.handlers import RotatingFileHandler
 
-from backend.utils.config import config, EnvMode # Changed import
+from utils.config import config, EnvMode # Changed import
 
 # Context variable for request correlation ID
 request_id: ContextVar[str] = ContextVar('request_id', default='')
