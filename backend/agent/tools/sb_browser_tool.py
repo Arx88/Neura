@@ -1,32 +1,42 @@
 import traceback
 import json
 
-from agentpress.tool import ToolResult, openapi_schema, xml_schema
+from agentpress.tool import openapi_schema, xml_schema # ToolResult removed
 from agentpress.thread_manager import ThreadManager
 from sandbox.tool_base import SandboxToolsBase
 from utils.logger import logger
 from utils.s3_upload_utils import upload_base64_image
 
+# Custom Exceptions
+class BrowserToolError(Exception):
+    """Base exception for browser tool errors."""
+    pass
 
 class SandboxBrowserTool(SandboxToolsBase):
     """Tool for executing tasks in a Daytona sandbox with browser-use capabilities."""
     
     def __init__(self, project_id: str, thread_id: str, thread_manager: ThreadManager):
-        super().__init__(project_id, thread_manager)
+        super().__init__(project_id, thread_manager) # Pass project_id to super
         self.thread_id = thread_id
 
-    async def _execute_browser_action(self, endpoint: str, params: dict = None, method: str = "POST") -> ToolResult:
-        """Execute a browser automation action through the API
+    async def _execute_browser_action(self, endpoint: str, params: dict = None, method: str = "POST") -> dict:
+        """Execute a browser automation action through the API.
         
         Args:
-            endpoint (str): The API endpoint to call
+            endpoint (str): The API endpoint to call.
             params (dict, optional): Parameters to send. Defaults to None.
             method (str, optional): HTTP method to use. Defaults to "POST".
             
         Returns:
-            ToolResult: Result of the execution
+            dict: A dictionary containing the result of the browser action.
+        Raises:
+            BrowserToolError: If the browser action fails or an unexpected error occurs.
+            ValueError: If input parameters are invalid.
         """
         try:
+            if not endpoint or not isinstance(endpoint, str):
+                raise ValueError("A valid API endpoint string is required.")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
@@ -46,71 +56,87 @@ class SandboxBrowserTool(SandboxToolsBase):
             logger.debug("\033[95mExecuting curl command:\033[0m")
             logger.debug(f"{curl_cmd}")
             
-            response = self.sandbox.process.exec(curl_cmd, timeout=30)
+            # Assuming self.sandbox.process.exec is synchronous as per previous tool refactors
+            # If it's async, it should be awaited.
+            response = self.sandbox.process.exec(curl_cmd, timeout=60) # Increased timeout
             
             if response.exit_code == 0:
                 try:
-                    result = json.loads(response.result)
+                    # Attempt to parse the result from the browser automation API
+                    api_result = json.loads(response.result)
 
-                    if not "content" in result:
-                        result["content"] = ""
-                    
-                    if not "role" in result:
-                        result["role"] = "assistant"
+                    # Ensure default keys exist, similar to original logic
+                    if "content" not in api_result:
+                        api_result["content"] = ""
+                    if "role" not in api_result:
+                        api_result["role"] = "assistant" # This might be specific to how messages are stored
 
-                    logger.info("Browser automation request completed successfully")
+                    logger.info(f"Browser automation API call to '{endpoint}' successful.")
 
-                    if "screenshot_base64" in result:
+                    # Handle screenshot upload
+                    if "screenshot_base64" in api_result:
                         try:
-                            image_url = await upload_base64_image(result["screenshot_base64"])
-                            result["image_url"] = image_url
-                            # Remove base64 data from result to keep it clean
-                            del result["screenshot_base64"]
+                            image_url = await upload_base64_image(api_result["screenshot_base64"])
+                            api_result["image_url"] = image_url
+                            del api_result["screenshot_base64"] # Keep payload clean
                             logger.debug(f"Uploaded screenshot to {image_url}")
-                        except Exception as e:
-                            logger.error(f"Failed to upload screenshot: {e}")
-                            result["image_upload_error"] = str(e)
+                        except Exception as e_upload:
+                            logger.error(f"Failed to upload screenshot for {endpoint}: {e_upload}")
+                            api_result["image_upload_error"] = str(e_upload)
 
-                    added_message = await self.thread_manager.add_message(
+                    # Add browser state message to thread manager
+                    # This seems important for context, so keep it.
+                    # Ensure `api_result` has necessary fields for `add_message` or adapt.
+                    added_message_info = await self.thread_manager.add_message(
                         thread_id=self.thread_id,
-                        type="browser_state",
-                        content=result,
+                        type="browser_state", # This type indicates it's a browser state update
+                        content=api_result, # The full result from the browser automation API
                         is_llm_message=False
                     )
 
-                    success_response = {
-                        "success": True,
-                        "message": result.get("message", "Browser action completed successfully")
+                    # Construct the dictionary to be returned to the tool orchestrator
+                    # This dictionary *is* the "raw data" from the tool's perspective.
+                    tool_output_data = {
+                        # "success": True, # Implicitly success if no exception is raised
+                        "message": api_result.get("message", f"Browser action '{endpoint}' completed successfully."),
+                        "api_response": api_result # Include the actual response from browser service
                     }
+                    # Add common fields to the output if they exist in the API result
+                    if added_message_info and 'message_id' in added_message_info:
+                         tool_output_data['browser_state_message_id'] = added_message_info['message_id']
+                    if api_result.get("url"):
+                        tool_output_data["url"] = api_result["url"]
+                    if api_result.get("title"):
+                        tool_output_data["title"] = api_result["title"]
+                    if api_result.get("element_count") is not None: # Check for None explicitly
+                        tool_output_data["elements_found"] = api_result["element_count"]
+                    if api_result.get("pixels_below") is not None:
+                        tool_output_data["scrollable_content_pixels_below"] = api_result["pixels_below"]
+                        tool_output_data["scrollable_content_available"] = api_result["pixels_below"] > 0
+                    if api_result.get("ocr_text"):
+                        tool_output_data["ocr_text"] = api_result["ocr_text"]
+                    if api_result.get("image_url"):
+                        tool_output_data["image_url"] = api_result["image_url"]
+                    if api_result.get("image_upload_error"):
+                        tool_output_data["image_upload_error"] = api_result["image_upload_error"]
 
-                    if added_message and 'message_id' in added_message:
-                        success_response['message_id'] = added_message['message_id']
-                    if result.get("url"):
-                        success_response["url"] = result["url"]
-                    if result.get("title"):
-                        success_response["title"] = result["title"]
-                    if result.get("element_count"):
-                        success_response["elements_found"] = result["element_count"]
-                    if result.get("pixels_below"):
-                        success_response["scrollable_content"] = result["pixels_below"] > 0
-                    if result.get("ocr_text"):
-                        success_response["ocr_text"] = result["ocr_text"]
-                    if result.get("image_url"):
-                        success_response["image_url"] = result["image_url"]
 
-                    return self.success_response(success_response)
+                    return tool_output_data
 
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse response JSON: {response.result} {e}")
-                    return self.fail_response(f"Failed to parse response JSON: {response.result} {e}")
+                except json.JSONDecodeError as e_json:
+                    logger.error(f"Failed to parse JSON response from browser API ({endpoint}): {response.result}", exc_info=True)
+                    raise BrowserToolError(f"Browser API ({endpoint}) returned non-JSON response: {response.result[:200]}...") from e_json
             else:
-                logger.error(f"Browser automation request failed 2: {response}")
-                return self.fail_response(f"Browser automation request failed 2: {response}")
+                # The curl command itself failed (non-zero exit code)
+                error_detail = f"Browser API request ({endpoint}) failed. Exit code: {response.exit_code}. Output: {response.result[:500]}"
+                logger.error(error_detail)
+                raise BrowserToolError(error_detail)
 
-        except Exception as e:
-            logger.error(f"Error executing browser action: {e}")
-            logger.debug(traceback.format_exc())
-            return self.fail_response(f"Error executing browser action: {e}")
+        except ValueError: # Re-raise specific error
+            raise
+        except Exception as e: # Catch any other unexpected errors
+            logger.error(f"Error executing browser action '{endpoint}': {str(e)}", exc_info=True)
+            raise BrowserToolError(f"An unexpected error occurred during browser action '{endpoint}': {str(e)}") from e
 
 
     @openapi_schema({
@@ -141,7 +167,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-navigate-to>
         '''
     )
-    async def browser_navigate_to(self, url: str) -> ToolResult:
+    async def browser_navigate_to(self, url: str) -> dict: # Changed ToolResult to dict
         """Navigate to a specific url
         
         Args:
@@ -210,7 +236,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         <browser-go-back></browser-go-back>
         '''
     )
-    async def browser_go_back(self) -> ToolResult:
+    async def browser_go_back(self) -> dict: # Changed ToolResult to dict
         """Navigate back in browser history
         
         Returns:
@@ -246,7 +272,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-wait>
         '''
     )
-    async def browser_wait(self, seconds: int = 3) -> ToolResult:
+    async def browser_wait(self, seconds: int = 3) -> dict: # Changed ToolResult to dict
         """Wait for the specified number of seconds
         
         Args:
@@ -286,7 +312,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-click-element>
         '''
     )
-    async def browser_click_element(self, index: int) -> ToolResult:
+    async def browser_click_element(self, index: int) -> dict: # Changed ToolResult to dict
         """Click on an element by index
         
         Args:
@@ -331,7 +357,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-input-text>
         '''
     )
-    async def browser_input_text(self, index: int, text: str) -> ToolResult:
+    async def browser_input_text(self, index: int, text: str) -> dict: # Changed ToolResult to dict
         """Input text into an element
         
         Args:
@@ -372,7 +398,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-send-keys>
         '''
     )
-    async def browser_send_keys(self, keys: str) -> ToolResult:
+    async def browser_send_keys(self, keys: str) -> dict: # Changed ToolResult to dict
         """Send keyboard keys
         
         Args:
@@ -412,7 +438,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-switch-tab>
         '''
     )
-    async def browser_switch_tab(self, page_id: int) -> ToolResult:
+    async def browser_switch_tab(self, page_id: int) -> dict: # Changed ToolResult to dict
         """Switch to a different browser tab
         
         Args:
@@ -492,7 +518,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-close-tab>
         '''
     )
-    async def browser_close_tab(self, page_id: int) -> ToolResult:
+    async def browser_close_tab(self, page_id: int) -> dict: # Changed ToolResult to dict
         """Close a browser tab
         
         Args:
@@ -590,7 +616,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-scroll-down>
         '''
     )
-    async def browser_scroll_down(self, amount: int = None) -> ToolResult:
+    async def browser_scroll_down(self, amount: int = None) -> dict: # Changed ToolResult to dict
         """Scroll down the page
         
         Args:
@@ -635,7 +661,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-scroll-up>
         '''
     )
-    async def browser_scroll_up(self, amount: int = None) -> ToolResult:
+    async def browser_scroll_up(self, amount: int = None) -> dict: # Changed ToolResult to dict
         """Scroll up the page
         
         Args:
@@ -681,7 +707,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-scroll-to-text>
         '''
     )
-    async def browser_scroll_to_text(self, text: str) -> ToolResult:
+    async def browser_scroll_to_text(self, text: str) -> dict: # Changed ToolResult to dict
         """Scroll to specific text on the page
         
         Args:
@@ -721,7 +747,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-get-dropdown-options>
         '''
     )
-    async def browser_get_dropdown_options(self, index: int) -> ToolResult:
+    async def browser_get_dropdown_options(self, index: int) -> dict: # Changed ToolResult to dict
         """Get all options from a dropdown element
         
         Args:
@@ -766,7 +792,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         </browser-select-dropdown-option>
         '''
     )
-    async def browser_select_dropdown_option(self, index: int, text: str) -> ToolResult:
+    async def browser_select_dropdown_option(self, index: int, text: str) -> dict: # Changed ToolResult to dict
         """Select an option from a dropdown by text
         
         Args:
@@ -831,7 +857,7 @@ class SandboxBrowserTool(SandboxToolsBase):
     )
     async def browser_drag_drop(self, element_source: str = None, element_target: str = None, 
                                coord_source_x: int = None, coord_source_y: int = None,
-                               coord_target_x: int = None, coord_target_y: int = None) -> ToolResult:
+                               coord_target_x: int = None, coord_target_y: int = None) -> dict: # Changed ToolResult to dict
         """Perform drag and drop operation between elements or coordinates
         
         Args:
@@ -858,7 +884,8 @@ class SandboxBrowserTool(SandboxToolsBase):
             params["coord_target_y"] = coord_target_y
             logger.debug(f"\033[95mDragging from coordinates ({coord_source_x}, {coord_source_y}) to ({coord_target_x}, {coord_target_y})\033[0m")
         else:
-            return self.fail_response("Must provide either element selectors or coordinates for drag and drop")
+            # Original code returned self.fail_response, now raise ValueError for bad input.
+            raise ValueError("Must provide either both element selectors (element_source, element_target) or all four coordinates for drag and drop.")
         
         return await self._execute_browser_action("drag_drop", params)
 
@@ -893,7 +920,7 @@ class SandboxBrowserTool(SandboxToolsBase):
         <browser-click-coordinates x="100" y="200"></browser-click-coordinates>
         '''
     )
-    async def browser_click_coordinates(self, x: int, y: int) -> ToolResult:
+    async def browser_click_coordinates(self, x: int, y: int) -> dict: # Changed ToolResult to dict
         """Click at specific X,Y coordinates on the page
         
         Args:

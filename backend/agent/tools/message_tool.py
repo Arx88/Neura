@@ -1,5 +1,11 @@
-from typing import List, Optional, Union
-from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
+from typing import List, Optional, Union, Dict, Any
+from agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
+import logging # Added for logging
+
+# Custom Exceptions
+class MessageToolError(Exception):
+    """Base exception for message tool errors."""
+    pass
 
 class MessageTool(Tool):
     """Tool for user communication and interaction.
@@ -66,24 +72,48 @@ Ask user a question and wait for response. Use for: 1) Requesting clarification 
         </ask>
         '''
     )
-    async def ask(self, text: str, attachments: Optional[Union[str, List[str]]] = None) -> ToolResult:
+    async def ask(self, text: str, attachments: Optional[Union[str, List[str]]] = None) -> Dict[str, Any]:
         """Ask the user a question and wait for a response.
 
         Args:
-            text: The question to present to the user
-            attachments: Optional file paths or URLs to attach to the question
+            text: The question to present to the user.
+            attachments: Optional file paths or URLs to attach to the question.
 
         Returns:
-            ToolResult indicating the question was successfully sent
+            A dictionary indicating the action status.
+        Raises:
+            ValueError: If text is not provided.
+            MessageToolError: For other errors.
         """
+        if not text or not isinstance(text, str):
+            raise ValueError("Question text must be provided.")
         try:
-            # Convert single attachment to list for consistent handling
-            if attachments and isinstance(attachments, str):
-                attachments = [attachments]
+            # Attachments are handled by the orchestrator when constructing the final ToolResult
+            # The primary job of this method is to signal the intent and provide the necessary data (text, attachments).
+            # The orchestrator will use self.success_response, passing this dict as output.
+            # The `attachments` parameter is already part of the method signature and will be available
+            # to the orchestrator via `tool_input_kwargs`. The orchestrator then needs to ensure
+            # this `attachments` field is correctly placed into the `ToolResult`'s `output` or a specific field
+            # if the `MessageTool.success_response` doesn't automatically include all passed args.
+            # For now, the `success_response` just takes `output`.
+            # The orchestrator will need to combine `text` and `attachments` into the `output` for `success_response`.
+            # This means the orchestrator should create the dict that goes into `success_response`.
+            # So, this method should just return the core data.
 
-            return self.success_response({"status": "Awaiting user response..."})
+            # The orchestrator will construct the final ToolResult.
+            # This method just needs to return the data that should go into ToolResult.output.
+            output_payload = {"text": text, "status": "Awaiting user response..."}
+            if attachments:
+                if isinstance(attachments, str):
+                    output_payload["attachments"] = [attachments]
+                else:
+                    output_payload["attachments"] = attachments
+            return output_payload
+        except ValueError:
+            raise
         except Exception as e:
-            return self.fail_response(f"Error asking user: {str(e)}")
+            logging.error(f"Error in 'ask' tool: {str(e)}", exc_info=True)
+            raise MessageToolError(f"Error asking user: {str(e)}") from e
 
     @openapi_schema({
         "type": "function",
@@ -132,24 +162,34 @@ Ask user a question and wait for response. Use for: 1) Requesting clarification 
         </web-browser-takeover>
         '''
     )
-    async def web_browser_takeover(self, text: str, attachments: Optional[Union[str, List[str]]] = None) -> ToolResult:
+    async def web_browser_takeover(self, text: str, attachments: Optional[Union[str, List[str]]] = None) -> Dict[str, Any]:
         """Request user takeover of browser interaction.
 
         Args:
-            text: Instructions for the user about what actions to take
-            attachments: Optional file paths or URLs to attach to the request
+            text: Instructions for the user about what actions to take.
+            attachments: Optional file paths or URLs to attach to the request.
 
         Returns:
-            ToolResult indicating the takeover request was successfully sent
+            A dictionary indicating the action status.
+        Raises:
+            ValueError: If text is not provided.
+            MessageToolError: For other errors.
         """
+        if not text or not isinstance(text, str):
+            raise ValueError("Takeover instructions text must be provided.")
         try:
-            # Convert single attachment to list for consistent handling
-            if attachments and isinstance(attachments, str):
-                attachments = [attachments]
-
-            return self.success_response({"status": "Awaiting user browser takeover..."})
+            output_payload = {"text": text, "status": "Awaiting user browser takeover..."}
+            if attachments:
+                if isinstance(attachments, str):
+                    output_payload["attachments"] = [attachments]
+                else:
+                    output_payload["attachments"] = attachments
+            return output_payload
+        except ValueError:
+            raise
         except Exception as e:
-            return self.fail_response(f"Error requesting browser takeover: {str(e)}")
+            logging.error(f"Error in 'web_browser_takeover' tool: {str(e)}", exc_info=True)
+            raise MessageToolError(f"Error requesting browser takeover: {str(e)}") from e
 
 #     @openapi_schema({
 #         "type": "function",
@@ -254,36 +294,48 @@ Ask user a question and wait for response. Use for: 1) Requesting clarification 
         </complete>
         '''
     )
-    async def complete(self) -> ToolResult:
+    async def complete(self) -> Dict[str, Any]:
         """Indicate that the agent has completed all tasks and is entering complete state.
 
         Returns:
-            ToolResult indicating successful transition to complete state
+            A dictionary indicating the action status.
+        Raises:
+            MessageToolError: For errors during completion signal.
         """
         try:
-            return self.success_response({"status": "complete"})
+            # This output will be passed to tool_instance.success_response by the orchestrator
+            return {"status": "complete"}
         except Exception as e:
-            return self.fail_response(f"Error entering complete state: {str(e)}")
+            logging.error(f"Error in 'complete' tool: {str(e)}", exc_info=True)
+            raise MessageToolError(f"Error entering complete state: {str(e)}") from e
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    async def test_message_tool():
-        message_tool = MessageTool()
-
-        # Test question
-        ask_result = await message_tool.ask(
-            text="Would you like to proceed with the next phase?",
-            attachments="summary.pdf"
-        )
-        print("Question result:", ask_result)
-
-        # Test inform
-        inform_result = await message_tool.inform(
-            text="Completed analysis of data. Processing results now.",
-            attachments="analysis.pdf"
-        )
-        print("Inform result:", inform_result)
-
-    asyncio.run(test_message_tool())
+    # The __main__ block needs to be updated if direct testing is desired,
+    # as the methods now return dicts instead of ToolResult objects directly.
+    # import asyncio
+    #
+    # async def test_message_tool():
+    #     message_tool = MessageTool() # This tool doesn't require project_id or thread_manager
+    #
+    #     # Test question
+    #     try:
+    #         ask_output = await message_tool.ask(
+    #             text="Would you like to proceed with the next phase?",
+    #             attachments="summary.pdf"
+    #         )
+    #         # In real scenario, orchestrator would create ToolResult from this dict
+    #         print("Ask output data:", ask_output)
+    #     except Exception as e:
+    #         print("Ask failed:", e)
+    #
+    #     # Test complete
+    #     try:
+    #         complete_output = await message_tool.complete()
+    #         print("Complete output data:", complete_output)
+    #     except Exception as e:
+    #         print("Complete failed:", e)
+    #
+    # if __name__ == "__main__":
+    #     asyncio.run(test_message_tool())
+    pass

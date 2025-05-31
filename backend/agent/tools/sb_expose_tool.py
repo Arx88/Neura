@@ -1,6 +1,12 @@
-from agentpress.tool import ToolResult, openapi_schema, xml_schema
+from agentpress.tool import openapi_schema, xml_schema # ToolResult removed
 from sandbox.tool_base import SandboxToolsBase
 from agentpress.thread_manager import ThreadManager
+import logging # Added for logging
+
+# Custom Exceptions
+class ExposeToolError(Exception):
+    """Base exception for port exposing tool errors."""
+    pass
 
 class SandboxExposeTool(SandboxToolsBase):
     """Tool for exposing and retrieving preview URLs for sandbox ports."""
@@ -58,31 +64,44 @@ class SandboxExposeTool(SandboxToolsBase):
         </expose-port>
         '''
     )
-    async def expose_port(self, port: int) -> ToolResult:
+    async def expose_port(self, port: int) -> dict: # Return dict on success
         try:
+            # Convert port to integer early, handle potential ValueError from int()
+            try:
+                port_num = int(port)
+            except ValueError:
+                raise ValueError(f"Invalid port number: '{port}'. Must be a valid integer.")
+
+            # Validate port number
+            if not 1 <= port_num <= 65535:
+                raise ValueError(f"Invalid port number: {port_num}. Must be between 1 and 65535.")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            # Convert port to integer if it's a string
-            port = int(port)
-            
-            # Validate port number
-            if not 1 <= port <= 65535:
-                return self.fail_response(f"Invalid port number: {port}. Must be between 1 and 65535.")
-
             # Get the preview link for the specified port
-            preview_link = self.sandbox.get_preview_link(port)
+            # Assuming self.sandbox.get_preview_link raises an exception on failure (e.g., port not exposable, sandbox error)
+            preview_link_obj = self.sandbox.get_preview_link(port_num) # Renamed to avoid confusion with url variable
             
             # Extract the actual URL from the preview link object
-            url = preview_link.url if hasattr(preview_link, 'url') else str(preview_link)
+            # This part depends on the structure of preview_link_obj.
+            # If it can be None or not have 'url', handle appropriately.
+            if not preview_link_obj or not hasattr(preview_link_obj, 'url') or not preview_link_obj.url:
+                # Log details of preview_link_obj if it's not as expected
+                logging.error(f"Failed to get a valid URL from preview_link object for port {port_num}. Object: {preview_link_obj}")
+                raise ExposeToolError(f"Could not retrieve a valid preview URL for port {port_num}.")
+
+            url = preview_link_obj.url
             
-            return self.success_response({
+            return {
                 "url": url,
-                "port": port,
-                "message": f"Successfully exposed port {port} to the public. Users can now access this service at: {url}"
-            })
-                
-        except ValueError:
-            return self.fail_response(f"Invalid port number: {port}. Must be a valid integer between 1 and 65535.")
+                "port": port_num,
+                "message": f"Successfully exposed port {port_num}. Preview URL: {url}"
+            }
+        except ValueError: # Catches errors from int(port) and manual port validation
+            raise
         except Exception as e:
-            return self.fail_response(f"Error exposing port {port}: {str(e)}")
+            # Log the full error for debugging
+            logging.error(f"Error exposing port {port}: {str(e)}", exc_info=True)
+            # Raise a more specific error to the orchestrator
+            raise ExposeToolError(f"An unexpected error occurred while exposing port {port}: {str(e)}") from e
