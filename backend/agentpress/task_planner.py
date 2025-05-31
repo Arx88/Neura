@@ -107,7 +107,7 @@ Ensure the output is a valid JSON array.
             # Using a capable model is important for good decomposition.
             llm_response_str = await make_llm_api_call(
                 messages=prompt_messages,
-                llm_model="gpt-4o", # Or another suitable model like gpt-3.5-turbo
+                model="gpt-4o", # Changed from llm_model to model
                 temperature=0.2, # Lower temperature for more deterministic planning
                 max_tokens=2048, # Adjust as needed
                 # Not passing tools directly for function calling here, expecting JSON response.
