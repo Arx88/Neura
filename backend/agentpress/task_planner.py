@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
+from pydantic import BaseModel, Field, ValidationError # Added imports
 
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
@@ -25,26 +26,20 @@ class TaskPlanner:
         self.tool_orchestrator = tool_orchestrator
         logger.info("TaskPlanner initialized.")
 
+# Pydantic model for subtask structure
+class SubtaskDecompositionItem(BaseModel):
+    name: str
+    description: str
+    dependencies: List[int] = Field(default_factory=list)
+    assigned_tools: List[str] = Field(default_factory=list)
+
     async def _decompose_task(
         self,
         task_description: str,
         available_tools: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Decomposes a task description into a list of subtasks using an LLM.
-
-        Args:
-            task_description: The high-level description of the task to decompose.
-            available_tools: A list of available tool schemas for the LLM to consider.
-            context: Optional context to provide to the LLM.
-
-        Returns:
-            A list of dictionaries, where each dictionary represents a subtask
-            and includes fields like 'name', 'description', 'dependencies' (list of indices),
-            and 'assigned_tools' (list of tool names).
-        """
-        logger.debug(f"Decomposing task: {task_description}")
+        logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
 
         formatted_tools = "\n".join([
             f"- {tool.get('name')}: {tool.get('description', 'No description')}"
@@ -53,9 +48,7 @@ class TaskPlanner:
         if not formatted_tools:
             formatted_tools = "No specific tools seem immediately available for this task, but you can still define subtasks that might require general capabilities."
 
-        # Constructing the prompt for the LLM
-        # The LLM should output a JSON list of subtasks.
-        prompt_messages = [
+        base_prompt_messages = [
             {
                 "role": "system",
                 "content": f"""\
@@ -66,7 +59,7 @@ Available tools:
 Each tool is listed with its unique identifier (in the format ToolID__methodName) followed by its description. When assigning tools to a subtask, you MUST use these exact unique identifiers.
 {formatted_tools}
 
-Please output your plan as a JSON array of objects. Each object should have the following fields:
+Please output your plan as a JSON array of objects. Each object MUST have the following fields:
 - "name": A concise name for the subtask (string).
 - "description": A detailed step-by-step description of what needs to be done for this subtask (string).
 - "dependencies": A list of 0-based indices of other subtasks in this plan that this subtask depends on. An empty list means no dependencies within this plan (List[int]).
@@ -93,7 +86,7 @@ Example JSON output for a task "Develop a new feature X":
     "assigned_tools": ["CodeRepository__commit_changes", "UIFramework__generate_component"]
   }}
 ]
-Ensure the output is a valid JSON array.
+Ensure the output is ONLY a valid JSON array of objects adhering to this schema. Do not include any explanatory text before or after the JSON array.
 """
             },
             {
@@ -102,79 +95,119 @@ Ensure the output is a valid JSON array.
             }
         ]
 
-        try:
-            # TODO: Determine appropriate model, temperature, max_tokens for planning.
-            # Using a capable model is important for good decomposition.
-            llm_response_str = await make_llm_api_call(
-                messages=prompt_messages,
-                model="gpt-4o", # Changed from llm_model to model
-                temperature=0.2, # Lower temperature for more deterministic planning
-                max_tokens=2048, # Adjust as needed
-                # Not passing tools directly for function calling here, expecting JSON response.
-                stream=False, # Expecting a single JSON output
-                json_mode=True # Request JSON mode if supported by make_llm_api_call and model
-            )
+        max_retries = 2
+        attempts = 0
+        llm_response_content = "" # Ensure llm_response_content is defined for logging in case of early error
 
-            # The make_llm_api_call might return a dict/object, or a raw string.
-            # Assuming it returns something from which we can extract the text content.
-            # If it's already a dict because of json_mode=True, this might be simpler.
+        while attempts <= max_retries:
+            prompt_messages_for_attempt = list(base_prompt_messages) # Make a copy for this attempt
+            if attempts > 0:
+                # Add a system message to guide the LLM on retry
+                retry_guidance = {
+                    "role": "system",
+                    "content": "Your previous response had a formatting or validation error. Please strictly adhere to the output format: A valid JSON array of objects, where each object has 'name' (string), 'description' (string), 'dependencies' (list of integers), and 'assigned_tools' (list of strings). Do not include any text outside the JSON array itself."
+                }
+                # Insert it after the initial system prompt
+                prompt_messages_for_attempt.insert(1, retry_guidance)
 
-            # For now, assuming llm_response_str is the string content of the LLM's message.
-            # If make_llm_api_call returns a complex object:
-            if isinstance(llm_response_str, dict) and 'choices' in llm_response_str and llm_response_str['choices']:
-                 response_content = llm_response_str['choices'][0].get('message', {}).get('content', '')
-            elif isinstance(llm_response_str, str): # Direct string response
-                 response_content = llm_response_str
-            else: # Fallback for unexpected structure (e.g. LiteLLM object)
-                if hasattr(llm_response_str, 'choices') and llm_response_str.choices and \
-                   hasattr(llm_response_str.choices[0], 'message') and \
-                   hasattr(llm_response_str.choices[0].message, 'content'):
-                    response_content = llm_response_str.choices[0].message.content
+            logger.info(f"TASK_PLANNER: Attempt {attempts + 1}/{max_retries + 1} to decompose task: {task_description}")
+
+            try:
+                llm_response_obj = await make_llm_api_call(
+                    messages=prompt_messages_for_attempt,
+                    model="gpt-4o",
+                    temperature=0.1, # Slightly lower for more consistent JSON
+                    max_tokens=2048,
+                    stream=False,
+                    json_mode=True
+                )
+
+                # Extract content based on expected structure (consistent with previous implementation)
+                if isinstance(llm_response_obj, dict) and 'choices' in llm_response_obj and llm_response_obj['choices']:
+                    llm_response_content = llm_response_obj['choices'][0].get('message', {}).get('content', '')
+                elif isinstance(llm_response_obj, str):
+                    llm_response_content = llm_response_obj
+                elif hasattr(llm_response_obj, 'choices') and llm_response_obj.choices and \
+                     hasattr(llm_response_obj.choices[0], 'message') and \
+                     hasattr(llm_response_obj.choices[0].message, 'content'):
+                    llm_response_content = llm_response_obj.choices[0].message.content
                 else:
-                    logger.error(f"Unexpected LLM response structure: {type(llm_response_str)}")
+                    logger.error(f"TASK_PLANNER: Unexpected LLM response structure (Attempt {attempts + 1}): {type(llm_response_obj)}")
+                    attempts += 1
+                    if attempts > max_retries:
+                        logger.error("TASK_PLANNER: Max retries reached due to unexpected LLM response structure.")
+                        return []
+                    continue
+
+                if not llm_response_content or not llm_response_content.strip():
+                    logger.warning(f"TASK_PLANNER: LLM returned empty content (Attempt {attempts + 1}).")
+                    attempts += 1
+                    if attempts > max_retries:
+                         logger.error("TASK_PLANNER: Max retries reached due to empty LLM response.")
+                         return []
+                    continue
+
+                logger.debug(f"TASK_PLANNER: LLM response for task decomposition (Attempt {attempts + 1}):\n{llm_response_content}")
+
+                # Clean potential markdown ```json ... ```
+                cleaned_response_content = llm_response_content.strip()
+                if cleaned_response_content.startswith("```json"):
+                    cleaned_response_content = cleaned_response_content[7:-3].strip()
+                elif cleaned_response_content.startswith("```"):
+                    cleaned_response_content = cleaned_response_content[3:-3].strip()
+
+                if not cleaned_response_content: # Check again after stripping markdown
+                    logger.warning(f"TASK_PLANNER: LLM returned empty content after stripping markdown (Attempt {attempts + 1}). Raw: {llm_response_content}")
+                    attempts += 1
+                    if attempts > max_retries:
+                         logger.error("TASK_PLANNER: Max retries reached due to empty LLM response after markdown stripping.")
+                         return []
+                    continue
+
+                try:
+                    subtasks_data = json.loads(cleaned_response_content)
+                except json.JSONDecodeError as e_json:
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Failed to parse JSON: {e_json}. Response: '{cleaned_response_content}'")
+                    attempts += 1
+                    if attempts > max_retries:
+                        logger.error(f"TASK_PLANNER: Max retries reached. Final JSON parsing failed. LLM Raw Response: '{llm_response_content}'")
+                        return []
+                    continue # Retry
+
+                try:
+                    # Ensure it's a list before Pydantic validation
+                    if not isinstance(subtasks_data, list):
+                        logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: LLM did not return a list. Got: {type(subtasks_data)}. Data: '{subtasks_data}'")
+                        # Attempt to recover if it's a single dict that should have been a list
+                        if isinstance(subtasks_data, dict) and "name" in subtasks_data and "description" in subtasks_data:
+                             logger.info(f"TASK_PLANNER: Attempt {attempts + 1}: Wrapping single dictionary response in a list for validation.")
+                             subtasks_data = [subtasks_data]
+                        else: # Not a list and not a recoverable single dict
+                            raise ValidationError([{"loc": "__root__", "msg": "Data is not a list of subtasks", "type": "type_error"}], model=SubtaskDecompositionItem)
+
+
+                    validated_subtasks = [SubtaskDecompositionItem.parse_obj(item) for item in subtasks_data]
+                    logger.info(f"TASK_PLANNER: Successfully parsed and validated {len(validated_subtasks)} subtasks from LLM (Attempt {attempts + 1}).")
+                    return [item.dict() for item in validated_subtasks] # Success
+
+                except ValidationError as e_val:
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed: {e_val}. Data: '{subtasks_data}'")
+                    attempts += 1
+                    if attempts > max_retries:
+                        logger.error(f"TASK_PLANNER: Max retries reached. Final Pydantic validation failed. LLM Parsed Data: '{subtasks_data}'")
+                        return []
+                    continue # Retry
+
+            except Exception as e_main: # Catch any other unexpected errors during LLM call or processing
+                logger.error(f"TASK_PLANNER: Attempt {attempts + 1}: Unexpected error during task decomposition: {e_main}", exc_info=True)
+                attempts += 1
+                if attempts > max_retries:
+                    logger.error(f"TASK_PLANNER: Max retries reached. Last error: {e_main}")
                     return []
+                # Optional: await asyncio.sleep(1) # Brief pause before retry
 
-
-            logger.debug(f"LLM response for task decomposition:\n{response_content}")
-
-            # Attempt to parse the JSON response
-            # The LLM might sometimes include markdown ```json ... ``` around the JSON.
-            if response_content.strip().startswith("```json"):
-                response_content = response_content.strip()[7:-3].strip()
-            elif response_content.strip().startswith("```"): # Generic markdown block
-                response_content = response_content.strip()[3:-3].strip()
-
-            subtasks_data = json.loads(response_content)
-
-            if not isinstance(subtasks_data, list):
-                logger.error(f"LLM did not return a list of subtasks. Got: {type(subtasks_data)}")
-                # Potentially try to wrap it in a list if it's a single dict?
-                return []
-
-            # Basic validation of subtask structure (can be enhanced)
-            valid_subtasks = []
-            for i, st_data in enumerate(subtasks_data):
-                if isinstance(st_data, dict) and "name" in st_data and "description" in st_data:
-                    # Ensure dependencies and assigned_tools are lists
-                    st_data["dependencies"] = st_data.get("dependencies", [])
-                    if not isinstance(st_data["dependencies"], list): st_data["dependencies"] = []
-
-                    st_data["assigned_tools"] = st_data.get("assigned_tools", [])
-                    if not isinstance(st_data["assigned_tools"], list): st_data["assigned_tools"] = []
-
-                    valid_subtasks.append(st_data)
-                else:
-                    logger.warning(f"Subtask at index {i} has invalid structure: {st_data}")
-
-            return valid_subtasks
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from LLM response for task decomposition: {e}")
-            logger.error(f"LLM Raw Response was: {response_content}")
-            return []
-        except Exception as e:
-            logger.error(f"Error during LLM call for task decomposition: {e}", exc_info=True)
-            return []
+        logger.error("TASK_PLANNER: Exhausted all retries for task decomposition.")
+        return [] # Should only be reached if all retries fail
 
 
     async def plan_task(

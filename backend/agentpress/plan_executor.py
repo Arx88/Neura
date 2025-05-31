@@ -96,9 +96,13 @@ class PlanExecutor:
 
         completed_subtask_ids = set()
         plan_failed = False
+        agent_signaled_completion = False # Flag for SystemCompleteTask
+        completion_summary_from_agent = "" # To store summary from SystemCompleteTask
         MAX_PARAM_GENERATION_RETRIES = 2
 
         while True: # Outer loop for dependency-aware execution
+            if agent_signaled_completion: # If completion tool was called, exit outer loop
+                break
             runnable_subtasks = []
             pending_subtasks_exist = False
 
@@ -179,15 +183,12 @@ class PlanExecutor:
                         params = {}
                         llm_param_generation_attempts = 0
                         raw_llm_output_for_error = "Not available"
+                        params_generated_successfully = False
 
-                        while llm_param_generation_attempts <= MAX_PARAM_GENERATION_RETRIES:
-                            llm_param_generation_attempts += 1
-                            # logger.info(f"Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES+1} to generate parameters for tool {tool_string} for subtask {subtask.id}") # Replaced by more detailed log below
-                            try:
-                                param_prompt_messages = [
-                                    {
-                                        "role": "system",
-                                        "content": f"""\
+                        base_param_prompt_messages = [
+                            {
+                                "role": "system",
+                                "content": f"""\
 You are a helpful AI assistant. Your task is to generate the JSON parameters required to execute a specific tool method based on a subtask description, the overall goal, and the tool's OpenAPI schema.
 
 Overall Goal: {main_task.description}
@@ -200,50 +201,80 @@ Tool Information:
 Output only the JSON object containing the parameters. If the tool requires no parameters according to its schema (e.g., parameters is empty or not defined), output an empty JSON object {{}}.
 Ensure your output is ONLY the valid JSON object of parameters, with no other text before or after it.
 """
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": f"Please generate the JSON parameters for the tool '{schema_for_tool.get('name')}' to achieve the subtask: '{subtask.description}'."
-                                    }
-                                ]
-                                logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempting LLM call (Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES+1}) to generate parameters for tool '{tool_string}'. Schema provided to LLM: {json.dumps(schema_for_tool, indent=2)}")
+                            },
+                            {
+                                "role": "user",
+                                "content": f"Please generate the JSON parameters for the tool '{schema_for_tool.get('name')}' to achieve the subtask: '{subtask.description}'."
+                            }
+                        ]
 
+                        while llm_param_generation_attempts <= MAX_PARAM_GENERATION_RETRIES:
+                            llm_param_generation_attempts += 1
+                            param_prompt_messages = list(base_param_prompt_messages) # Copy base prompt
+
+                            if llm_param_generation_attempts > 1: # Add retry guidance
+                                retry_message = {"role": "system", "content": "Your previous response for tool parameters was not a valid JSON object or did not parse correctly. Please ensure your output is ONLY a valid JSON object of parameters, with no other text before or after it. For example: {\"param_name\": \"value\"}. If the tool takes no parameters, output an empty JSON object: {}."}
+                                param_prompt_messages.insert(1, retry_message) # Insert after initial system prompt
+
+                            logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempting LLM call (Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES + 1}) to generate parameters for tool '{tool_string}'. Schema provided: {json.dumps(schema_for_tool.get('parameters', {}))}")
+
+                            try:
                                 llm_response_for_params = await make_llm_api_call(
                                     messages=param_prompt_messages,
-                                    llm_model="gpt-3.5-turbo-0125",
-                                    temperature=0.0,
+                                    llm_model="gpt-3.5-turbo-0125", # Consider using a more capable model if issues persist
+                                    temperature=0.0, # Low temperature for deterministic JSON
                                     json_mode=True
                                 )
 
+                                # Process response
                                 if isinstance(llm_response_for_params, dict):
                                     params = llm_response_for_params
-                                    raw_llm_output_for_error = json.dumps(params)
+                                    raw_llm_output_for_error = json.dumps(params) # For logging if subsequent validation fails
                                 elif isinstance(llm_response_for_params, str):
                                     raw_llm_output_for_error = llm_response_for_params
-                                    params = json.loads(llm_response_for_params)
-                                else:
+                                    try:
+                                        params = json.loads(llm_response_for_params)
+                                    except json.JSONDecodeError as e_json_load:
+                                        logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Failed to decode JSON parameters from LLM string response: {e_json_load}. Response: {raw_llm_output_for_error}")
+                                        if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
+                                            subtask_results.append({"error": "LLM failed to generate valid JSON parameters after retries (JSONDecodeError)", "details": str(e_json_load), "raw_llm_output": raw_llm_output_for_error})
+                                            subtask_failed_flag = True
+                                        continue # Retry
+                                else: # Unexpected type from LLM
                                     raw_llm_output_for_error = str(llm_response_for_params)
-                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Unexpected parameter type from LLM: {type(llm_response_for_params)}. Content: {llm_response_for_params}")
-                                    raise TypeError(f"Expected dict or JSON string from LLM, got {type(llm_response_for_params)}")
+                                    logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Unexpected parameter type from LLM: {type(llm_response_for_params)}. Content: {raw_llm_output_for_error}")
+                                    if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
+                                        subtask_results.append({"error": "LLM returned unexpected data type for parameters after retries", "raw_llm_output": raw_llm_output_for_error})
+                                        subtask_failed_flag = True
+                                    continue # Retry
+
+                                # Validate if params is a dictionary
+                                if not isinstance(params, dict):
+                                    logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: LLM output for parameters is not a dictionary. Type: {type(params)}, Value: {params}")
+                                    raw_llm_output_for_error = str(params) # Update raw output to current params
+                                    if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
+                                        subtask_results.append({"error": "LLM failed to generate a valid JSON object (dictionary) for parameters after retries", "raw_llm_output": raw_llm_output_for_error})
+                                        subtask_failed_flag = True
+                                    continue # Retry
 
                                 logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - LLM generated parameters for tool {tool_string}: {json.dumps(params, indent=2)}")
-                                subtask_failed_flag = False
-                                break
+                                params_generated_successfully = True
+                                break # Successfully generated and validated params
 
-                            except json.JSONDecodeError as e:
-                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Failed to decode JSON parameters from LLM for tool {tool_string}: {e}. Response: {raw_llm_output_for_error}")
+                            except Exception as e_llm_call: # Catch errors during make_llm_api_call or unexpected issues
+                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Error during LLM call or processing for parameters: {e_llm_call}", exc_info=True)
+                                raw_llm_output_for_error = f"Error during LLM call: {str(e_llm_call)}"
                                 if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - LLM failed to generate valid JSON parameters for tool {tool_string} after {MAX_PARAM_GENERATION_RETRIES+1} attempts. Raw LLM output: {raw_llm_output_for_error}")
-                                    subtask_results.append({"error": "LLM failed to generate valid JSON parameters after retries", "details": str(e), "raw_llm_output": raw_llm_output_for_error})
+                                    subtask_results.append({"error": "Error obtaining parameters from LLM after retries (call failed)", "details": str(e_llm_call)})
                                     subtask_failed_flag = True
-                            except Exception as e_llm:
-                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Error calling LLM for parameters for tool {tool_string}: {e_llm}", exc_info=True)
-                                if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Error obtaining parameters from LLM for tool {tool_string} after {MAX_PARAM_GENERATION_RETRIES+1} attempts.")
-                                    subtask_results.append({"error": "Error obtaining parameters from LLM after retries", "details": str(e_llm)})
-                                    subtask_failed_flag = True
+                                # continue will be hit by the loop if not max retries
 
-                        if not subtask_failed_flag:
+                        if not params_generated_successfully and not subtask_failed_flag: # Ensure failure is marked if loop finishes without success
+                            logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Exhausted all {MAX_PARAM_GENERATION_RETRIES + 1} attempts to generate parameters for tool {tool_string}.")
+                            subtask_results.append({"error": f"Exhausted all attempts to generate parameters for tool {tool_string}", "raw_llm_output": raw_llm_output_for_error})
+                            subtask_failed_flag = True
+
+                        if not subtask_failed_flag: # This means params_generated_successfully is True
                             try:
                                 logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Executing tool '{tool_id}__{method_name}' with generated parameters.")
                                 tool_result: ToolResult = await self.tool_orchestrator.execute_tool(tool_id, method_name, params)
@@ -266,10 +297,20 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                     subtask_failed_flag = True
                                 else:
                                     logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution successful for '{tool_id}__{method_name}'.")
+                                    # Check for SystemCompleteTask
+                                    if tool_id == "SystemCompleteTask" and method_name == "task_complete":
+                                        logger.info(f"PLAN_EXECUTOR: Agent signaled task completion via SystemCompleteTask. Main task {self.main_task_id} will be marked as completed.")
+                                        completion_summary_from_agent = tool_result.result.get("summary", "Agent marked task as complete.")
+                                        agent_signaled_completion = True
+                                        # subtask_failed_flag remains False as this is a successful completion signal
+                                        # No need to set plan_failed = False explicitly here, it's already False.
+                                        # Break this inner loop; the outer loop will check agent_signaled_completion.
+                                        break
 
                             except Exception as e_exec:
                                 logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Exception during tool execution for '{tool_id}__{method_name}': {e_exec}", exc_info=True)
-                                subtask_results.append({"error": f"Exception during tool execution: {tool_string}", "details": str(e_exec)})
+                                tool_execution_error_details = {"error": f"Exception during tool execution: {tool_id}__{method_name}", "details": str(e_exec)}
+                                subtask_results.append(tool_execution_error_details)
                                 subtask_failed_flag = True
 
 
@@ -289,7 +330,13 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                     await self._send_user_message(f"Subtask COMPLETED: {subtask.name}. Output: {output_data_complete}")
                     # logger.info(f"Subtask {subtask.id} ('{subtask.name}') completed successfully.") # Redundant with status update log
 
-            if plan_failed:
+                if agent_signaled_completion: # If completion tool was called in the last subtask, break outer loop
+                    break
+
+            if plan_failed: # This handles subtask failures
+                break
+
+            if agent_signaled_completion: # Handles completion signal from the loop above
                 break
 
             if not progress_made_in_pass and pending_subtasks_exist:
@@ -298,10 +345,20 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                  plan_failed = True
                  break
 
-        final_main_task_status = "completed" if not plan_failed else "failed"
-        final_main_task_message = "All subtasks processed successfully." if not plan_failed else "Plan execution failed due to one or more subtask failures or deadlock."
+        if agent_signaled_completion:
+            final_main_task_status = "completed"
+            final_main_task_message = completion_summary_from_agent
+            logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} completed by agent signal.")
+        elif plan_failed:
+            final_main_task_status = "failed"
+            final_main_task_message = "Plan execution failed due to one or more subtask failures or deadlock."
+            logger.error(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} failed.")
+        else: # All subtasks completed normally without explicit agent signal or failure
+            final_main_task_status = "completed"
+            final_main_task_message = "All subtasks processed successfully without explicit agent completion signal."
+            logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} completed (all subtasks done).")
 
-        logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} finished with status: {final_main_task_status}. Message: {final_main_task_message}")
+
         await self._send_user_message(f"Plan '{main_task.name}' {final_main_task_status.upper()}. {final_main_task_message}")
         await self.task_manager.update_task(self.main_task_id, {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message})})
 

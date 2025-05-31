@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 # from agentpress.thread_manager import ThreadManager
 from services.supabase import DBConnection
 from datetime import datetime, timezone
-from dotenv import load_dotenv
 from typing import List, Optional # Added for type hinting
 from utils.config import config, EnvMode
 import asyncio
@@ -38,9 +37,6 @@ from agent import api as agent_api
 from sandbox import api as sandbox_api
 from services import billing as billing_api
 from services import transcription as transcription_api
-
-# Load environment variables
-load_dotenv()
 
 # Global instances for AgentPress services
 # These will be initialized in the lifespan manager

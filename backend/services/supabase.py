@@ -46,7 +46,7 @@ class DBConnection:
             key_type = "SERVICE_ROLE_KEY" if config.SUPABASE_SERVICE_ROLE_KEY else "ANON_KEY"
             logger.debug(f"Database connection initialized with Supabase using {key_type}")
         except Exception as e:
-            logger.error(f"Database initialization error: {e}")
+            logger.error(f"Database initialization error: {str(e)}") # Changed e to str(e)
             raise RuntimeError(f"Failed to initialize database connection: {str(e)}")
 
     @classmethod
@@ -107,7 +107,7 @@ class DBConnection:
             return public_url
             
         except Exception as e:
-            logger.error(f"Error uploading base64 image: {e}")
+            logger.error(f"Error uploading base64 image: {str(e)}") # Changed e to str(e)
             raise RuntimeError(f"Failed to upload image: {str(e)}")
 
 

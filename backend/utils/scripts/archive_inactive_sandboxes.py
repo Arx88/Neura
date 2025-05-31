@@ -21,14 +21,13 @@ import sys
 import os
 import argparse
 from typing import List, Dict, Any, Set
-from dotenv import load_dotenv
 
 # Load script-specific environment variables
-load_dotenv(".env")
 
 from services.supabase import DBConnection
 from sandbox.sandbox import daytona
 from utils.logger import logger
+from ..config import config # Added import
 
 # Global DB connection to reuse
 db_connection = None
@@ -48,7 +47,7 @@ async def get_active_billing_customer_account_ids() -> Set[str]:
     client = await db_connection.client
     
     # Print the Supabase URL being used
-    print(f"Using Supabase URL: {os.getenv('SUPABASE_URL')}")
+    print(f"Using Supabase URL: {config.SUPABASE_URL}")
     
     # Query all account_ids from billing_customers where active=true
     result = await client.schema('basejump').from_('billing_customers').select('account_id, active').execute()
@@ -253,8 +252,8 @@ async def main():
         logger.info("DRY RUN MODE - No sandboxes will be archived")
     
     # Print environment info
-    print(f"Environment Mode: {os.getenv('ENV_MODE', 'Not set')}")
-    print(f"Daytona Server: {os.getenv('DAYTONA_SERVER_URL', 'Not set')}")
+    print(f"Environment Mode: {config.ENV_MODE.value if config.ENV_MODE else 'Not set'}")
+    print(f"Daytona Server: {config.DAYTONA_SERVER_URL if config.DAYTONA_SERVER_URL else 'Not set'}")
     
     try:
         # Initialize global DB connection
