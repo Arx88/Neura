@@ -76,21 +76,21 @@ class PlanExecutor:
         and the user message callback. If any subtask fails, the overall plan
         is marked as failed.
         """
-        logger.info(f"Starting execution of plan for main_task_id: {self.main_task_id}")
+        logger.info(f"PLAN_EXECUTOR: Starting execution of plan for main_task_id: {self.main_task_id}")
         await self.task_manager.update_task(self.main_task_id, {"status": "running"})
-
 
         main_task = await self.task_manager.get_task(self.main_task_id)
         if not main_task:
-            logger.error(f"Main task {self.main_task_id} not found. Cannot execute plan.")
+            logger.error(f"PLAN_EXECUTOR: Main task {self.main_task_id} not found. Cannot execute plan.")
             await self._send_user_message(f"Error: Could not find the main plan task (ID: {self.main_task_id}).")
-            # Update status to failed if task object was initially found but now gone, or if it never existed (though can't update if never existed)
             await self.task_manager.update_task(self.main_task_id, {"status": "failed", "output": "Main task not found during execution."})
             return
 
+        logger.debug(f"PLAN_EXECUTOR: Main task '{main_task.name}' (ID: {main_task.id}) fetched. Description: {main_task.description}")
+
         subtasks: List[TaskState] = await self.task_manager.get_subtasks(self.main_task_id)
-        # Sort by created_at for a defined order (assuming id is a UUID and created_at is more sequential)
-        subtasks.sort(key=lambda x: x.created_at if x.created_at else x.id)
+        subtasks.sort(key=lambda x: x.created_at if x.created_at else x.id) # Sort for deterministic order
+        logger.debug(f"PLAN_EXECUTOR: Fetched {len(subtasks)} subtasks for plan {self.main_task_id}. Sorted by created_at/id.")
 
         await self._send_user_message(f"Starting execution of plan: {main_task.name} (ID: {main_task.id}) with {len(subtasks)} subtasks.")
 
@@ -122,34 +122,33 @@ class PlanExecutor:
 
             if not runnable_subtasks:
                 if pending_subtasks_exist:
-                    # If there are still pending tasks but none are runnable, it's a deadlock or upstream failure.
-                    logger.error(f"Deadlock detected or failed dependency in plan {self.main_task_id}. No runnable subtasks but pending tasks exist.")
+                    logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {self.main_task_id}. No runnable subtasks but pending tasks exist. Marking plan failed.")
                     await self._send_user_message("Error: Plan execution cannot continue due to a deadlock (circular dependency or failed upstream task).")
                     plan_failed = True
-                # If no pending tasks and no runnable tasks, all tasks are processed.
-                break # Exit the main while loop
+                break
 
             progress_made_in_pass = False
-            for subtask in runnable_subtasks: # Process all subtasks identified as runnable in this pass
-                if plan_failed: # If a prior subtask in this pass (or a previous pass) failed the plan
+            for subtask in runnable_subtasks:
+                if plan_failed:
                     break
 
-                logger.info(f"Processing subtask: {subtask.id} - {subtask.name} (Status: {subtask.status})")
+                logger.info(f"PLAN_EXECUTOR: Processing subtask ID: {subtask.id}, Name: '{subtask.name}', Status: {subtask.status}, Dependencies: {subtask.dependencies}")
                 await self._send_user_message(f"Now working on: {subtask.name} (ID: {subtask.id})")
                 await self.task_manager.update_task(subtask.id, {"status": "running"})
-                progress_made_in_pass = True # Mark that we are attempting to process a task
+                progress_made_in_pass = True
 
-                subtask_results: List[Dict[str, Any]] = [] # Stores results of tool executions for this subtask
-                subtask_failed_flag = False # Flag for failure of the current subtask
+                subtask_results: List[Dict[str, Any]] = []
+                subtask_failed_flag = False
+                logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} assigned_tools: {subtask.assigned_tools}")
 
-                if not subtask.assigned_tools: # Or check `if not subtask.assigned_tools:`
-                    logger.info(f"No tools assigned for subtask {subtask.id} ('{subtask.name}'). Marking as completed.")
-                    await self.task_manager.update_task(subtask.id, {"status": "completed", "output": json.dumps({"message": "No tools assigned, subtask auto-completed."})})
+                if not subtask.assigned_tools:
+                    output_data = {"message": "No tools assigned, subtask auto-completed."}
+                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'completed'. Output: {json.dumps(output_data, indent=2)}")
+                    await self.task_manager.update_task(subtask.id, {"status": "completed", "output": json.dumps(output_data)})
                     await self._send_user_message(f"Subtask '{subtask.name}' completed (no tools were assigned).")
                     completed_subtask_ids.add(subtask.id)
-                    continue # Move to the next runnable subtask in this pass
+                    continue
 
-                # As per current design, only process the first tool string if multiple are present.
                 tool_string = subtask.assigned_tools[0]
                 tool_id = ""
                 method_name = ""
@@ -158,21 +157,22 @@ class PlanExecutor:
                     parts = tool_string.split("__", 1)
                     if len(parts) == 2:
                         tool_id, method_name = parts[0], parts[1]
+                        logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Parsing tool_string: '{tool_string}' -> tool_id='{tool_id}', method_name='{method_name}'")
                     else:
                         raise ValueError("Invalid tool string format. Expected 'ToolID__methodName'.")
                 except ValueError as e:
-                    logger.error(f"Failed to parse tool_string '{tool_string}' for subtask {subtask.id}: {e}")
+                    logger.error(f"PLAN_EXECUTOR: Failed to parse tool_string '{tool_string}' for subtask {subtask.id}: {e}")
                     subtask_results.append({"error": f"Failed to parse tool_string: {tool_string}", "details": str(e)})
                     subtask_failed_flag = True
 
                 if not subtask_failed_flag:
-                    logger.info(f"Attempting to use tool: {tool_id}, method: {method_name} for subtask {subtask.id}")
+                    # logger.info(f"Attempting to use tool: {tool_id}, method: {method_name} for subtask {subtask.id}") # Already covered by parsing log
 
                     all_schemas = self.tool_orchestrator.get_tool_schemas_for_llm()
                     schema_for_tool = next((s for s in all_schemas if s.get('name') == tool_string), None)
 
                     if not schema_for_tool:
-                        logger.error(f"Schema not found for tool_string '{tool_string}' in subtask {subtask.id}.")
+                        logger.error(f"PLAN_EXECUTOR: Schema not found for tool_string '{tool_string}' in subtask {subtask.id}.")
                         subtask_results.append({"error": f"Schema not found for tool: {tool_string}"})
                         subtask_failed_flag = True
                     else:
@@ -182,7 +182,7 @@ class PlanExecutor:
 
                         while llm_param_generation_attempts <= MAX_PARAM_GENERATION_RETRIES:
                             llm_param_generation_attempts += 1
-                            logger.info(f"Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES+1} to generate parameters for tool {tool_string} for subtask {subtask.id}")
+                            # logger.info(f"Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES+1} to generate parameters for tool {tool_string} for subtask {subtask.id}") # Replaced by more detailed log below
                             try:
                                 param_prompt_messages = [
                                     {
@@ -206,6 +206,7 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                         "content": f"Please generate the JSON parameters for the tool '{schema_for_tool.get('name')}' to achieve the subtask: '{subtask.description}'."
                                     }
                                 ]
+                                logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempting LLM call (Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES+1}) to generate parameters for tool '{tool_string}'. Schema provided to LLM: {json.dumps(schema_for_tool, indent=2)}")
 
                                 llm_response_for_params = await make_llm_api_call(
                                     messages=param_prompt_messages,
@@ -214,86 +215,93 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                     json_mode=True
                                 )
 
-                                if isinstance(llm_response_for_params, dict): # json_mode=True should return dict
+                                if isinstance(llm_response_for_params, dict):
                                     params = llm_response_for_params
-                                    raw_llm_output_for_error = json.dumps(params) # For logging on subsequent errors
-                                elif isinstance(llm_response_for_params, str): # Fallback parsing
+                                    raw_llm_output_for_error = json.dumps(params)
+                                elif isinstance(llm_response_for_params, str):
                                     raw_llm_output_for_error = llm_response_for_params
                                     params = json.loads(llm_response_for_params)
                                 else:
                                     raw_llm_output_for_error = str(llm_response_for_params)
-                                    logger.error(f"Unexpected parameter type from LLM: {type(llm_response_for_params)}. Content: {llm_response_for_params}")
+                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Unexpected parameter type from LLM: {type(llm_response_for_params)}. Content: {llm_response_for_params}")
                                     raise TypeError(f"Expected dict or JSON string from LLM, got {type(llm_response_for_params)}")
 
-                                logger.info(f"LLM generated parameters for {tool_string}: {params}")
-                                subtask_failed_flag = False # Clear flag as params generated
-                                break # Success, exit retry loop
+                                logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - LLM generated parameters for tool {tool_string}: {json.dumps(params, indent=2)}")
+                                subtask_failed_flag = False
+                                break
 
                             except json.JSONDecodeError as e:
-                                logger.warning(f"Attempt {llm_param_generation_attempts}: Failed to decode JSON parameters from LLM for tool {tool_string}: {e}. Response: {raw_llm_output_for_error}")
+                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Failed to decode JSON parameters from LLM for tool {tool_string}: {e}. Response: {raw_llm_output_for_error}")
                                 if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
+                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - LLM failed to generate valid JSON parameters for tool {tool_string} after {MAX_PARAM_GENERATION_RETRIES+1} attempts. Raw LLM output: {raw_llm_output_for_error}")
                                     subtask_results.append({"error": "LLM failed to generate valid JSON parameters after retries", "details": str(e), "raw_llm_output": raw_llm_output_for_error})
                                     subtask_failed_flag = True
                             except Exception as e_llm:
-                                logger.warning(f"Attempt {llm_param_generation_attempts}: Error calling LLM for parameters for tool {tool_string}: {e_llm}", exc_info=True)
+                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Error calling LLM for parameters for tool {tool_string}: {e_llm}", exc_info=True)
                                 if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
+                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Error obtaining parameters from LLM for tool {tool_string} after {MAX_PARAM_GENERATION_RETRIES+1} attempts.")
                                     subtask_results.append({"error": "Error obtaining parameters from LLM after retries", "details": str(e_llm)})
                                     subtask_failed_flag = True
 
-                        if not subtask_failed_flag: # If params were generated successfully
+                        if not subtask_failed_flag:
                             try:
+                                logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Executing tool '{tool_id}__{method_name}' with generated parameters.")
                                 tool_result: ToolResult = await self.tool_orchestrator.execute_tool(tool_id, method_name, params)
-                                # Assuming ToolResult has a to_dict() method
+
+                                tool_result_dict = {}
                                 if hasattr(tool_result, 'to_dict') and callable(tool_result.to_dict):
-                                    subtask_results.append(tool_result.to_dict())
-                                else: # Fallback if to_dict() is missing
-                                    subtask_results.append({
+                                    tool_result_dict = tool_result.to_dict()
+                                else:
+                                    tool_result_dict = {
                                         "tool_id": tool_result.tool_id, "execution_id": tool_result.execution_id,
                                         "status": tool_result.status, "result": tool_result.result,
-                                        "error": tool_result.error, "start_time": str(tool_result.start_time), # Ensure serializable
-                                        "end_time": str(tool_result.end_time) # Ensure serializable
-                                    })
+                                        "error": tool_result.error, "start_time": str(tool_result.start_time),
+                                        "end_time": str(tool_result.end_time)
+                                    }
+                                subtask_results.append(tool_result_dict)
+                                logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool '{tool_id}__{method_name}' execution result: {json.dumps(tool_result_dict, indent=2)}")
 
                                 if tool_result.status == "failed":
-                                    logger.error(f"Tool execution failed for subtask {subtask.id}: {tool_result.error}")
+                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution failed for '{tool_id}__{method_name}'. Error: {tool_result.error}")
                                     subtask_failed_flag = True
                                 else:
-                                    logger.info(f"Tool execution successful for subtask {subtask.id}. Result: {tool_result.result}")
+                                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution successful for '{tool_id}__{method_name}'.")
 
                             except Exception as e_exec:
-                                logger.error(f"Exception during tool execution for subtask {subtask.id}, tool {tool_string}: {e_exec}", exc_info=True)
+                                logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Exception during tool execution for '{tool_id}__{method_name}': {e_exec}", exc_info=True)
                                 subtask_results.append({"error": f"Exception during tool execution: {tool_string}", "details": str(e_exec)})
                                 subtask_failed_flag = True
 
 
-                # After processing (or attempting to process) the first tool for the current subtask
                 if subtask_failed_flag:
-                    await self.task_manager.update_task(subtask.id, {"status": "failed", "output": json.dumps(subtask_results)})
-                    await self._send_user_message(f"Subtask FAILED: {subtask.name}. Details: {json.dumps(subtask_results)}")
-                    logger.error(f"Plan execution failed at subtask {subtask.id} ({subtask.name}). Stopping plan.")
-                    plan_failed = True # Mark entire plan as failed
-                    break # Break from loop over runnable_subtasks for this pass
+                    output_data_fail = json.dumps(subtask_results)
+                    await self.task_manager.update_task(subtask.id, {"status": "failed", "output": output_data_fail})
+                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'failed'. Output: {json.dumps(output_data_fail, indent=2)}")
+                    await self._send_user_message(f"Subtask FAILED: {subtask.name}. Details: {output_data_fail}")
+                    logger.error(f"PLAN_EXECUTOR: Plan execution failed at subtask {subtask.id} ('{subtask.name}'). Stopping plan.")
+                    plan_failed = True
+                    break
                 else:
-                    await self.task_manager.update_task(subtask.id, {"status": "completed", "output": json.dumps(subtask_results)})
-                    completed_subtask_ids.add(subtask.id) # Add to completed set
-                    await self._send_user_message(f"Subtask COMPLETED: {subtask.name}. Output: {json.dumps(subtask_results)}")
-                    logger.info(f"Subtask {subtask.id} ({subtask.name}) completed successfully.")
+                    output_data_complete = json.dumps(subtask_results)
+                    await self.task_manager.update_task(subtask.id, {"status": "completed", "output": output_data_complete})
+                    completed_subtask_ids.add(subtask.id)
+                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'completed'. Output: {json.dumps(output_data_complete, indent=2)}")
+                    await self._send_user_message(f"Subtask COMPLETED: {subtask.name}. Output: {output_data_complete}")
+                    # logger.info(f"Subtask {subtask.id} ('{subtask.name}') completed successfully.") # Redundant with status update log
 
-            if plan_failed: # If a subtask failure occurred in the inner loop, break outer while loop
+            if plan_failed:
                 break
 
             if not progress_made_in_pass and pending_subtasks_exist:
-                 logger.error(f"Deadlock detected in plan {self.main_task_id} on second check. No progress made but pending tasks exist.")
+                 logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {self.main_task_id} on second check. No progress made but pending tasks exist. Marking plan failed.")
                  await self._send_user_message("Error: Plan execution cannot continue due to a deadlock (no progress made on pending tasks).")
                  plan_failed = True
                  break
 
-
-        # After outer while loop
         final_main_task_status = "completed" if not plan_failed else "failed"
         final_main_task_message = "All subtasks processed successfully." if not plan_failed else "Plan execution failed due to one or more subtask failures or deadlock."
 
-        logger.info(f"Plan execution for main_task_id: {self.main_task_id} finished with status: {final_main_task_status}")
+        logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} finished with status: {final_main_task_status}. Message: {final_main_task_message}")
         await self._send_user_message(f"Plan '{main_task.name}' {final_main_task_status.upper()}. {final_main_task_message}")
         await self.task_manager.update_task(self.main_task_id, {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message})})
 
