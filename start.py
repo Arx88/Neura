@@ -4,6 +4,7 @@ import subprocess
 import sys
 import platform
 import os
+import json # Added import
 
 # ANSI colors for pretty output
 class Colors:
@@ -18,6 +19,32 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 IS_WINDOWS = platform.system() == 'Windows'
+STATE_FILE = os.path.join(os.getcwd(), ".setup_state.json") # Define state file path
+
+def check_setup_completion():
+    if not os.path.exists(STATE_FILE):
+        print(f"{Colors.RED}❌ Error: Setup state file ('{STATE_FILE}') not found.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}⚠️ Suna setup has likely not been run or completed.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Please run 'python setup.py' to configure Suna and apply database migrations.{Colors.ENDC}")
+        sys.exit(1)
+
+    try:
+        with open(STATE_FILE, 'r') as f:
+            state = json.load(f)
+    except (IOError, json.JSONDecodeError) as e:
+        print(f"{Colors.RED}❌ Error: Could not load or parse setup state file ('{STATE_FILE}'): {e}{Colors.ENDC}")
+        print(f"{Colors.YELLOW}⚠️ This may indicate an incomplete or corrupted setup process.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Please re-run 'python setup.py'. If the issue persists, you may need to delete '.setup_state.json' and run setup again.{Colors.ENDC}")
+        sys.exit(1)
+
+    if not state.get('supabase_setup_completed', False):
+        print(f"{Colors.RED}❌ Error: Supabase database setup is not marked as complete in the setup state.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}⚠️ Database migrations have likely not been applied successfully.{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Please run 'python setup.py' to ensure the database is correctly set up.{Colors.ENDC}")
+        sys.exit(1)
+
+    print(f"{Colors.GREEN}✅ Supabase setup verified as complete from state file. Proceeding...{Colors.ENDC}")
+
 
 def check_docker_compose_up():
     result = subprocess.run(
@@ -35,6 +62,9 @@ def main():
         print(f"{Colors.RED}❌ Error: Configuration file 'backend/.env' not found.{Colors.ENDC}")
         print(f"{Colors.YELLOW}⚠️ Please run 'python setup.py install' or 'python setup.py' completely to generate this file.{Colors.ENDC}")
         sys.exit(1)
+
+    # NEW: Perform setup completion check
+    check_setup_completion() # This will exit if setup is not complete
 
     force = False
     if "--help" in sys.argv:
