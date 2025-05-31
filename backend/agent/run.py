@@ -216,7 +216,7 @@ async def run_agent(
                     message_metadata = json.loads(message_metadata)
                 except json.JSONDecodeError:
                     message_metadata = {}
-            
+
             processed_by_planner_flag = message_metadata.get('processed_by_planner', False)
 
             if message_type == 'user' and not processed_by_planner_flag:
@@ -232,24 +232,30 @@ async def run_agent(
                 original_user_text_content = user_content_json.get('content', '') # Original case for description
                 user_text_content_lower = original_user_text_content.lower() if isinstance(original_user_text_content, str) else ''
 
+                # Intensive logging for keyword detection
+                logger.debug(f"PLANNER_TRIGGER_CHECK: User message content (lowercase): '{user_text_content_lower}'")
+                logger.debug(f"PLANNER_TRIGGER_CHECK: Checking against PLANNING_KEYWORDS: {PLANNING_KEYWORDS}")
+
                 planning_triggered = False
                 actual_task_description = ""
                 keyword_found = ""
 
-                if isinstance(user_text_content_lower, str):
+                if isinstance(user_text_content_lower, str) and user_text_content_lower: # Ensure not empty string
                     for keyword in PLANNING_KEYWORDS:
                         if keyword in user_text_content_lower:
                             planning_triggered = True
                             keyword_found = keyword # Store the keyword that triggered planning
                             # Extract text *after* the found keyword from the original content
-                            keyword_original_case_index = original_user_text_content.lower().find(keyword)
+                            keyword_original_case_index = original_user_text_content.lower().find(keyword) # find on lowercased
                             actual_task_description = original_user_text_content[keyword_original_case_index + len(keyword):].strip()
                             break
 
                 if planning_triggered:
                     # --- Keyword-based Task Planning and Execution ---
-                    logger.info(f"Planning keyword '{keyword_found}' triggered for task: {actual_task_description}")
-                    trace.event(name="planning_keywords_triggered", level="DEFAULT", status_message=(f"Keyword: '{keyword_found}', Task: {actual_task_description}"))
+                    logger.info(f"PLANNER_TRIGGER_SUCCESS: Planning keyword '{keyword_found}' found in user message.")
+                    logger.debug(f"PLANNER_TRIGGER_SUCCESS: Extracted task description for planner: '{actual_task_description}'")
+                    # The trace event below already logs keyword and description.
+                    # trace.event(name="planning_keywords_triggered", level="DEFAULT", status_message=(f"Keyword: '{keyword_found}', Task: {actual_task_description}")) # This line is effectively duplicated by the log above.
 
                     # Define a callback for PlanExecutor to send messages/updates back to the user during execution.
                     async def plan_executor_message_callback(message_content: str):
@@ -352,6 +358,8 @@ async def run_agent(
                             "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
                         }
                         # Let normal execution proceed.
+                else: # Corresponds to 'if planning_triggered:'
+                    logger.info("PLANNER_TRIGGER_FAIL: No planning keyword detected in user message. Proceeding with normal agent response.")
 
 
             if not continue_execution: # If planning happened and we decided to stop this cycle
@@ -365,12 +373,14 @@ async def run_agent(
 
             if message_type == 'user' and not planning_triggered: # Check planning_triggered here
                 try:
-                    # Ensure user_content_json and user_text_content are defined if not set by planner block
-                    if 'user_content_json' not in locals(): # If planning block was skipped
+                    # Ensure user_content_json and original_user_text_content are defined if not set by planner block
+                    if 'user_content_json' not in locals():
                          user_content_json_str = latest_msg_data.get('content', '{}')
                          user_content_json = json.loads(user_content_json_str)
+                    if 'original_user_text_content' not in locals():
+                        original_user_text_content = user_content_json.get('content', '')
 
-                    user_text_content = user_content_json.get('content', '')
+                    # Use original_user_text_content for visualization detection, as it's the full, unaltered user text
                     user_text_content = user_content_json.get('content', '')
                     if isinstance(user_text_content, str) and user_text_content: # Ensure it's a non-empty string
                         detected_viz_type = detect_visualization_request(user_text_content)
