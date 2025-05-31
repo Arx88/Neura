@@ -1,11 +1,26 @@
 import json
+from typing import Dict, Any, List # For type hinting
 
-from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
+from agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
 from agent.tools.data_providers.LinkedinProvider import LinkedinProvider
 from agent.tools.data_providers.YahooFinanceProvider import YahooFinanceProvider
 from agent.tools.data_providers.AmazonProvider import AmazonProvider
+import logging # Added for logging
 from agent.tools.data_providers.ZillowProvider import ZillowProvider
 from agent.tools.data_providers.TwitterProvider import TwitterProvider
+
+# Custom Exceptions
+class DataProvidersToolError(Exception):
+    """Base exception for DataProvidersTool errors."""
+    pass
+
+class DataProviderNotFoundError(DataProvidersToolError):
+    """Exception for when a data provider is not found."""
+    pass
+
+class EndpointNotFoundError(DataProvidersToolError):
+    """Exception for when an endpoint is not found for a provider."""
+    pass
 
 class DataProvidersTool(Tool):
     """Tool for making requests to various data providers."""
@@ -57,29 +72,34 @@ Use this tool when you need to discover what endpoints are available.
     async def get_data_provider_endpoints(
         self,
         service_name: str
-    ) -> ToolResult:
+    ) -> Dict[str, Any]: # Return dict on success
         """
         Get available endpoints for a specific data provider.
         
         Parameters:
-        - service_name: The name of the data provider (e.g., 'linkedin')
+            service_name: The name of the data provider (e.g., 'linkedin')
+        Returns:
+            A dictionary of available endpoints.
+        Raises:
+            ValueError: If service_name is not provided.
+            DataProviderNotFoundError: If the specified service_name is not found.
+            DataProvidersToolError: For other errors.
         """
+        if not service_name or not isinstance(service_name, str):
+            raise ValueError("Data provider name (service_name) is required and must be a string.")
+
+        if service_name not in self.register_data_providers:
+            available_providers = list(self.register_data_providers.keys())
+            raise DataProviderNotFoundError(f"Data provider '{service_name}' not found. Available: {available_providers}")
+
         try:
-            if not service_name:
-                return self.fail_response("Data provider name is required.")
-                
-            if service_name not in self.register_data_providers:
-                return self.fail_response(f"Data provider '{service_name}' not found. Available data providers: {list(self.register_data_providers.keys())}")
-                
+            # Assuming get_endpoints() itself returns a dict or raises an error
             endpoints = self.register_data_providers[service_name].get_endpoints()
-            return self.success_response(endpoints)
+            return endpoints # Return raw data
             
         except Exception as e:
-            error_message = str(e)
-            simplified_message = f"Error getting data provider endpoints: {error_message[:200]}"
-            if len(error_message) > 200:
-                simplified_message += "..."
-            return self.fail_response(simplified_message)
+            logging.error(f"Error getting endpoints for '{service_name}': {str(e)}", exc_info=True)
+            raise DataProvidersToolError(f"Error getting data provider endpoints for '{service_name}': {str(e)}") from e
 
     @openapi_schema({
         "type": "function",
@@ -130,43 +150,54 @@ Use this tool when you need to discover what endpoints are available.
         self,
         service_name: str,
         route: str,
-        payload: str # this actually a json string
-    ) -> ToolResult:
+        payload: str # This is a JSON string, will be parsed.
+    ) -> Any: # Return type can be anything the specific provider endpoint returns
         """
         Execute a call to a specific data provider endpoint.
         
         Parameters:
-        - service_name: The name of the data provider (e.g., 'linkedin')
-        - route: The key of the endpoint to call
-        - payload: The payload to send with the data provider call
+            service_name: The name of the data provider (e.g., 'linkedin').
+            route: The key of the endpoint to call.
+            payload: A JSON string representing the payload for the API call.
+        Returns:
+            The result from the data provider's endpoint call.
+        Raises:
+            ValueError: For missing or invalid parameters, or invalid JSON payload.
+            DataProviderNotFoundError: If service_name is not found.
+            EndpointNotFoundError: If route is not found for the service.
+            DataProvidersToolError: For other errors during execution.
         """
+        if not service_name or not isinstance(service_name, str):
+            raise ValueError("service_name is required and must be a string.")
+        if not route or not isinstance(route, str):
+            raise ValueError("route is required and must be a string.")
+        if payload is None or not isinstance(payload, str): # Payload must be a string to be parsed
+            raise ValueError("payload is required and must be a JSON string.")
+
         try:
-            payload = json.loads(payload)
+            parsed_payload = json.loads(payload)
+        except json.JSONDecodeError as e_json:
+            raise ValueError(f"Invalid JSON payload provided: {str(e_json)}") from e_json
 
-            if not service_name:
-                return self.fail_response("service_name is required.")
+        if service_name not in self.register_data_providers:
+            available_providers = list(self.register_data_providers.keys())
+            raise DataProviderNotFoundError(f"Data provider '{service_name}' not found. Available: {available_providers}")
 
-            if not route:
-                return self.fail_response("route is required.")
-                
-            if service_name not in self.register_data_providers:
-                return self.fail_response(f"API '{service_name}' not found. Available APIs: {list(self.register_data_providers.keys())}")
-            
-            data_provider = self.register_data_providers[service_name]
-            if route == service_name:
-                return self.fail_response(f"route '{route}' is the same as service_name '{service_name}'. YOU FUCKING IDIOT!")
-            
-            if route not in data_provider.get_endpoints().keys():
-                return self.fail_response(f"Endpoint '{route}' not found in {service_name} data provider.")
-            
-            
-            result = data_provider.call_endpoint(route, payload)
-            return self.success_response(result)
-            
-        except Exception as e:
-            error_message = str(e)
-            print(error_message)
-            simplified_message = f"Error executing data provider call: {error_message[:200]}"
-            if len(error_message) > 200:
-                simplified_message += "..."
-            return self.fail_response(simplified_message)
+        data_provider = self.register_data_providers[service_name]
+
+        # The "YOU FUCKING IDIOT!" message was unprofessional. Changed to a standard error.
+        if route == service_name:
+            raise ValueError(f"Invalid route: route ('{route}') cannot be the same as service_name ('{service_name}').")
+
+        available_endpoints = data_provider.get_endpoints()
+        if route not in available_endpoints:
+            raise EndpointNotFoundError(f"Endpoint '{route}' not found in '{service_name}' data provider. Available endpoints: {list(available_endpoints.keys())}")
+
+        try:
+            # Assuming call_endpoint returns data directly or raises an error
+            result = data_provider.call_endpoint(route, parsed_payload)
+            return result # Return raw data
+        except Exception as e_call: # Catch errors from the specific provider's call_endpoint
+            logging.error(f"Error calling endpoint '{route}' for service '{service_name}': {str(e_call)}", exc_info=True)
+            # It might be useful to wrap provider-specific errors if they are not already custom exceptions.
+            raise DataProvidersToolError(f"Error during call to '{service_name}' endpoint '{route}': {str(e_call)}") from e_call

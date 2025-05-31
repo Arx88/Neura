@@ -1,7 +1,10 @@
 from tavily import AsyncTavilyClient
 import httpx
 from dotenv import load_dotenv
-from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
+# ToolResult is not directly used by the methods anymore, but openapi_schema and xml_schema might be.
+# If they are only for ToolResult, they might not be needed either.
+# For now, keep openapi_schema and xml_schema if they are used by the class decorators.
+from agentpress.tool import openapi_schema, xml_schema
 from utils.config import config
 from sandbox.tool_base import SandboxToolsBase
 from agentpress.thread_manager import ThreadManager
@@ -10,6 +13,20 @@ import os
 import datetime
 import asyncio
 import logging
+
+# Custom Exceptions
+class WebSearchToolError(Exception):
+    """Base exception for web search tool errors."""
+    pass
+
+class NoSearchResultsError(WebSearchToolError):
+    """Custom exception for when no search results are found."""
+    pass
+
+class ScrapingError(WebSearchToolError):
+    """Custom exception for errors during web scraping."""
+    pass
+
 
 # TODO: add subpages, etc... in filters as sometimes its necessary 
 
@@ -93,14 +110,17 @@ class SandboxWebSearchTool(SandboxToolsBase):
         self, 
         query: str,
         num_results: int = 20
-    ) -> ToolResult:
+    ) -> dict: # Return dict directly on success, raise Exception on failure
         """
         Search the web using the Tavily API to find relevant and up-to-date information.
+        Returns the search response dictionary directly.
+        Raises ValueError for invalid input, NoSearchResultsError if no results,
+        and WebSearchToolError for other issues.
         """
         try:
             # Ensure we have a valid query
             if not query or not isinstance(query, str):
-                return self.fail_response("A valid search query is required.")
+                raise ValueError("A valid search query is required.")
             
             # Normalize num_results
             if num_results is None:
@@ -135,25 +155,24 @@ class SandboxWebSearchTool(SandboxToolsBase):
             
             # Consider search successful if we have either results OR an answer
             if len(results) > 0 or (answer and answer.strip()):
-                return ToolResult(
-                    success=True,
-                    output=json.dumps(search_response, ensure_ascii=False)
-                )
+                # Return the raw search_response dictionary
+                return search_response
             else:
                 # No results or answer found
                 logging.warning(f"No search results or answer found for query: '{query}'")
-                return ToolResult(
-                    success=False,
-                    output=json.dumps(search_response, ensure_ascii=False)
-                )
+                raise NoSearchResultsError(f"No search results or answer found for query: {query}")
         
+        except NoSearchResultsError: # Re-raise specific error
+            raise
+        except ValueError: # Re-raise specific error
+            raise
         except Exception as e:
             error_message = str(e)
-            logging.error(f"Error performing web search for '{query}': {error_message}")
-            simplified_message = f"Error performing web search: {error_message[:200]}"
+            logging.error(f"Error performing web search for '{query}': {error_message}", exc_info=True)
+            simplified_message = f"An unexpected error occurred during web search: {error_message[:200]}"
             if len(error_message) > 200:
                 simplified_message += "..."
-            return self.fail_response(simplified_message)
+            raise WebSearchToolError(simplified_message) from e
 
     @openapi_schema({
         "type": "function",
@@ -227,7 +246,7 @@ class SandboxWebSearchTool(SandboxToolsBase):
     async def scrape_webpage(
         self,
         urls: str
-    ) -> ToolResult:
+    ) -> dict: # Return dict directly on success, raise Exception on failure
         """
         Retrieve the complete text content of multiple webpages in a single efficient operation.
         
@@ -236,6 +255,9 @@ class SandboxWebSearchTool(SandboxToolsBase):
         
         Parameters:
         - urls: Multiple URLs to scrape, separated by commas
+        Returns a dictionary summarizing the outcome.
+        Raises ValueError for invalid input, ScrapingError if all scrapes fail,
+        and WebSearchToolError for other issues.
         """
         try:
             logging.info(f"Starting to scrape webpages: {urls}")
@@ -244,75 +266,72 @@ class SandboxWebSearchTool(SandboxToolsBase):
             await self._ensure_sandbox()
             
             # Parse the URLs parameter
-            if not urls:
-                logging.warning("Scrape attempt with empty URLs")
-                return self.fail_response("Valid URLs are required.")
+            if not urls or not isinstance(urls, str):
+                logging.warning("Scrape attempt with invalid or empty URLs string.")
+                raise ValueError("Valid comma-separated URLs string is required.")
             
             # Split the URLs string into a list
             url_list = [url.strip() for url in urls.split(',') if url.strip()]
             
             if not url_list:
-                logging.warning("No valid URLs found in the input")
-                return self.fail_response("No valid URLs provided.")
+                logging.warning("No valid URLs found after parsing the input string.")
+                raise ValueError("No valid URLs provided in the comma-separated string.")
                 
             if len(url_list) == 1:
-                logging.warning("Only a single URL provided - for efficiency you should scrape multiple URLs at once")
+                logging.warning("Only a single URL provided - for efficiency you should scrape multiple URLs at once.")
             
             logging.info(f"Processing {len(url_list)} URLs: {url_list}")
             
             # Process each URL and collect results
-            results = []
-            for url in url_list:
+            scraped_results_summary = [] # Stores summary of each scrape attempt
+            for url_to_scrape in url_list:
                 try:
                     # Add protocol if missing
-                    if not (url.startswith('http://') or url.startswith('https://')):
-                        url = 'https://' + url
-                        logging.info(f"Added https:// protocol to URL: {url}")
+                    current_url = url_to_scrape
+                    if not (current_url.startswith('http://') or current_url.startswith('https://')):
+                        current_url = 'https://' + current_url
+                        logging.info(f"Added https:// protocol to URL: {current_url}")
                     
                     # Scrape this URL
-                    result = await self._scrape_single_url(url)
-                    results.append(result)
+                    single_scrape_result = await self._scrape_single_url(current_url)
+                    scraped_results_summary.append(single_scrape_result)
                     
-                except Exception as e:
-                    logging.error(f"Error processing URL {url}: {str(e)}")
-                    results.append({
-                        "url": url,
+                except Exception as e_single_scrape: # Catch errors from _scrape_single_url
+                    logging.error(f"Error processing URL {url_to_scrape} within scrape_webpage loop: {str(e_single_scrape)}")
+                    scraped_results_summary.append({
+                        "url": url_to_scrape,
                         "success": False,
-                        "error": str(e)
+                        "error": str(e_single_scrape)
                     })
             
             # Summarize results
-            successful = sum(1 for r in results if r.get("success", False))
-            failed = len(results) - successful
+            successful_scrapes = [r for r in scraped_results_summary if r.get("success")]
+            failed_scrapes_count = len(scraped_results_summary) - len(successful_scrapes)
             
-            # Create success/failure message
-            if successful == len(results):
-                message = f"Successfully scraped all {len(results)} URLs. Results saved to:"
-                for r in results:
-                    if r.get("file_path"):
-                        message += f"\n- {r.get('file_path')}"
-            elif successful > 0:
-                message = f"Scraped {successful} URLs successfully and {failed} failed. Results saved to:"
-                for r in results:
-                    if r.get("success", False) and r.get("file_path"):
-                        message += f"\n- {r.get('file_path')}"
-                message += "\n\nFailed URLs:"
-                for r in results:
-                    if not r.get("success", False):
-                        message += f"\n- {r.get('url')}: {r.get('error', 'Unknown error')}"
-            else:
-                error_details = "; ".join([f"{r.get('url')}: {r.get('error', 'Unknown error')}" for r in results])
-                return self.fail_response(f"Failed to scrape all {len(results)} URLs. Errors: {error_details}")
-            
-            return ToolResult(
-                success=True,
-                output=message
-            )
-        
+            # Create success/failure message and determine overall outcome
+            if len(successful_scrapes) == len(scraped_results_summary):
+                message = f"Successfully scraped all {len(scraped_results_summary)} URLs."
+            elif len(successful_scrapes) > 0:
+                message = f"Scraped {len(successful_scrapes)} URLs successfully and {failed_scrapes_count} failed."
+            else: # All failed
+                error_details = "; ".join([f"{r.get('url')}: {r.get('error', 'Unknown error')}" for r in scraped_results_summary])
+                logging.error(f"All scrape attempts failed. Errors: {error_details}")
+                raise ScrapingError(f"Failed to scrape all {len(scraped_results_summary)} URLs. Errors: {error_details}")
+
+            # Return a dictionary summarizing the outcome
+            return {
+                "message": message,
+                "scraped_content": scraped_results_summary # List of dicts from _scrape_single_url
+            }
+
+        except ValueError: # Re-raise specific error
+            raise
+        except ScrapingError: # Re-raise specific error
+            raise
         except Exception as e:
             error_message = str(e)
-            logging.error(f"Error in scrape_webpage: {error_message}")
-            return self.fail_response(f"Error processing scrape request: {error_message[:200]}")
+            logging.error(f"Error in scrape_webpage: {error_message}", exc_info=True)
+            raise WebSearchToolError(f"An unexpected error occurred during webpage scraping: {error_message[:200]}") from e
     
     async def _scrape_single_url(self, url: str) -> dict:
         """

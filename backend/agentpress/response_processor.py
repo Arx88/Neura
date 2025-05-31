@@ -539,7 +539,7 @@ class ResponseProcessor:
                         # Yield completed/failed status (linked to saved result ID if available)
                         completed_msg_obj = await self._yield_and_save_tool_completed(
                             context,
-                            saved_tool_result_object['message_id'] if saved_tool_result_object else None,
+                            saved_tool_result_object, # This is already the message_id (a string) or None
                             thread_id, thread_run_id
                         )
                         if completed_msg_obj: yield format_for_yield(completed_msg_obj)

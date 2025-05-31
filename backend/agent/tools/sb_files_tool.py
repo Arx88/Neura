@@ -5,6 +5,12 @@ from utils.files_utils import should_exclude_file, clean_path
 from agentpress.thread_manager import ThreadManager
 from utils.logger import logger
 import os
+import logging # Added for logging
+
+# Custom Exceptions
+class FilesToolError(Exception):
+    """Base exception for file tool errors."""
+    pass
 
 class SandboxFilesTool(SandboxToolsBase):
     """Tool for executing file system operations in a Daytona sandbox. All operations are performed relative to the /workspace directory."""
@@ -110,34 +116,41 @@ class SandboxFilesTool(SandboxToolsBase):
         </create-file>
         '''
     )
-    async def create_file(self, file_path: str, file_contents: str, permissions: str = "644") -> ToolResult:
+    async def create_file(self, file_path: str, file_contents: str, permissions: str = "644") -> dict:
         try:
+            if not file_path or not isinstance(file_path, str):
+                raise ValueError("A valid file path is required.")
+            if file_contents is None: # Allow empty string, but not None
+                raise ValueError("File contents must be provided (can be an empty string).")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            file_path = self.clean_path(file_path)
-            full_path = f"{self.workspace_path}/{file_path}"
+            cleaned_fp = self.clean_path(file_path)
+            full_path = f"{self.workspace_path}/{cleaned_fp}"
+
             if self._file_exists(full_path):
-                return self.fail_response(f"File '{file_path}' already exists. Use update_file to modify existing files.")
+                raise FilesToolError(f"File '{cleaned_fp}' already exists. Use full_file_rewrite or str_replace to modify existing files.")
             
             # Create parent directories if needed
-            parent_dir = '/'.join(full_path.split('/')[:-1])
-            if parent_dir:
-                self.sandbox.fs.create_folder(parent_dir, "755")
+            parent_dir_path = os.path.dirname(full_path)
+            if parent_dir_path and parent_dir_path != self.workspace_path: # Avoid creating /workspace itself if path is at root
+                # self.sandbox.fs.create_folder might need to be async if it involves I/O with Daytona SDK
+                # Assuming it's synchronous for now based on current usage. If it's async, add await.
+                self.sandbox.fs.create_folder(parent_dir_path, "755")
             
             # Write the file content
-            self.sandbox.fs.upload_file(full_path, file_contents.encode())
+            # self.sandbox.fs.upload_file might need to be async
+            self.sandbox.fs.upload_file(full_path, file_contents.encode('utf-8'))
             self.sandbox.fs.set_file_permissions(full_path, permissions)
             
-            # Get preview URL if it's an HTML file
-            # preview_url = self._get_preview_url(file_path)
-            message = f"File '{file_path}' created successfully."
-            # if preview_url:
-            #     message += f"\n\nYou can preview this HTML file at the automatically served HTTP server: {preview_url}"
-            
-            return self.success_response(message)
+            message = f"File '{cleaned_fp}' created successfully."
+            return {"message": message, "file_path": cleaned_fp}
+        except ValueError:
+            raise
         except Exception as e:
-            return self.fail_response(f"Error creating file: {str(e)}")
+            logging.error(f"Error creating file '{file_path}': {str(e)}", exc_info=True)
+            raise FilesToolError(f"Error creating file '{file_path}': {str(e)}") from e
 
     @openapi_schema({
         "type": "function",
@@ -178,47 +191,75 @@ class SandboxFilesTool(SandboxToolsBase):
         </str-replace>
         '''
     )
-    async def str_replace(self, file_path: str, old_str: str, new_str: str) -> ToolResult:
+    async def str_replace(self, file_path: str, old_str: str, new_str: str) -> dict:
         try:
+            if not file_path or not isinstance(file_path, str):
+                raise ValueError("A valid file path is required.")
+            if old_str is None: # new_str can be empty
+                 raise ValueError("The 'old_str' to be replaced must be provided.")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            file_path = self.clean_path(file_path)
-            full_path = f"{self.workspace_path}/{file_path}"
+            cleaned_fp = self.clean_path(file_path)
+            full_path = f"{self.workspace_path}/{cleaned_fp}"
             if not self._file_exists(full_path):
-                return self.fail_response(f"File '{file_path}' does not exist")
+                raise FileNotFoundError(f"File '{cleaned_fp}' does not exist.")
+
+            # download_file might need await if Daytona SDK is async
+            content = self.sandbox.fs.download_file(full_path).decode('utf-8')
             
-            content = self.sandbox.fs.download_file(full_path).decode()
-            old_str = old_str.expandtabs()
-            new_str = new_str.expandtabs()
+            # Expand tabs consistently for reliable counting and replacement
+            # Note: This changes the file content if it has tabs. Consider if this is desired.
+            # If not, count and replace without expandtabs, but be aware of tab inconsistencies.
+            old_str_expanded = old_str.expandtabs()
+            new_str_expanded = new_str.expandtabs()
+            content_expanded_for_count = content.expandtabs() # Count on expanded version
             
-            occurrences = content.count(old_str)
+            occurrences = content_expanded_for_count.count(old_str_expanded)
             if occurrences == 0:
-                return self.fail_response(f"String '{old_str}' not found in file")
+                raise ValueError(f"String '{old_str}' not found in file '{cleaned_fp}'.")
             if occurrences > 1:
-                lines = [i+1 for i, line in enumerate(content.split('\n')) if old_str in line]
-                return self.fail_response(f"Multiple occurrences found in lines {lines}. Please ensure string is unique")
+                lines = [i+1 for i, line in enumerate(content_expanded_for_count.split('\n')) if old_str_expanded in line]
+                raise ValueError(f"Multiple occurrences of '{old_str}' found in lines {lines} of file '{cleaned_fp}'. Please ensure the string is unique for replacement.")
             
-            # Perform replacement
-            new_content = content.replace(old_str, new_str)
-            self.sandbox.fs.upload_file(full_path, new_content.encode())
+            # Perform replacement on original content if no tabs in old/new, or on expanded if tabs matter for matching
+            # For simplicity and to match original logic of replacing expanded strings:
+            new_content = content_expanded_for_count.replace(old_str_expanded, new_str_expanded)
             
-            # Show snippet around the edit
-            replacement_line = content.split(old_str)[0].count('\n')
-            start_line = max(0, replacement_line - self.SNIPPET_LINES)
-            end_line = replacement_line + self.SNIPPET_LINES + new_str.count('\n')
-            snippet = '\n'.join(new_content.split('\n')[start_line:end_line + 1])
+            # upload_file might need await
+            self.sandbox.fs.upload_file(full_path, new_content.encode('utf-8'))
             
-            # Get preview URL if it's an HTML file
-            # preview_url = self._get_preview_url(file_path)
-            message = f"Replacement successful."
-            # if preview_url:
-            #     message += f"\n\nYou can preview this HTML file at: {preview_url}"
+            # Snippet generation can be kept if it's considered part of the "raw data" result
+            # replacement_line_idx = -1
+            # temp_content_lines = content_expanded_for_count.split('\n')
+            # for i, line_text in enumerate(temp_content_lines):
+            #     if old_str_expanded in line_text:
+            #         replacement_line_idx = i
+            #         break
             
-            return self.success_response(message)
+            # snippet_str = ""
+            # if replacement_line_idx != -1:
+            #     start_line = max(0, replacement_line_idx - self.SNIPPET_LINES)
+            #     # Calculate end_line based on new content's line structure around the replacement
+            #     # This is tricky if new_str_expanded has different line count than old_str_expanded
+            #     # For simplicity, let's use a fixed window around the start of the replacement in the new content
+            #     new_content_lines = new_content.split('\n')
+            #     # Find where the new_str starts effectively
+            #     # This is an approximation
+            #     new_str_start_line_idx = content_expanded_for_count[:content_expanded_for_count.find(old_str_expanded)].count('\n')
+
+            #     end_line = min(len(new_content_lines) -1, new_str_start_line_idx + new_str_expanded.count('\n') + self.SNIPPET_LINES)
+            #     snippet_str = '\n'.join(new_content_lines[start_line : end_line + 1])
+
+            message = f"Replacement successful in file '{cleaned_fp}'."
+            return {"message": message, "file_path": cleaned_fp} # "snippet": snippet_str if snippet_str else "Snippet not generated."
             
+        except (ValueError, FileNotFoundError):
+            raise
         except Exception as e:
-            return self.fail_response(f"Error replacing string: {str(e)}")
+            logging.error(f"Error replacing string in '{file_path}': {str(e)}", exc_info=True)
+            raise FilesToolError(f"Error replacing string in '{file_path}': {str(e)}") from e
 
     @openapi_schema({
         "type": "function",
@@ -261,28 +302,34 @@ class SandboxFilesTool(SandboxToolsBase):
         </full-file-rewrite>
         '''
     )
-    async def full_file_rewrite(self, file_path: str, file_contents: str, permissions: str = "644") -> ToolResult:
+    async def full_file_rewrite(self, file_path: str, file_contents: str, permissions: str = "644") -> dict:
         try:
+            if not file_path or not isinstance(file_path, str):
+                raise ValueError("A valid file path is required.")
+            if file_contents is None: # Allow empty string
+                raise ValueError("File contents must be provided.")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            file_path = self.clean_path(file_path)
-            full_path = f"{self.workspace_path}/{file_path}"
+            cleaned_fp = self.clean_path(file_path)
+            full_path = f"{self.workspace_path}/{cleaned_fp}"
             if not self._file_exists(full_path):
-                return self.fail_response(f"File '{file_path}' does not exist. Use create_file to create a new file.")
+                # Consider if this should be create_file or an error.
+                # The description implies it rewrites an *existing* file.
+                raise FileNotFoundError(f"File '{cleaned_fp}' does not exist. Use create_file to create a new file.")
             
-            self.sandbox.fs.upload_file(full_path, file_contents.encode())
+            # upload_file might need await
+            self.sandbox.fs.upload_file(full_path, file_contents.encode('utf-8'))
             self.sandbox.fs.set_file_permissions(full_path, permissions)
             
-            # Get preview URL if it's an HTML file
-            # preview_url = self._get_preview_url(file_path)
-            message = f"File '{file_path}' completely rewritten successfully."
-            # if preview_url:
-            #     message += f"\n\nYou can preview this HTML file at: {preview_url}"
-            
-            return self.success_response(message)
+            message = f"File '{cleaned_fp}' completely rewritten successfully."
+            return {"message": message, "file_path": cleaned_fp}
+        except (ValueError, FileNotFoundError):
+            raise
         except Exception as e:
-            return self.fail_response(f"Error rewriting file: {str(e)}")
+            logging.error(f"Error rewriting file '{file_path}': {str(e)}", exc_info=True)
+            raise FilesToolError(f"Error rewriting file '{file_path}': {str(e)}") from e
 
     @openapi_schema({
         "type": "function",
@@ -311,20 +358,27 @@ class SandboxFilesTool(SandboxToolsBase):
         </delete-file>
         '''
     )
-    async def delete_file(self, file_path: str) -> ToolResult:
+    async def delete_file(self, file_path: str) -> dict:
         try:
+            if not file_path or not isinstance(file_path, str):
+                raise ValueError("A valid file path is required.")
+
             # Ensure sandbox is initialized
             await self._ensure_sandbox()
             
-            file_path = self.clean_path(file_path)
-            full_path = f"{self.workspace_path}/{file_path}"
+            cleaned_fp = self.clean_path(file_path)
+            full_path = f"{self.workspace_path}/{cleaned_fp}"
             if not self._file_exists(full_path):
-                return self.fail_response(f"File '{file_path}' does not exist")
+                raise FileNotFoundError(f"File '{cleaned_fp}' does not exist, cannot delete.")
             
+            # delete_file might need await
             self.sandbox.fs.delete_file(full_path)
-            return self.success_response(f"File '{file_path}' deleted successfully.")
+            return {"message": f"File '{cleaned_fp}' deleted successfully.", "file_path": cleaned_fp}
+        except (ValueError, FileNotFoundError):
+            raise
         except Exception as e:
-            return self.fail_response(f"Error deleting file: {str(e)}")
+            logging.error(f"Error deleting file '{file_path}': {str(e)}", exc_info=True)
+            raise FilesToolError(f"Error deleting file '{file_path}': {str(e)}") from e
 
     # @openapi_schema({
     #     "type": "function",
