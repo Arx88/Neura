@@ -70,6 +70,7 @@ async def run_agent(
     thread_id: str,
     project_id: str,
     stream: bool,
+    tool_orchestrator: ToolOrchestrator, # CORRECTED PLACEMENT
     thread_manager: Optional[ThreadManager] = None,
     native_max_auto_continues: int = 25,
     max_iterations: int = 100,
@@ -77,7 +78,6 @@ async def run_agent(
     enable_thinking: Optional[bool] = False,
     reasoning_effort: Optional[str] = 'low',
     enable_context_manager: bool = True,
-    tool_orchestrator: ToolOrchestrator, # New parameter
     trace: Optional[StatefulTraceClient] = None
 ):
     """Run the development agent with specified configuration."""
