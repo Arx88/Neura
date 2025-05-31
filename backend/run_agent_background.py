@@ -324,11 +324,12 @@ async def run_agent_background(
                                 sandbox_instance['process']['create_session'](cleanup_session_id)
                             logger.debug(f"Created session {cleanup_session_id} for workspace cleanup.")
 
+                            base_cleanup_prefix = "apt-get update -y && apt-get install -y findutils || true; "
                             cleanup_commands = [
-                                "find /workspace -type f -name '*.tmp' -print -delete",
-                                "find /workspace -type f -name 'temp_*' -print -delete",
-                                "find /workspace -type f -name '*_temp.*' -print -delete",
-                                "find /workspace -depth -type d -empty -print -delete"
+                                base_cleanup_prefix + "find /workspace -type f -name '*.tmp' -print -delete",
+                                base_cleanup_prefix + "find /workspace -type f -name 'temp_*' -print -delete",
+                                base_cleanup_prefix + "find /workspace -type f -name '*_temp.*' -print -delete",
+                                base_cleanup_prefix + "find /workspace -depth -type d -empty -print -delete"
                             ]
 
                             for cmd in cleanup_commands:

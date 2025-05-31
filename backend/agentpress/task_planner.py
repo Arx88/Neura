@@ -33,7 +33,7 @@ class SubtaskDecompositionItem(BaseModel):
     dependencies: List[int] = Field(default_factory=list)
     assigned_tools: List[str] = Field(default_factory=list)
 
-    async def _decompose_task(
+    async def _decompose_task( # Re-indented to be part of TaskPlanner
         self,
         task_description: str,
         available_tools: List[Dict[str, Any]],
@@ -208,7 +208,6 @@ Ensure the output is ONLY a valid JSON array of objects adhering to this schema.
 
         logger.error("TASK_PLANNER: Exhausted all retries for task decomposition.")
         return [] # Should only be reached if all retries fail
-
 
     async def plan_task(
         self,
