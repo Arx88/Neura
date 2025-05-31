@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
+from supabase.lib.client_options import APIError # Add this import
 from services.supabase import DBConnection
 from agentpress.task_types import TaskState, TaskStorage
 from utils.logger import logger
@@ -59,19 +60,20 @@ class SupabaseTaskStorage(TaskStorage):
             # Upsert operation: inserts if id doesn't exist, updates if it does.
             # 'id' is the primary key and should be used for conflict resolution.
             response = await client.table(self._table_name).upsert(task_dict).execute()
+            # Assuming execute() raises an exception on error, response.data should be valid if no exception.
             if response.data:
                 logger.info(f"Task {task.id} saved/updated successfully.")
-            else: # Handle potential errors if data is empty but no exception was raised
+            else:
+                # This case might indicate an issue with RLS or if upsert doesn't return data by default
+                # depending on preference settings (e.g. return="minimal").
+                # If data is critical, this might need specific handling or ensuring preferences demand data.
                 logger.warning(f"Supabase upsert for task {task.id} returned no data. Response: {response}")
-                # This case might indicate an issue with RLS or query if it wasn't an error.
-                if response.error:
-                     logger.error(f"Error saving/updating task {task.id}: {response.error.message}")
-                     raise Exception(f"Supabase error: {response.error.message}")
-
-
+        except APIError as e:
+            logger.error(f"Supabase APIError saving/updating task {task.id}: {e}", exc_info=True)
+            raise # Re-raise the specific Supabase error
         except Exception as e:
-            logger.error(f"Failed to save/update task {task.id}: {e}", exc_info=True)
-            raise
+            logger.error(f"Unexpected error saving/updating task {task.id}: {e}", exc_info=True)
+            raise # Re-raise other errors
 
     async def load_task(self, task_id: str) -> Optional[TaskState]:
         """Loads a specific task by its ID from Supabase."""
@@ -80,12 +82,13 @@ class SupabaseTaskStorage(TaskStorage):
             response = await client.table(self._table_name).select("*").eq("id", task_id).maybe_single().execute()
             if response.data:
                 return self._from_db_format(response.data)
-            elif response.error:
-                logger.error(f"Error loading task {task_id}: {response.error.message}")
-                raise Exception(f"Supabase error: {response.error.message}")
+            # No data and no error from maybe_single() means task not found.
             return None
+        except APIError as e:
+            logger.error(f"Supabase APIError loading task {task_id}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load task {task_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error loading task {task_id}: {e}", exc_info=True)
             raise
 
     async def load_all_tasks(self) -> List[TaskState]:
@@ -95,31 +98,29 @@ class SupabaseTaskStorage(TaskStorage):
             response = await client.table(self._table_name).select("*").execute()
             if response.data:
                 return [self._from_db_format(item) for item in response.data]
-            elif response.error:
-                logger.error(f"Error loading all tasks: {response.error.message}")
-                raise Exception(f"Supabase error: {response.error.message}")
+            # If no data and no error, it's an empty list, not an error.
             return []
+        except APIError as e:
+            logger.error(f"Supabase APIError loading all tasks: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load all tasks: {e}", exc_info=True)
+            logger.error(f"Unexpected error loading all tasks: {e}", exc_info=True)
             raise
 
     async def delete_task(self, task_id: str) -> None:
         """Deletes a task by its ID from Supabase."""
         client = await self.db_connection.client
         try:
-            response = await client.table(self._table_name).delete().eq("id", task_id).execute()
-            # Delete operation might not return data for success, check error
-            if response.error:
-                 logger.error(f"Error deleting task {task_id}: {response.error.message}")
-                 raise Exception(f"Supabase error: {response.error.message}")
-            else:
-                # Check if any rows were affected (optional, as delete doesn't error if not found)
-                # Supabase python client response for delete might not directly give row count easily.
-                # If response.data is empty and no error, it implies success.
-                logger.info(f"Task {task_id} deleted (or did not exist).")
-
+            # Delete operation: execute() will raise an error if deletion fails.
+            # Successful deletion might not return data, depending on Supabase settings (e.g. return="minimal").
+            await client.table(self._table_name).delete().eq("id", task_id).execute()
+            # If execute() does not raise, assume success.
+            logger.info(f"Task {task_id} deleted (or did not exist).")
+        except APIError as e:
+            logger.error(f"Supabase APIError deleting task {task_id}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to delete task {task_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error deleting task {task_id}: {e}", exc_info=True)
             raise
 
     async def update_task(self, task_id: str, updates: Dict[str, Any]) -> Optional[TaskState]:
@@ -151,22 +152,17 @@ class SupabaseTaskStorage(TaskStorage):
             response = await client.table(self._table_name).update(db_updates).eq("id", task_id).execute()
             if response.data:
                 logger.info(f"Task {task_id} updated via Supabase direct update.")
-                # The response.data for an update usually contains the updated records.
-                # We need to return the full TaskState object.
-                return self._from_db_format(response.data[0]) if response.data else None
-            elif response.error:
-                logger.error(f"Error updating task {task_id} in Supabase: {response.error.message}")
-                raise Exception(f"Supabase error: {response.error.message}")
+                return self._from_db_format(response.data[0]) # Assuming update returns the updated record
             else:
-                # No data and no error might mean the record with task_id was not found.
-                logger.warning(f"Update for task {task_id} returned no data and no error. Task may not exist.")
+                # This could happen if the task_id doesn't exist or RLS prevents viewing.
+                # Or if PostgREST preference is `return=minimal`.
+                logger.warning(f"Update for task {task_id} returned no data. Task may not exist or check PostgREST preferences.")
                 return None
+        except APIError as e:
+            logger.error(f"Supabase APIError updating task {task_id}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to update task {task_id} in Supabase: {e}", exc_info=True)
-            # Fallback to default load-modify-save if direct update fails for some reason
-            # This is commented out as it could lead to recursion if save_task also fails.
-            # logger.warning(f"Falling back to default update method for task {task_id}")
-            # return await super().update_task(task_id, updates)
+            logger.error(f"Unexpected error updating task {task_id} in Supabase: {e}", exc_info=True)
             raise
 
     async def get_tasks_by_status(self, status: str) -> List[TaskState]:
@@ -176,12 +172,12 @@ class SupabaseTaskStorage(TaskStorage):
             response = await client.table(self._table_name).select("*").eq("status", status).execute()
             if response.data:
                 return [self._from_db_format(item) for item in response.data]
-            elif response.error:
-                logger.error(f"Error loading tasks with status {status}: {response.error.message}")
-                raise Exception(f"Supabase error: {response.error.message}")
-            return []
+            return [] # No tasks found with this status
+        except APIError as e:
+            logger.error(f"Supabase APIError loading tasks with status {status}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load tasks with status {status}: {e}", exc_info=True)
+            logger.error(f"Unexpected error loading tasks with status {status}: {e}", exc_info=True)
             raise
 
     async def get_subtasks(self, parent_id: str) -> List[TaskState]:
@@ -191,10 +187,10 @@ class SupabaseTaskStorage(TaskStorage):
             response = await client.table(self._table_name).select("*").eq("parentId", parent_id).execute()
             if response.data:
                 return [self._from_db_format(item) for item in response.data]
-            elif response.error:
-                logger.error(f"Error loading subtasks for parent {parent_id}: {response.error.message}")
-                raise Exception(f"Supabase error: {response.error.message}")
-            return []
+            return [] # No subtasks found for this parent
+        except APIError as e:
+            logger.error(f"Supabase APIError loading subtasks for parent {parent_id}: {e}", exc_info=True)
+            raise
         except Exception as e:
-            logger.error(f"Failed to load subtasks for parent {parent_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error loading subtasks for parent {parent_id}: {e}", exc_info=True)
             raise
