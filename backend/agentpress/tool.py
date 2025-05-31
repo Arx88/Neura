@@ -14,7 +14,7 @@ import json
 import inspect
 import time
 from enum import Enum
-from backend.utils.logger import logger # Changed import path
+from utils.logger import logger # Changed import path
 
 class SchemaType(Enum):
     """Enumeration of supported schema types for tool definitions."""

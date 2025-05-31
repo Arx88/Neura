@@ -5,8 +5,8 @@ import os # Added
 import importlib.util # Added
 import inspect # Added
 from typing import Dict, Any, Optional, List, Type # Added List, Type
-from backend.agentpress.tool import Tool, EnhancedToolResult, openapi_schema # Added openapi_schema for dummy tool
-from backend.utils.logger import logger # Changed import
+from agentpress.tool import Tool, EnhancedToolResult, openapi_schema # Added openapi_schema for dummy tool
+from utils.logger import logger # Changed import
 
 # Define a default plugin directory at the module level or pass to orchestrator
 DEFAULT_PLUGINS_DIR = "backend/agentpress/plugins"
@@ -461,8 +461,8 @@ if __name__ == '__main__':
 
         # Create a dummy plugin file
         dummy_plugin_content = """
-from backend.agentpress.tool import Tool, openapi_schema
-from backend.utils.logger import logger # Changed import for dummy plugin content as well
+from agentpress.tool import Tool, openapi_schema
+from utils.logger import logger # Changed import for dummy plugin content as well
 
 class TestPluginTool(Tool):
     PLUGIN_TOOL_ID = "FileSystemHelper" # Custom ID for this tool
