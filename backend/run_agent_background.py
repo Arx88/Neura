@@ -331,7 +331,8 @@ async def run_agent_background(
                                 if use_daytona():
                                     response = await sandbox_instance.process.execute_session_command(cleanup_session_id, exec_req, timeout=60)
                                 else:
-                                    response = await sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req, timeout=60)
+                                    # LocalSandbox's execute_session_command does not accept timeout
+                                    response = await sandbox_instance['process']['execute_session_command'](cleanup_session_id, exec_req)
 
                                 if response.exit_code == 0:
                                     logger.info(f"Cleanup command '{cmd}' successful.")

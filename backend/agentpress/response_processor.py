@@ -539,7 +539,7 @@ class ResponseProcessor:
                         # Yield completed/failed status (linked to saved result ID if available)
                         completed_msg_obj = await self._yield_and_save_tool_completed(
                             context,
-                            saved_tool_result_object, # This is already the message_id (a string) or None
+                            saved_tool_result_object['message_id'] if saved_tool_result_object else None,
                             thread_id, thread_run_id
                         )
                         if completed_msg_obj: yield format_for_yield(completed_msg_obj)
@@ -786,13 +786,14 @@ class ResponseProcessor:
                     # Save and Yield completed/failed status
                     completed_msg_obj = await self._yield_and_save_tool_completed(
                         context,
+                        # Access 'message_id' from the object if it exists
                         saved_tool_result_object['message_id'] if saved_tool_result_object else None,
                         thread_id, thread_run_id
                     )
                     if completed_msg_obj: yield format_for_yield(completed_msg_obj)
 
                     # Yield the saved tool result object
-                    if saved_tool_result_object:
+                    if saved_tool_result_object: # saved_tool_result_object is now the full message dict or None
                         tool_result_message_objects[tool_index] = saved_tool_result_object
                         yield format_for_yield(saved_tool_result_object)
                     else:
@@ -1295,14 +1296,14 @@ class ResponseProcessor:
         self, 
         thread_id: str, 
         tool_call: Dict[str, Any], 
-        result: ToolResult, # Changed from ToolResult
+        result: ToolResult,
         strategy: Union[XmlAddingStrategy, str] = "assistant_message",
         assistant_message_id: Optional[str] = None,
         parsing_details: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]: # Return the message ID
+    ) -> Optional[Dict[str, Any]]: # Return the full saved message object or None
         """Add a tool result (ToolResult) to the conversation thread."""
         try:
-            message_id = None
+            # message_id = None # Not used directly like this anymore
             metadata = {}
             if assistant_message_id:
                 metadata["assistant_message_id"] = assistant_message_id
@@ -1341,36 +1342,47 @@ class ResponseProcessor:
                 }
                 logger.info(f"Adding native tool result for tool_call_id={tool_call['id']}")
                 msg_obj = await self.add_message(
-                    thread_id=thread_id, type="tool", content=tool_message_content,
-                    is_llm_message=True, metadata=metadata
+                    thread_id=thread_id, type="tool", content=tool_message_content, # type="tool"
+                    is_llm_message=True, metadata=metadata # Typically considered LLM-related
                 )
-                return msg_obj['message_id'] if msg_obj else None
+                return msg_obj # Return the full message object
 
-            # XML or other non-native tools
+            # XML or other non-native tools (strategy applies here)
             result_role = "user" if strategy == "user_message" else "assistant"
-            tool_result_message_content = {"role": result_role, "content": content_to_store}
+            # For XML, the content_payload is the full XML string <tool_result>...</tool_result>
+            # This is then wrapped in a standard message structure.
+            tool_result_message_content = {"role": result_role, "content": content_payload}
+
+            # The type of message for XML tool results might depend on the strategy
+            # If it's "user_message", type might be "user". If "assistant_message", type "assistant".
+            # Let's assume type="tool" is generic enough, or adjust if needed.
+            # For now, keeping type="tool" as it represents the result of a tool.
+            message_type_for_xml_result = "tool" # Or map based on strategy if desired.
             
             msg_obj = await self.add_message(
-                thread_id=thread_id, type="tool", content=tool_result_message_content,
-                is_llm_message=True, metadata=metadata
+                thread_id=thread_id, type=message_type_for_xml_result,
+                content=tool_result_message_content,
+                is_llm_message=True, metadata=metadata # True if it's part of LLM flow
             )
-            return msg_obj['message_id'] if msg_obj else None
+            return msg_obj # Return the full message object
 
         except Exception as e:
             logger.error(f"Error adding tool result (ToolResult): {str(e)}", exc_info=True)
             # Fallback for safety, though less likely needed now
             try:
-                fallback_content = {"role": "user", "content": str(result.result or result.error)}
+                error_content_str = str(result.result or result.error or "Unknown tool processing error")
+                fallback_content_dict = {"role": "system", "content": f"Error processing tool result: {error_content_str[:500]}"}
                 msg_obj = await self.add_message(
-                    thread_id=thread_id, type="tool", content=fallback_content,
-                    is_llm_message=True, metadata=metadata # use same metadata
+                    thread_id=thread_id, type="status", content=fallback_content_dict, # Save as a status message
+                    is_llm_message=False, metadata=metadata
                 )
-                return msg_obj['message_id'] if msg_obj else None
+                return msg_obj # Return the error status message object
             except Exception as e2:
-                logger.error(f"Failed even with fallback message (ToolResult): {str(e2)}", exc_info=True)
+                logger.error(f"Failed even with fallback message saving for tool result: {str(e2)}", exc_info=True)
+                self.trace.event(name="failed_fallback_message_saving_for_tool_result", level="CRITICAL", status_message=(f"Failed fallback message saving: {str(e2)}"))
                 return None
 
-    def _format_xml_tool_result(self, tool_call: Dict[str, Any], result_str: str) -> str: # Changed result type
+    def _format_xml_tool_result(self, tool_call: Dict[str, Any], result_str: str) -> str:
         """Format a tool result wrapped in a <tool_result> tag.
 
         Args:
