@@ -238,15 +238,17 @@ class ThreadManager:
                 # for tag_name, example in xml_examples.items(): # xml_examples is a dict
                 #     examples_content += f"<{tag_name}> Example: {example}\\n"
 
-In this environment you have access to a set of tools you can use to answer the user's question. The tools are specified in XML format.
-Format your tool calls using the specified XML tags. Place parameters marked as 'attribute' within the opening tag (e.g., `<tag attribute='value'>`). Place parameters marked as 'content' between the opening and closing tags. Place parameters marked as 'element' within their own child tags (e.g., `<tag><element>value</element></tag>`). Refer to the examples provided below for the exact structure of each tool.
-String and scalar parameters should be specified as attributes, while content goes between tags.
-Note that spaces for string values are not stripped. The output is parsed with regular expressions.
-
-Here are the XML tools available with examples:
-"""
-                for tag_name, example in xml_examples.items():
-                    examples_content += f"<{tag_name}> Example: {example}\\n"
+# In this environment you have access to a set of tools you can use to answer the user's question. The tools are specified in XML format.
+# Format your tool calls using the specified XML tags. Place parameters marked as 'attribute' within the opening tag (e.g., `<tag attribute='value'>`). Place parameters marked as 'content' between the opening and closing tags. Place parameters marked as 'element' within their own child tags (e.g., `<tag><element>value</element></tag>`). Refer to the examples provided below for the exact structure of each tool.
+# String and scalar parameters should be specified as attributes, while content goes between tags.
+# Note that spaces for string values are not stripped. The output is parsed with regular expressions.
+#
+# Here are the XML tools available with examples:
+# """ # This line was causing a syntax error due to incorrect comment/string continuation.
+                # The loop below is commented out as xml_examples is not defined here.
+                # examples_content should be fully populated by xml_prompt_string.
+                # for tag_name, example in xml_examples.items():
+                #     examples_content += f"<{tag_name}> Example: {example}\\n"
 
                 # # Save examples content to a file
                 # try:
