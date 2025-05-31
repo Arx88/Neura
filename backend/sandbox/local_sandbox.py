@@ -51,7 +51,7 @@ class LocalSandbox:
                 'info': lambda: self._get_container_info(container),
                 'process': {
                     'create_session': lambda session_id: None,
-                    'execute_session_command': lambda session_id, command: self._execute_command(container, command),
+                    'execute_session_command': lambda session_id, command, timeout=None: self._execute_command(container, command),
                     'delete_session': lambda session_id: None,
                     'get_session_command_logs': lambda session_id, cmd_id: ""
                 }
