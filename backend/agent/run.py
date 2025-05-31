@@ -146,18 +146,16 @@ async def run_agent(
         logger.debug("Tools initialized.")
 
         logger.debug(f"Generating system prompt for model: {model_name}...")
-        if "gemini-2.5-flash" in model_name.lower():
-            system_message = { "role": "system", "content": get_gemini_system_prompt() }
-            logger.debug("Using Gemini system prompt.")
-        elif "anthropic" not in model_name.lower():
+        system_prompt_content = get_system_prompt()
+        if "anthropic" not in model_name.lower():
             sample_response_path = os.path.join(os.path.dirname(__file__), 'sample_responses/1.txt')
             with open(sample_response_path, 'r') as file:
                 sample_response = file.read()
-            system_message = { "role": "system", "content": get_system_prompt() + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>" }
+            system_prompt_content += "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>"
             logger.debug("Using default system prompt with sample response.")
         else:
-            system_message = { "role": "system", "content": get_system_prompt() }
             logger.debug("Using Anthropic system prompt (no sample response).")
+        system_message = { "role": "system", "content": system_prompt_content }
         logger.debug("System prompt generated.")
 
         logger.debug(f"Performing initial billing check for account {account_id}...")
