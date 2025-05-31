@@ -117,53 +117,101 @@ async def run_agent_background(
         # Ensure active run key exists and has TTL
         await redis.set(instance_active_key, "running", ex=redis.REDIS_KEY_TTL)
 
+        final_status = "running" # Initialize final_status
+        error_message = None # Initialize error_message
+        agent_gen = None # Initialize agent_gen to None
 
-        # Initialize agent generator
-        agent_gen = run_agent(
-            thread_id=thread_id, project_id=project_id, stream=stream,
-            model_name=model_name,
-            enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-            enable_context_manager=enable_context_manager,
-            trace=trace
-        )
+        try:
+            # Initialize agent generator
+            agent_gen = run_agent(
+                thread_id=thread_id, project_id=project_id, stream=stream,
+                model_name=model_name,
+                enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
+                enable_context_manager=enable_context_manager,
+                trace=trace
+            )
+        except Exception as e_agent_init:
+            init_error_message = f"Failed to initialize agent generator: {str(e_agent_init)}"
+            traceback_str = traceback.format_exc()
+            logger.error(f"{init_error_message}\n{traceback_str} (AgentRunID: {agent_run_id}, Instance: {instance_id})")
+            final_status = "failed"
+            error_message = init_error_message # This will be used by the main except block for DB update
+            # Push specific error to Redis for frontend
+            error_response_init = {"type": "status", "status": "error", "message": init_error_message}
+            try:
+                await redis.rpush(response_list_key, json.dumps(error_response_init))
+                await redis.publish(response_channel, "new")
+            except Exception as redis_err_init:
+                 logger.error(f"Failed to push agent initialization error to Redis for {agent_run_id}: {redis_err_init}")
+            # Raise the exception to be caught by the main try-except block for consistent error handling
+            raise e_agent_init
 
-        final_status = "running"
-        error_message = None
 
-        async for response in agent_gen:
-            if stop_signal_received:
-                logger.info(f"Agent run {agent_run_id} stopped by signal.")
-                final_status = "stopped"
-                trace.span(name="agent_run_stopped").end(status_message="agent_run_stopped", level="WARNING")
-                break
+        if agent_gen: # Proceed only if agent_gen was successfully initialized
+            async for response in agent_gen:
+                if stop_signal_received:
+                    logger.info(f"Agent run {agent_run_id} stopped by signal.")
+                    final_status = "stopped"
+                    # It's better to create a status message for Redis here if we want immediate feedback on stop
+                    stop_message_obj = {"type": "status", "status": "stopped", "message": "Agent run stopped by signal."}
+                    try:
+                        await redis.rpush(response_list_key, json.dumps(stop_message_obj))
+                        await redis.publish(response_channel, "new")
+                    except Exception as e_redis_stop:
+                        logger.warning(f"Failed to push stop signal message to Redis for {agent_run_id}: {e_redis_stop}")
+                    trace.span(name="agent_run_stopped").end(status_message="agent_run_stopped", level="WARNING")
+                    break
 
-            # Store response in Redis list and publish notification
-            response_json = json.dumps(response)
-            asyncio.create_task(redis.rpush(response_list_key, response_json))
-            asyncio.create_task(redis.publish(response_channel, "new"))
-            total_responses += 1
+                try:
+                    # Store response in Redis list and publish notification
+                    response_json = json.dumps(response) # response is already a dict from run_agent
+                    asyncio.create_task(redis.rpush(response_list_key, response_json))
+                    asyncio.create_task(redis.publish(response_channel, "new"))
+                    total_responses += 1
 
-            # Check for agent-signaled completion or error
-            if response.get('type') == 'status':
-                 status_val = response.get('status')
-                 if status_val in ['completed', 'failed', 'stopped']:
-                     logger.info(f"Agent run {agent_run_id} finished via status message: {status_val}")
-                     final_status = status_val
-                     if status_val == 'failed' or status_val == 'stopped':
-                         error_message = response.get('message', f"Run ended with status: {status_val}")
-                     break
+                    # Check for agent-signaled completion or error
+                    if response.get('type') == 'status':
+                         status_val = response.get('status')
+                         if status_val in ['completed', 'failed', 'stopped']:
+                             logger.info(f"Agent run {agent_run_id} finished via status message: {status_val}")
+                             final_status = status_val
+                             if status_val == 'failed' or status_val == 'stopped':
+                                 # Ensure error_message is a string. If response['message'] is complex, serialize or simplify.
+                                 raw_msg = response.get('message', f"Run ended with status: {status_val}")
+                                 error_message = raw_msg if isinstance(raw_msg, str) else json.dumps(raw_msg)
+                             break
+                except Exception as e_loop_redis:
+                    loop_error_message = f"Error processing/pushing agent response to Redis: {str(e_loop_redis)}"
+                    traceback_str_loop = traceback.format_exc()
+                    logger.error(f"{loop_error_message}\n{traceback_str_loop} (AgentRunID: {agent_run_id}, Response: {response})")
+                    final_status = "failed"
+                    error_message = loop_error_message # This will be used by the main except block for DB update
+                    # Push specific error to Redis for frontend
+                    error_response_loop = {"type": "status", "status": "error", "message": loop_error_message}
+                    try:
+                        await redis.rpush(response_list_key, json.dumps(error_response_loop))
+                        await redis.publish(response_channel, "new")
+                    except Exception as redis_err_loop:
+                         logger.error(f"Failed to push loop processing error to Redis for {agent_run_id}: {redis_err_loop}")
+                    # Break from the loop as we can't reliably process further responses
+                    break
 
-        # If loop finished without explicit completion/error/stop signal, mark as completed
-        if final_status == "running":
-             final_status = "completed"
-             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-             logger.info(f"Agent run {agent_run_id} completed normally (duration: {duration:.2f}s, responses: {total_responses})")
-             completion_message = {"type": "status", "status": "completed", "message": "Agent run completed successfully"}
-             trace.span(name="agent_run_completed").end(status_message="agent_run_completed")
-             await redis.rpush(response_list_key, json.dumps(completion_message))
-             await redis.publish(response_channel, "new") # Notify about the completion message
+            # If loop finished without explicit completion/error/stop signal, mark as completed
+            if final_status == "running":
+                 final_status = "completed"
+                 duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                 logger.info(f"Agent run {agent_run_id} completed normally (duration: {duration:.2f}s, responses: {total_responses})")
+                 completion_message = {"type": "status", "status": "completed", "message": "Agent run completed successfully"}
+                 trace.span(name="agent_run_completed").end(status_message="agent_run_completed")
+                 try:
+                     await redis.rpush(response_list_key, json.dumps(completion_message))
+                     await redis.publish(response_channel, "new") # Notify about the completion message
+                 except Exception as e_redis_complete:
+                     logger.error(f"Failed to push completion message to Redis for {agent_run_id}: {e_redis_complete}")
+                     # The run is still considered complete, but frontend might not get the last message.
+                     # The overall status will be updated in DB.
 
-        # Fetch final responses from Redis for DB update
+        # Fetch final responses from Redis for DB update (ensuring this is always done)
         all_responses_json = await redis.lrange(response_list_key, 0, -1)
         all_responses = [json.loads(r) for r in all_responses_json]
 
@@ -240,19 +288,25 @@ async def run_agent_background(
         # --- Workspace Cleanup and Sandbox Stopping ---
         try:
             logger.info(f"Starting workspace cleanup and sandbox stop for project: {project_id} in run {agent_run_id}")
-            client = await db.client 
+            client = await db.client
             project_result = await client.table('projects').select('sandbox').eq('project_id', project_id).maybe_single().execute()
             sandbox_id_for_cleanup_and_stop = None
 
-            if project_result and project_result.data and project_result.data.get('sandbox'):
-                sandbox_id_for_cleanup_and_stop = project_result.data['sandbox'].get('id')
-            
+            if project_result and project_result.data: # Check project_result.data
+                sandbox_info = project_result.data.get('sandbox')
+                if sandbox_info and isinstance(sandbox_info, dict): # Ensure sandbox_info is a dict
+                    sandbox_id_for_cleanup_and_stop = sandbox_info.get('id')
+                else:
+                    logger.warning(f"Sandbox info for project {project_id} is not in the expected format or missing: {sandbox_info}")
+            else:
+                logger.warning(f"No project data found for project_id {project_id} when attempting sandbox cleanup.")
+
             if sandbox_id_for_cleanup_and_stop:
                 sandbox_instance = None # Define here to ensure it's in scope for stopping if cleanup fails partially
                 try:
                     logger.info(f"Fetching sandbox instance for ID: {sandbox_id_for_cleanup_and_stop}")
                     sandbox_instance = await get_or_start_sandbox(sandbox_id_for_cleanup_and_stop)
-                    
+
                     if sandbox_instance:
                         # 1. Perform Workspace Cleanup
                         logger.info(f"Attempting workspace cleanup for sandbox: {sandbox_id_for_cleanup_and_stop}")
@@ -263,14 +317,14 @@ async def run_agent_background(
                             else:
                                 sandbox_instance['process']['create_session'](cleanup_session_id)
                             logger.debug(f"Created session {cleanup_session_id} for workspace cleanup.")
-                            
+
                             cleanup_commands = [
                                 "find /workspace -type f -name '*.tmp' -print -delete",
                                 "find /workspace -type f -name 'temp_*' -print -delete",
                                 "find /workspace -type f -name '*_temp.*' -print -delete",
                                 "find /workspace -depth -type d -empty -print -delete"
                             ]
-                            
+
                             for cmd in cleanup_commands:
                                 logger.debug(f"Executing cleanup command in session {cleanup_session_id}: {cmd}")
                                 exec_req = SessionExecuteRequest(command=cmd, var_async=False, cwd="/workspace")
@@ -281,61 +335,65 @@ async def run_agent_background(
 
                                 if response.exit_code == 0:
                                     logger.info(f"Cleanup command '{cmd}' successful.")
-                                    # Optionally log output if needed:
-                                    # if use_daytona():
-                                    #     logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
-                                    # else:
-                                    #     logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
-                                    # logger.debug(f"Logs for '{cmd}': {logs}")
                                 else:
-                                    if use_daytona():
-                                        logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
-                                    else:
-                                        logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
-                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response.exit_code}. Logs: {logs}")
+                                    logs_output = "Could not retrieve logs." # Default if log retrieval fails
+                                    try:
+                                        if use_daytona():
+                                            logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response.cmd_id)
+                                            logs_output = logs.stdout if logs and logs.stdout else (logs.stderr if logs and logs.stderr else "No output captured")
+                                        else:
+                                            logs = await sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response.cmd_id)
+                                            logs_output = logs['stdout'] if logs and logs['stdout'] else (logs['stderr'] if logs and logs['stderr'] else "No output captured")
+                                    except Exception as e_logs:
+                                        logger.error(f"Error retrieving logs for failed cleanup command '{cmd}': {e_logs}")
+                                    logger.warning(f"Cleanup command '{cmd}' failed. Exit: {response.exit_code}. Logs: {logs_output}")
                         except Exception as e_cleanup_ws:
                             logger.error(f"Error during workspace cleanup for sandbox {sandbox_id_for_cleanup_and_stop}: {e_cleanup_ws}", exc_info=True)
                         finally:
-                            try:
-                                logger.debug(f"Deleting cleanup session {cleanup_session_id} for sandbox {sandbox_id_for_cleanup_and_stop}.")
-                                if use_daytona():
-                                    sandbox_instance.process.delete_session(cleanup_session_id)
-                                else:
-                                    sandbox_instance['process']['delete_session'](cleanup_session_id)
-                            except Exception as e_del_session:
-                                logger.error(f"Error deleting cleanup session {cleanup_session_id}: {e_del_session}", exc_info=True)
-                                # Pass here as we don't want this to hide original error or stop sandbox stopping
-
+                            # Ensure sandbox_instance is still valid before trying to delete session
+                            if sandbox_instance:
+                                try:
+                                    logger.debug(f"Deleting cleanup session {cleanup_session_id} for sandbox {sandbox_id_for_cleanup_and_stop}.")
+                                    if use_daytona():
+                                        sandbox_instance.process.delete_session(cleanup_session_id)
+                                    else:
+                                        sandbox_instance['process']['delete_session'](cleanup_session_id)
+                                except Exception as e_del_session:
+                                    logger.error(f"Error deleting cleanup session {cleanup_session_id}: {e_del_session}", exc_info=True)
+                            else:
+                                logger.warning(f"Skipping cleanup session deletion as sandbox_instance is None for {sandbox_id_for_cleanup_and_stop}")
                         # 2. Stop the Sandbox
                         logger.info(f"Attempting to stop sandbox: {sandbox_id_for_cleanup_and_stop} after cleanup.")
-                        if use_daytona():
-                            logger.info(f"Using Daytona to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
-                            current_state = sandbox_instance.info().state
-                            logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
-                            if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
-                                await daytona.stop(sandbox_instance)
-                                logger.info(f"Successfully sent stop command to Daytona sandbox {sandbox_id_for_cleanup_and_stop}")
-                            else:
-                                logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
+                        # Ensure sandbox_instance is still valid before stopping
+                        if sandbox_instance:
+                            if use_daytona():
+                                logger.info(f"Using Daytona to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
+                                current_state = sandbox_instance.info().state
+                                logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
+                                if current_state not in [WorkspaceState.STOPPED, WorkspaceState.ARCHIVED, WorkspaceState.STOPPING, WorkspaceState.ARCHIVING]:
+                                    await daytona.stop(sandbox_instance)
+                                    logger.info(f"Successfully sent stop command to Daytona sandbox {sandbox_id_for_cleanup_and_stop}")
+                                else:
+                                    logger.info(f"Daytona sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
+                            else: # Local sandbox
+                                logger.info(f"Using local_sandbox to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
+                                from sandbox.local_sandbox import local_sandbox # Ensure import
+                                current_state = sandbox_instance['info']()['state']
+                                logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
+                                if current_state not in ['exited', 'stopped', 'stopping']:
+                                    local_sandbox.stop(sandbox_instance)
+                                    logger.info(f"Successfully called stop for local sandbox {sandbox_id_for_cleanup_and_stop}")
+                                else:
+                                    logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
                         else:
-                            logger.info(f"Using local_sandbox to stop sandbox: {sandbox_id_for_cleanup_and_stop}")
-                            # Ensure local_sandbox is imported for this scope
-                            from sandbox.local_sandbox import local_sandbox
-                            current_state = sandbox_instance['info']()['state'] # local_sandbox returns a dict
-                            logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} current state before stop attempt: {current_state}")
-                            # Common Docker states for a stopped container are 'exited' or sometimes 'stopped' (though 'exited' is more canonical for normally stopped)
-                            if current_state not in ['exited', 'stopped', 'stopping']: # 'stopping' could be a transient state
-                                local_sandbox.stop(sandbox_instance) # local_sandbox.stop is synchronous
-                                logger.info(f"Successfully called stop for local sandbox {sandbox_id_for_cleanup_and_stop}")
-                            else:
-                                logger.info(f"Local sandbox {sandbox_id_for_cleanup_and_stop} is already in state '{current_state}', no stop action needed.")
+                             logger.warning(f"Skipping sandbox stop as sandbox_instance is None for {sandbox_id_for_cleanup_and_stop}")
                     else:
-                        logger.warning(f"Could not retrieve sandbox instance for ID: {sandbox_id_for_cleanup_and_stop}. Skipping cleanup and stop.")
+                        logger.warning(f"Could not retrieve valid sandbox instance for ID: {sandbox_id_for_cleanup_and_stop} (it was None). Skipping cleanup and stop.")
 
                 except Exception as e_get_stop_sandbox:
                     logger.error(f"Error during getting, cleaning, or stopping sandbox {sandbox_id_for_cleanup_and_stop}: {e_get_stop_sandbox}", exc_info=True)
             else:
-                logger.warning(f"No sandbox_id found for project {project_id}; skipping workspace cleanup and stop.")
+                logger.info(f"No valid sandbox_id found for project {project_id}; skipping workspace cleanup and stop.") # Changed to info from warning
 
         except Exception as e_outer_finally:
             logger.error(f"Outer error in finally block for workspace cleanup/stop for project {project_id}: {e_outer_finally}", exc_info=True)
