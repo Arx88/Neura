@@ -30,7 +30,17 @@ from langfuse.client import StatefulTraceClient
 from services.langfuse import langfuse
 from agent.gemini_prompt import get_gemini_system_prompt
 
+# Imports for TaskPlanner
+from agentpress.task_planner import TaskPlanner
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.task_storage_supabase import SupabaseTaskStorage
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.plan_executor import PlanExecutor # Import PlanExecutor
+
+
 load_dotenv()
+
+PLANNING_KEYWORDS = ["plan this:", "create a plan for:", "complex task:"]
 
 def detect_visualization_request(request_text: str):
     """Detect if a request is asking for a visualization."""
@@ -200,10 +210,167 @@ async def run_agent(
         if latest_message_query.data and len(latest_message_query.data) > 0:
             latest_msg_data = latest_message_query.data[0]
             message_type = latest_msg_data.get('type')
-            
-            if message_type == 'user':
+            message_metadata = latest_msg_data.get('metadata', {})
+            if isinstance(message_metadata, str): # Ensure metadata is a dict
                 try:
-                    user_content_json = json.loads(latest_msg_data.get('content', '{}'))
+                    message_metadata = json.loads(message_metadata)
+                except json.JSONDecodeError:
+                    message_metadata = {}
+            
+            processed_by_planner_flag = message_metadata.get('processed_by_planner', False)
+
+            if message_type == 'user' and not processed_by_planner_flag:
+                user_content_json_str = latest_msg_data.get('content', '{}')
+                user_content_json = {}
+                try:
+                    user_content_json = json.loads(user_content_json_str)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse user message content as JSON: {user_content_json_str}")
+                    trace.event(name="user_content_parse_error", level="ERROR", status_message="Failed to parse user message content JSON")
+                    # Potentially yield an error or handle as non-plannable
+
+                original_user_text_content = user_content_json.get('content', '') # Original case for description
+                user_text_content_lower = original_user_text_content.lower() if isinstance(original_user_text_content, str) else ''
+
+                planning_triggered = False
+                actual_task_description = ""
+                keyword_found = ""
+
+                if isinstance(user_text_content_lower, str):
+                    for keyword in PLANNING_KEYWORDS:
+                        if keyword in user_text_content_lower:
+                            planning_triggered = True
+                            keyword_found = keyword # Store the keyword that triggered planning
+                            # Extract text *after* the found keyword from the original content
+                            keyword_original_case_index = original_user_text_content.lower().find(keyword)
+                            actual_task_description = original_user_text_content[keyword_original_case_index + len(keyword):].strip()
+                            break
+
+                if planning_triggered:
+                    # --- Keyword-based Task Planning and Execution ---
+                    logger.info(f"Planning keyword '{keyword_found}' triggered for task: {actual_task_description}")
+                    trace.event(name="planning_keywords_triggered", level="DEFAULT", status_message=(f"Keyword: '{keyword_found}', Task: {actual_task_description}"))
+
+                    # Define a callback for PlanExecutor to send messages/updates back to the user during execution.
+                    async def plan_executor_message_callback(message_content: str):
+                        if isinstance(message_content, dict): # Ensure content is stringified if complex
+                            msg_str = json.dumps(message_content)
+                        else:
+                            msg_str = str(message_content)
+
+                        # Yield messages with a specific prefix to distinguish them as plan updates.
+                        yield {
+                            "type": "assistant",
+                            "content": json.dumps({"role": "assistant", "content": f"[Plan Update] {msg_str}"}),
+                            "metadata": json.dumps({"thread_run_id": trace.id if trace else None}) # Include trace ID for context
+                        }
+
+                    try:
+                        # Instantiate dependencies for the planning and execution process.
+                        # A dedicated ToolOrchestrator for this process ensures it has the correct set of tools (plugins).
+                        planning_process_orchestrator = ToolOrchestrator()
+                        planning_process_orchestrator.load_tools_from_directory() # Load tools from the default plugin directory.
+
+                        # TaskStateManager requires a storage backend.
+                        task_storage = SupabaseTaskStorage(db_client=client)
+                        task_manager = TaskStateManager(storage=task_storage)
+                        await task_manager.initialize() # Initialize to load any existing task data if needed.
+
+                        # Instantiate the TaskPlanner.
+                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=planning_process_orchestrator)
+                        # Create the plan (main task and subtasks).
+                        main_planned_task = await planner.plan_task(task_description=actual_task_description)
+
+                        if main_planned_task:
+                            logger.info(f"Task planned successfully. Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}")
+                            trace.event(name="task_planning_successful", level="DEFAULT", status_message=(f"Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}"))
+
+                            # Mark the original user message as processed by the planner to avoid re-triggering.
+                            current_message_metadata = latest_msg_data.get('metadata', {})
+                            if isinstance(current_message_metadata, str):
+                                try: current_message_metadata = json.loads(current_message_metadata)
+                                except: current_message_metadata = {}
+                            elif current_message_metadata is None: current_message_metadata = {}
+                            current_message_metadata['processed_by_planner'] = True
+                            await client.table('messages').update({'metadata': current_message_metadata}).eq('message_id', latest_msg_data['message_id']).execute()
+
+                            # Inform the user that the plan has been created and execution will start.
+                            plan_confirmation_content = {
+                                "role": "assistant",
+                                "content": f"I have created a plan with ID: {main_planned_task.id} (status: {main_planned_task.status}). I will now proceed to execute this plan."
+                            }
+                            yield {
+                                "type": "assistant",
+                                "content": json.dumps(plan_confirmation_content),
+                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
+                            }
+
+                            # Instantiate the PlanExecutor with the created plan and shared dependencies.
+                            plan_executor = PlanExecutor(
+                                main_task_id=main_planned_task.id,
+                                task_manager=task_manager, # Reuse the task_manager
+                                tool_orchestrator=planning_process_orchestrator, # Reuse the orchestrator
+                                user_message_callback=plan_executor_message_callback # Pass the callback for updates
+                            )
+
+                            # Yield a status message indicating the start of plan execution.
+                            yield {
+                                "type": "status",
+                                "content": json.dumps({"status_type": "plan_execution_start", "message": f"Starting execution of plan {main_planned_task.id}..."}),
+                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
+                            }
+
+                            # Execute the plan.
+                            await plan_executor.execute_plan()
+
+                            # Yield a status message indicating the end of plan execution.
+                            yield {
+                                "type": "status",
+                                "content": json.dumps({"status_type": "plan_execution_end", "message": f"Execution of plan {main_planned_task.id} finished."}),
+                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
+                            }
+
+                            # After plan creation and execution, stop the current agent cycle
+                            # to prevent the normal LLM response flow for this user message.
+                            continue_execution = False
+                        else:
+                            # If planning itself failed (e.g., LLM couldn't generate subtasks).
+                            logger.error(f"Task planning failed for: {actual_task_description}")
+                            trace.event(name="task_planning_failed", level="ERROR", status_message=(f"Task: {actual_task_description}"))
+                            error_content = { "role": "assistant", "content": "I tried to create a plan, but something went wrong. Please try again or rephrase."}
+                            yield {
+                                "type": "assistant", "content": json.dumps(error_content),
+                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
+                            }
+                            # Let normal execution proceed to respond to the user message.
+                    except Exception as e_planner:
+                        logger.error(f"Exception during task planning: {e_planner}", exc_info=True)
+                        trace.event(name="task_planning_exception", level="CRITICAL", status_message=str(e_planner))
+                        error_content = { "role": "assistant", "content": f"An error occurred while trying to plan your request: {str(e_planner)}"}
+                        yield {
+                            "type": "assistant", "content": json.dumps(error_content),
+                            "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
+                        }
+                        # Let normal execution proceed.
+
+
+            if not continue_execution: # If planning happened and we decided to stop this cycle
+                break
+
+            # Original user message processing for visualization hint (if not planned)
+            # This needs to be part of the `if message_type == 'user' and not processed_by_planner_flag:` block
+            # or an `elif message_type == 'user':` if planning didn't trigger.
+            # For simplicity, let's assume if planning was triggered, viz detection on the same message is skipped.
+            # If planning was NOT triggered, then viz detection runs.
+
+            if message_type == 'user' and not planning_triggered: # Check planning_triggered here
+                try:
+                    # Ensure user_content_json and user_text_content are defined if not set by planner block
+                    if 'user_content_json' not in locals(): # If planning block was skipped
+                         user_content_json_str = latest_msg_data.get('content', '{}')
+                         user_content_json = json.loads(user_content_json_str)
+
+                    user_text_content = user_content_json.get('content', '')
                     user_text_content = user_content_json.get('content', '')
                     if isinstance(user_text_content, str) and user_text_content: # Ensure it's a non-empty string
                         detected_viz_type = detect_visualization_request(user_text_content)

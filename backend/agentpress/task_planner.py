@@ -105,7 +105,6 @@ Ensure the output is a valid JSON array.
         try:
             # TODO: Determine appropriate model, temperature, max_tokens for planning.
             # Using a capable model is important for good decomposition.
-            logger.debug(f"TaskPlanner._decompose_task: Available tools for LLM: {json.dumps(available_tools, indent=2)}")
             llm_response_str = await make_llm_api_call(
                 messages=prompt_messages,
                 llm_model="gpt-4o", # Or another suitable model like gpt-3.5-turbo
