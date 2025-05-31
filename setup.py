@@ -1745,7 +1745,7 @@ def setup_supabase(existing_config, state): # state is the global state object
         # Push database migrations
         print_info("Pushing database migrations...")
         subprocess.run(
-            ['supabase', 'db', 'push', '--include-all', '-y'], # Added -y
+            ['supabase', 'db', 'push', '--include-all'],
             cwd=backend_dir,
             check=True, # Raises SubprocessError on failure
             shell=IS_WINDOWS
