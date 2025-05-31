@@ -56,85 +56,86 @@ class SandboxBrowserTool(SandboxToolsBase):
             logger.debug("\033[95mExecuting curl command:\033[0m")
             logger.debug(f"{curl_cmd}")
             
-            # Assuming self.sandbox.process.exec is synchronous as per previous tool refactors
-            # If it's async, it should be awaited.
-            response = self.sandbox.process.exec(curl_cmd, timeout=60) # Increased timeout
-            
-            if response.exit_code == 0:
-                try:
-                    # Attempt to parse the result from the browser automation API
-                    api_result = json.loads(response.result)
+            sandbox_result = await self._execute_in_sandbox(
+                command=curl_cmd,
+                session_id=None, # Direct exec for curl
+                is_blocking=True,
+                timeout=60, # Increased timeout
+                expected_content_type="json"
+            )
 
-                    # Ensure default keys exist, similar to original logic
-                    if "content" not in api_result:
-                        api_result["content"] = ""
-                    if "role" not in api_result:
-                        api_result["role"] = "assistant" # This might be specific to how messages are stored
-
-                    logger.info(f"Browser automation API call to '{endpoint}' successful.")
-
-                    # Handle screenshot upload
-                    if "screenshot_base64" in api_result:
-                        try:
-                            image_url = await upload_base64_image(api_result["screenshot_base64"])
-                            api_result["image_url"] = image_url
-                            del api_result["screenshot_base64"] # Keep payload clean
-                            logger.debug(f"Uploaded screenshot to {image_url}")
-                        except Exception as e_upload:
-                            logger.error(f"Failed to upload screenshot for {endpoint}: {e_upload}")
-                            api_result["image_upload_error"] = str(e_upload)
-
-                    # Add browser state message to thread manager
-                    # This seems important for context, so keep it.
-                    # Ensure `api_result` has necessary fields for `add_message` or adapt.
-                    added_message_info = await self.thread_manager.add_message(
-                        thread_id=self.thread_id,
-                        type="browser_state", # This type indicates it's a browser state update
-                        content=api_result, # The full result from the browser automation API
-                        is_llm_message=False
-                    )
-
-                    # Construct the dictionary to be returned to the tool orchestrator
-                    # This dictionary *is* the "raw data" from the tool's perspective.
-                    tool_output_data = {
-                        # "success": True, # Implicitly success if no exception is raised
-                        "message": api_result.get("message", f"Browser action '{endpoint}' completed successfully."),
-                        "api_response": api_result # Include the actual response from browser service
-                    }
-                    # Add common fields to the output if they exist in the API result
-                    if added_message_info and 'message_id' in added_message_info:
-                         tool_output_data['browser_state_message_id'] = added_message_info['message_id']
-                    if api_result.get("url"):
-                        tool_output_data["url"] = api_result["url"]
-                    if api_result.get("title"):
-                        tool_output_data["title"] = api_result["title"]
-                    if api_result.get("element_count") is not None: # Check for None explicitly
-                        tool_output_data["elements_found"] = api_result["element_count"]
-                    if api_result.get("pixels_below") is not None:
-                        tool_output_data["scrollable_content_pixels_below"] = api_result["pixels_below"]
-                        tool_output_data["scrollable_content_available"] = api_result["pixels_below"] > 0
-                    if api_result.get("ocr_text"):
-                        tool_output_data["ocr_text"] = api_result["ocr_text"]
-                    if api_result.get("image_url"):
-                        tool_output_data["image_url"] = api_result["image_url"]
-                    if api_result.get("image_upload_error"):
-                        tool_output_data["image_upload_error"] = api_result["image_upload_error"]
-
-
-                    return tool_output_data
-
-                except json.JSONDecodeError as e_json:
-                    logger.error(f"Failed to parse JSON response from browser API ({endpoint}): {response.result}", exc_info=True)
-                    raise BrowserToolError(f"Browser API ({endpoint}) returned non-JSON response: {response.result[:200]}...") from e_json
-            else:
-                # The curl command itself failed (non-zero exit code)
-                error_detail = f"Browser API request ({endpoint}) failed. Exit code: {response.exit_code}. Output: {response.result[:500]}"
+            if sandbox_result["exit_code"] != 0:
+                error_detail = f"Browser API request ({endpoint}) via curl failed. Exit code: {sandbox_result['exit_code']}. Output: {sandbox_result.get('output', '')[:500]}"
                 logger.error(error_detail)
                 raise BrowserToolError(error_detail)
 
-        except ValueError: # Re-raise specific error
+            if sandbox_result.get("json_parse_error"):
+                parse_error = sandbox_result["json_parse_error"]
+                raw_output = sandbox_result.get("output", "")
+                logger.error(f"Failed to parse JSON response from browser API ({endpoint}): {parse_error}. Raw output: {raw_output[:200]}", exc_info=True)
+                raise BrowserToolError(f"Browser API ({endpoint}) returned non-JSON response: {raw_output[:200]}...") from json.JSONDecodeError(parse_error, raw_output, 0)
+
+            api_result = sandbox_result.get("parsed_json")
+            if api_result is None: # Should not happen if json_parse_error is not set and output was expected to be JSON
+                raw_output = sandbox_result.get("output", "")
+                logger.error(f"Browser API ({endpoint}) call succeeded but parsed_json is missing. Raw output: {raw_output[:200]}")
+                raise BrowserToolError(f"Browser API ({endpoint}) call succeeded but parsed_json is missing. Raw output: {raw_output[:200]}")
+
+            # Ensure default keys exist, similar to original logic
+            if "content" not in api_result:
+                api_result["content"] = ""
+            if "role" not in api_result:
+                api_result["role"] = "assistant"
+
+            logger.info(f"Browser automation API call to '{endpoint}' successful.")
+
+            # Handle screenshot upload
+            if "screenshot_base64" in api_result:
+                try:
+                    image_url = await upload_base64_image(api_result["screenshot_base64"])
+                    api_result["image_url"] = image_url
+                    del api_result["screenshot_base64"]
+                    logger.debug(f"Uploaded screenshot to {image_url}")
+                except Exception as e_upload:
+                    logger.error(f"Failed to upload screenshot for {endpoint}: {e_upload}")
+                    api_result["image_upload_error"] = str(e_upload)
+
+            added_message_info = await self.thread_manager.add_message(
+                thread_id=self.thread_id,
+                type="browser_state",
+                content=api_result,
+                is_llm_message=False
+            )
+
+            tool_output_data = {
+                "message": api_result.get("message", f"Browser action '{endpoint}' completed successfully."),
+                "api_response": api_result
+            }
+            if added_message_info and 'message_id' in added_message_info:
+                 tool_output_data['browser_state_message_id'] = added_message_info['message_id']
+            if api_result.get("url"):
+                tool_output_data["url"] = api_result["url"]
+            if api_result.get("title"):
+                tool_output_data["title"] = api_result["title"]
+            if api_result.get("element_count") is not None:
+                tool_output_data["elements_found"] = api_result["element_count"]
+            if api_result.get("pixels_below") is not None:
+                tool_output_data["scrollable_content_pixels_below"] = api_result["pixels_below"]
+                tool_output_data["scrollable_content_available"] = api_result["pixels_below"] > 0
+            if api_result.get("ocr_text"):
+                tool_output_data["ocr_text"] = api_result["ocr_text"]
+            if api_result.get("image_url"):
+                tool_output_data["image_url"] = api_result["image_url"]
+            if api_result.get("image_upload_error"):
+                tool_output_data["image_upload_error"] = api_result["image_upload_error"]
+
+            return tool_output_data
+
+        except ValueError:
             raise
-        except Exception as e: # Catch any other unexpected errors
+        except BrowserToolError: # Re-raise specific error if already BrowserToolError
+            raise
+        except Exception as e:
             logger.error(f"Error executing browser action '{endpoint}': {str(e)}", exc_info=True)
             raise BrowserToolError(f"An unexpected error occurred during browser action '{endpoint}': {str(e)}") from e
 

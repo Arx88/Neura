@@ -221,50 +221,27 @@ class SandboxShellTool(SandboxToolsBase):
 
     async def _execute_raw_command(self, command: str) -> Dict[str, Any]:
         """Execute a raw command directly in the sandbox."""
-        # Ensure session exists for raw commands
-        # This method is intended for internal raw commands. Errors here should propagate.
         # Ensure sandbox is up.
         await self._ensure_sandbox()
-        # Ensure a session exists for raw commands (e.g., a utility session).
+        # Ensure a utility session exists for these raw tmux/utility commands.
         # This session is managed by _ensure_session and _cleanup_session.
-        # If this session itself fails to create, _ensure_session will raise RuntimeError.
-        session_id = await self._ensure_session(session_name="kortix_raw_utility_session")
-        
-        from sandbox.sandbox import SessionExecuteRequest # Keep import local if only used here
-        req = SessionExecuteRequest(
+        utility_session_id = await self._ensure_session(session_name="kortix_raw_utility_session")
+
+        # Use the new _execute_in_sandbox method
+        # These raw commands are typically short-lived and blocking.
+        sandbox_result = await self._execute_in_sandbox(
             command=command,
-            var_async=False, # Raw commands are expected to be synchronous for their results
-            cwd=self.workspace_path # Default to workspace path for raw commands
+            session_id=utility_session_id,
+            is_blocking=True, # Raw commands are generally expected to complete quickly
+            timeout=60,       # Default timeout, can be adjusted if specific raw commands need more
+            cwd=self.workspace_path # Default to workspace path for these utility commands
         )
         
-        # Assuming self.sandbox.process methods raise exceptions on failure
-        response = await self.sandbox.process.execute_session_command(
-            session_id=session_id,
-            req=req,
-            timeout=60  # Increased timeout for potentially slower utility commands
-        )
-        
-        logs_response = await self.sandbox.process.get_session_command_logs(
-            session_id=session_id,
-            command_id=response.cmd_id
-        )
-        
-        # Adapt based on actual structure of logs_response. For Daytona, it's DaytonaApiModelsLog.
-        # For local, it might be a dict {'stdout': ..., 'stderr': ...}.
-        # The goal is to return a string similar to what the old code expected for "output".
-        output_str = ""
-        if hasattr(logs_response, 'stdout') and logs_response.stdout:
-            output_str += logs_response.stdout
-        if hasattr(logs_response, 'stderr') and logs_response.stderr:
-            if output_str: output_str += "\n"
-            output_str += f"STDERR: {logs_response.stderr}"
-        elif isinstance(logs_response, str): # Fallback if it's just a string
-             output_str = logs_response
-
-
+        # _execute_in_sandbox already returns a dict with "output" and "exit_code"
+        # "output" from _execute_in_sandbox includes combined stdout and stderr.
         return {
-            "output": output_str, # Ensure this is a string
-            "exit_code": response.exit_code
+            "output": sandbox_result.get("output", ""),
+            "exit_code": sandbox_result.get("exit_code", -1) # Provide a default exit code if missing
         }
 
     @openapi_schema({

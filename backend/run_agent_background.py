@@ -13,7 +13,7 @@ from agentpress.thread_manager import ThreadManager
 from services.supabase import DBConnection
 from services import redis
 from dramatiq.brokers.rabbitmq import RabbitmqBroker
-import os
+from utils.config import config # Added import
 from services.langfuse import langfuse
 from agentpress.tool_orchestrator import ToolOrchestrator
 # Imports for sandbox stopping
@@ -22,9 +22,7 @@ from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
 
-rabbitmq_host = os.getenv('RABBITMQ_HOST', 'rabbitmq')
-rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
-rabbitmq_broker = RabbitmqBroker(host=rabbitmq_host, port=rabbitmq_port, middleware=[dramatiq.middleware.AsyncIO()])
+rabbitmq_broker = RabbitmqBroker(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT, middleware=[dramatiq.middleware.AsyncIO()]) # Use config
 dramatiq.set_broker(rabbitmq_broker)
 
 _initialized = False
