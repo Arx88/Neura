@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple, Union, Callable, Literal
 from dataclasses import dataclass
 from utils.logger import logger
-from agentpress.tool import EnhancedToolResult # Changed from ToolResult
+from agentpress.tool import ToolResult # Changed from ToolResult
 from agentpress.tool_orchestrator import ToolOrchestrator # Changed from ToolRegistry
 from litellm import completion_cost
 from langfuse.client import StatefulTraceClient
@@ -38,7 +38,7 @@ class ToolExecutionContext:
     """Context for a tool execution including call details, result, and display info."""
     tool_call: Dict[str, Any]
     tool_index: int
-    result: Optional[EnhancedToolResult] = None # Changed from ToolResult
+    result: Optional[ToolResult] = None # Changed from ToolResult
     function_name: Optional[str] = None
     xml_tag_name: Optional[str] = None
     error: Optional[Exception] = None
@@ -1142,9 +1142,9 @@ class ResponseProcessor:
         return parsed_data
 
     # Tool execution methods
-    async def _execute_tool(self, tool_call: Dict[str, Any]) -> EnhancedToolResult: # Changed return type
+    async def _execute_tool(self, tool_call: Dict[str, Any]) -> ToolResult: # Changed return type
         """
-        Execute a single tool call using ToolOrchestrator and return the EnhancedToolResult.
+        Execute a single tool call using ToolOrchestrator and return the ToolResult.
         """
         # Determine tool_id and method_name from tool_call
         # Native calls: tool_call['function_name'] is "tool_id__method_name"
@@ -1164,8 +1164,8 @@ class ResponseProcessor:
             else:
                 # Fallback or error: could not parse tool_id and method_name
                 logger.error(f"Could not parse tool_id and method_name from function_name: {tool_call['function_name']}")
-                # Create a failed EnhancedToolResult directly
-                return EnhancedToolResult(
+                # Create a failed ToolResult directly
+                return ToolResult(
                     tool_id=tool_call.get("function_name", "unknown_tool"),
                     execution_id=str(uuid.uuid4()), # Generate a new execution ID
                     status="failed",
@@ -1173,7 +1173,7 @@ class ResponseProcessor:
                 )
         else:
             logger.error(f"Tool call dictionary is missing 'function_name' or 'tool_id'/'method_name': {tool_call}")
-            return EnhancedToolResult(
+            return ToolResult(
                 tool_id="unknown_tool",
                 execution_id=str(uuid.uuid4()),
                 status="failed",
@@ -1209,8 +1209,8 @@ class ResponseProcessor:
         except Exception as e:
             logger.error(f"Error calling ToolOrchestrator for {tool_id_for_orchestrator}.{method_name_for_orchestrator}: {str(e)}", exc_info=True)
             span.end(status_message="tool_orchestration_error", output=str(e), level="ERROR")
-            # Construct a failed EnhancedToolResult
-            return EnhancedToolResult(
+            # Construct a failed ToolResult
+            return ToolResult(
                 tool_id=tool_id_for_orchestrator or "unknown_tool",
                 execution_id=str(uuid.uuid4()), # Generate new exec id for this failure event
                 status="failed",
@@ -1221,7 +1221,7 @@ class ResponseProcessor:
         self, 
         tool_calls: List[Dict[str, Any]], 
         execution_strategy: ToolExecutionStrategy = "sequential"
-    ) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+    ) -> List[Tuple[Dict[str, Any], ToolResult]]: # Changed return type
         """Execute tool calls with the specified strategy using ToolOrchestrator.
         
         Args:
@@ -1229,7 +1229,7 @@ class ResponseProcessor:
             execution_strategy: Strategy for executing tools
                 
         Returns:
-            List of tuples containing the original tool call and its EnhancedToolResult
+            List of tuples containing the original tool call and its ToolResult
         """
         logger.info(f"Executing {len(tool_calls)} tools with strategy: {execution_strategy} via ToolOrchestrator")
         self.trace.event(name="executing_tools_via_orchestrator", level="DEFAULT",
@@ -1243,7 +1243,7 @@ class ResponseProcessor:
             logger.warning(f"Unknown execution strategy: {execution_strategy}, falling back to sequential")
             return await self._execute_tools_sequentially(tool_calls)
 
-    async def _execute_tools_sequentially(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+    async def _execute_tools_sequentially(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], ToolResult]]: # Changed return type
         """Execute tool calls sequentially using ToolOrchestrator."""
         if not tool_calls:
             return []
@@ -1259,7 +1259,7 @@ class ResponseProcessor:
                 logger.debug(f"Completed tool {tool_repr} with status: {result.status}")
             except Exception as e: # Should be caught by _execute_tool, but as a safeguard
                 logger.error(f"Outer error executing tool {tool_repr} (seq): {str(e)}")
-                error_result = EnhancedToolResult(
+                error_result = ToolResult(
                     tool_id=tool_call.get('tool_id') or tool_call.get('function_name', 'unknown'),
                     execution_id=str(uuid.uuid4()), status="failed",
                     error=f"Sequential execution error: {str(e)}"
@@ -1267,7 +1267,7 @@ class ResponseProcessor:
                 results.append((tool_call, error_result))
         return results
 
-    async def _execute_tools_in_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], EnhancedToolResult]]: # Changed return type
+    async def _execute_tools_in_parallel(self, tool_calls: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], ToolResult]]: # Changed return type
         """Execute tool calls in parallel using ToolOrchestrator."""
         if not tool_calls:
             return []
@@ -1281,13 +1281,13 @@ class ResponseProcessor:
             tool_repr = tool_call.get('function_name') or f"{tool_call.get('tool_id')}__{tool_call.get('method_name')}"
             if isinstance(result_or_exception, Exception):
                 logger.error(f"Error executing tool {tool_repr} (parallel): {str(result_or_exception)}")
-                error_result = EnhancedToolResult(
+                error_result = ToolResult(
                     tool_id=tool_call.get('tool_id') or tool_call.get('function_name', 'unknown'),
                     execution_id=str(uuid.uuid4()), status="failed",
                     error=f"Parallel execution error: {str(result_or_exception)}"
                 )
                 processed_results.append((tool_call, error_result))
-            else: # It's an EnhancedToolResult
+            else: # It's a ToolResult
                 processed_results.append((tool_call, result_or_exception))
         return processed_results
 
@@ -1295,12 +1295,12 @@ class ResponseProcessor:
         self, 
         thread_id: str, 
         tool_call: Dict[str, Any], 
-        result: EnhancedToolResult, # Changed from ToolResult
+        result: ToolResult, # Changed from ToolResult
         strategy: Union[XmlAddingStrategy, str] = "assistant_message",
         assistant_message_id: Optional[str] = None,
         parsing_details: Optional[Dict[str, Any]] = None
     ) -> Optional[str]: # Return the message ID
-        """Add a tool result (EnhancedToolResult) to the conversation thread."""
+        """Add a tool result (ToolResult) to the conversation thread."""
         try:
             message_id = None
             metadata = {}
@@ -1312,7 +1312,7 @@ class ResponseProcessor:
             # Native function calls have an 'id' in the original tool_call from the LLM
             is_native_call = "id" in tool_call
 
-            tool_name_for_logging = result.tool_id # From EnhancedToolResult
+            tool_name_for_logging = result.tool_id # From ToolResult
 
             # Determine content for the message
             # For native calls, content is result.result or result.error
@@ -1325,7 +1325,7 @@ class ResponseProcessor:
                     content_to_store = str(content_to_store) # Ensure string
             else: # XML call
                 # _format_xml_tool_result expects the old ToolResult structure.
-                # We need to adapt or make it use EnhancedToolResult.
+                # We need to adapt or make it use ToolResult.
                 # For now, let's quickly adapt here.
                 temp_legacy_result_obj = {"success": result.status == "completed", "output": result.result or result.error}
                 # This is a simplification; ToolResult was a class. Let's assume _format_xml_tool_result just needs a string.
@@ -1357,7 +1357,7 @@ class ResponseProcessor:
             return msg_obj['message_id'] if msg_obj else None
 
         except Exception as e:
-            logger.error(f"Error adding tool result (Enhanced): {str(e)}", exc_info=True)
+            logger.error(f"Error adding tool result (ToolResult): {str(e)}", exc_info=True)
             # Fallback for safety, though less likely needed now
             try:
                 fallback_content = {"role": "user", "content": str(result.result or result.error)}
@@ -1367,7 +1367,7 @@ class ResponseProcessor:
                 )
                 return msg_obj['message_id'] if msg_obj else None
             except Exception as e2:
-                logger.error(f"Failed even with fallback message (Enhanced): {str(e2)}", exc_info=True)
+                logger.error(f"Failed even with fallback message (ToolResult): {str(e2)}", exc_info=True)
                 return None
 
     def _format_xml_tool_result(self, tool_call: Dict[str, Any], result_str: str) -> str: # Changed result type
@@ -1415,7 +1415,7 @@ class ResponseProcessor:
             "tool_call_id": context.tool_call.get("id") # Include tool_call ID if native
         }
         metadata = {"thread_run_id": thread_run_id}
-        # If context.result is EnhancedToolResult, it might contain artifacts or other metadata
+        # If context.result is ToolResult, it might contain artifacts or other metadata
         if context.result and context.result.artifacts:
             metadata["artifacts"] = context.result.artifacts
         if context.result and context.result.warnings:
@@ -1427,12 +1427,12 @@ class ResponseProcessor:
         return saved_message_obj # Return the full object (or None if saving failed)
 
     async def _yield_and_save_tool_completed(self, context: ToolExecutionContext, tool_message_id: Optional[str], thread_id: str, thread_run_id: str) -> Optional[Dict[str, Any]]:
-        """Formats, saves, and returns a tool completed/failed status message using EnhancedToolResult."""
-        if not context.result: # context.result is an EnhancedToolResult
+        """Formats, saves, and returns a tool completed/failed status message using ToolResult."""
+        if not context.result: # context.result is a ToolResult
             return await self._yield_and_save_tool_error(context, thread_id, thread_run_id)
 
         tool_name = context.xml_tag_name or context.function_name
-        # Use status from EnhancedToolResult
+        # Use status from ToolResult
         is_success = context.result.status == "completed"
         status_type = "tool_completed" if is_success else "tool_failed"
         message_text = f"Tool {tool_name} {context.result.status}"

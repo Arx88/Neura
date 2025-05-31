@@ -8,7 +8,7 @@ import sys
 import json # Added import
 from typing import Dict, Any, List
 
-from backend.agentpress.tool import Tool, EnhancedToolResult, openapi_schema, xml_schema, XMLTagSchema, XMLNodeMapping
+from backend.agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema, XMLTagSchema, XMLNodeMapping
 from backend.agentpress.tool_orchestrator import ToolOrchestrator, DEFAULT_PLUGINS_DIR as 실제_DEFAULT_PLUGINS_DIR
 
 # --- Mock Tool Definition ---
@@ -125,7 +125,7 @@ def test_register_tool_instance_default_id(orchestrator: ToolOrchestrator, mock_
 @pytest.mark.asyncio
 async def test_execute_tool_success(orchestrator: ToolOrchestrator, mock_tool_instance: MockTool):
     orchestrator.register_tool(mock_tool_instance, tool_id="TestTool")
-    result: EnhancedToolResult = await orchestrator.execute_tool(
+    result: ToolResult = await orchestrator.execute_tool(
         tool_id="TestTool",
         method_name="simple_method",
         params={"param1": "test_value"}
@@ -139,7 +139,7 @@ async def test_execute_tool_success(orchestrator: ToolOrchestrator, mock_tool_in
 @pytest.mark.asyncio
 async def test_execute_tool_method_raises_error(orchestrator: ToolOrchestrator, mock_tool_instance: MockTool):
     orchestrator.register_tool(mock_tool_instance, tool_id="TestTool")
-    result: EnhancedToolResult = await orchestrator.execute_tool(
+    result: ToolResult = await orchestrator.execute_tool(
         tool_id="TestTool",
         method_name="simple_method",
         params={"param1": "raise_error"}
@@ -337,7 +337,7 @@ async def test_reload_tool(orchestrator: ToolOrchestrator, temp_plugin_dir: str)
     # assert isinstance(orchestrator.tools["NewAfterReload"], Tool) # This would fail
 
     # Test executing a method from the reloaded tool
-    result: EnhancedToolResult = await orchestrator.execute_tool(
+    result: ToolResult = await orchestrator.execute_tool(
         tool_id="MyPluginTool1",
         method_name="method_one", # Actual method name, not schema name
         params={"text": "after_reload"}

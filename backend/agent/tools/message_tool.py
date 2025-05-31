@@ -1,5 +1,5 @@
 from typing import List, Optional, Union
-from agentpress.tool import Tool, EnhancedToolResult as ToolResult, openapi_schema, xml_schema
+from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
 
 class MessageTool(Tool):
     """Tool for user communication and interaction.
