@@ -23,6 +23,12 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
 
     const transcriptionMutation = useTranscription();
 
+    const stopRecording = React.useCallback(() => {
+        if (mediaRecorderRef.current && state === 'recording') {
+            mediaRecorderRef.current.stop();
+        }
+    }, [state]);
+
     // Auto-stop recording after 15 minutes
     useEffect(() => {
         if (state === 'recording') {
@@ -95,12 +101,6 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
             setState('idle');
         }
     };
-
-    const stopRecording = React.useCallback(() => {
-        if (mediaRecorderRef.current && state === 'recording') {
-            mediaRecorderRef.current.stop();
-        }
-    }, [state]);
 
     const cancelRecording = () => {
         if (mediaRecorderRef.current && state === 'recording') {

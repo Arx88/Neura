@@ -324,7 +324,6 @@ export function FileAttachment({
                         console.log("Image loaded successfully:", filename);
                     }}
                     onError={(e) => {
-                        // @ts-expect-error e.target might not be available or type assertion needed
                         // Avoid logging the error for all instances of the same image
                         console.error('Image load error for:', filename);
 
