@@ -562,7 +562,7 @@ async def run_agent(
                 temporary_message=temp_messages_for_llm if temp_messages_for_llm else None,
                 processor_config=ProcessorConfig(
                     xml_tool_calling=True,
-                    native_tool_calling=False,
+                    native_tool_calling=True, # Ensure this is True
                     execute_tools=True,
                     execute_on_stream=True,
                     tool_execution_strategy="parallel",
