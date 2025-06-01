@@ -2,7 +2,7 @@ from typing import List, Optional, Dict, Any
 import json
 from pydantic import BaseModel, Field, ValidationError # Added imports
 
-from ..agent.prompt import get_system_prompt # Added import
+from agent.prompt import get_system_prompt # Added import
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_types import TaskState # For type hinting
