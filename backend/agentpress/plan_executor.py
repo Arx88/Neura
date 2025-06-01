@@ -5,10 +5,12 @@ The PlanExecutor iterates through subtasks, respecting their dependencies,
 and uses an LLM to determine parameters for assigned tools, then executes them
 via the ToolOrchestrator.
 """
-from typing import Callable, Optional, List, Dict, Any, AsyncGenerator
+from typing import Optional, List, Dict, Any, AsyncGenerator # Updated imports
 import json
 import uuid
+import asyncio # Added import
 
+from services import redis # Added import
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_types import TaskState
@@ -31,8 +33,7 @@ class PlanExecutor:
     def __init__(self,
                  main_task_id: str,
                  task_manager: TaskStateManager,
-                 tool_orchestrator: ToolOrchestrator,
-                 user_message_callback: Optional[Callable[[str], Any]] = None):
+                 tool_orchestrator: ToolOrchestrator):
         """
         Initializes the PlanExecutor.
 
@@ -42,32 +43,47 @@ class PlanExecutor:
             tool_orchestrator (ToolOrchestrator): An instance for executing tools.
                                                  It is assumed that this orchestrator
                                                  has its tools loaded.
-            user_message_callback (Optional[Callable[[str], Any]]):
-                An optional asynchronous callback function to send updates/messages
-                to the user or another system. It should accept a string message.
         """
         self.main_task_id = main_task_id
         self.task_manager = task_manager
         self.tool_orchestrator = tool_orchestrator
-        self.user_message_callback = user_message_callback
+        # self.user_message_callback is removed
         logger.info(f"PlanExecutor initialized for main_task_id: {self.main_task_id}")
 
     async def _send_user_message(self, message_data: Dict[str, Any]):
-        """
-        Helper method to safely invoke the user_message_callback if provided.
+        '''
+        Sends a message to the client via Redis Pub/Sub.
+        message_data should be a dictionary (e.g., from run_agent format).
+        '''
+        if not self.main_task_id:
+            logger.warning("PLAN_EXECUTOR: main_task_id is not set, cannot send user message.")
+            return
 
-        Args:
-            message_data (Dict[str, Any]): The message data to send.
-        """
-        if self.user_message_callback:
-            try:
-                # The callback might be an async generator or a regular async function.
-                # Awaiting it directly is suitable for async functions.
-                # If it's an async generator, the caller (e.g., run_agent) would typically iterate over it.
-                # For this simple callback, direct await is assumed.
-                await self.user_message_callback(message_data)
-            except Exception as e:
-                logger.error(f"Error in user_message_callback: {e}", exc_info=True)
+        response_list_key = f"agent_run:{self.main_task_id}:responses"
+        response_channel = f"agent_run:{self.main_task_id}:new_response"
+
+        try:
+            # Ensure message_data has a 'type' for client processing consistency
+            if 'type' not in message_data:
+                message_data['type'] = 'plan_update' # Default type for plan executor messages
+
+            # Add metadata if not present, specifically thread_run_id
+            if 'metadata' not in message_data:
+                message_data['metadata'] = {}
+            if 'thread_run_id' not in message_data['metadata']:
+                 message_data['metadata']['thread_run_id'] = self.main_task_id
+
+            message_json = json.dumps(message_data)
+
+            # Create tasks for Redis operations to run them concurrently
+            await asyncio.gather(
+                redis.rpush(response_list_key, message_json),
+                redis.publish(response_channel, "new")
+            )
+            logger.debug(f"PLAN_EXECUTOR: Sent message to Redis channel {response_channel} for main_task_id {self.main_task_id}: {message_json}")
+
+        except Exception as e:
+            logger.error(f"PLAN_EXECUTOR: Error sending message via Redis for main_task_id {self.main_task_id}: {e}", exc_info=True)
 
     async def execute_plan(self):
         """
@@ -92,10 +108,13 @@ class PlanExecutor:
         logger.debug(f"PLAN_EXECUTOR: Main task '{main_task.name}' (ID: {main_task.id}) fetched. Description: {main_task.description}")
 
         subtasks: List[TaskState] = await self.task_manager.get_subtasks(self.main_task_id)
-        subtasks.sort(key=lambda x: x.created_at if x.created_at else x.id) # Sort for deterministic order
-        logger.debug(f"PLAN_EXECUTOR: Fetched {len(subtasks)} subtasks for plan {self.main_task_id}. Sorted by created_at/id.")
+        subtasks.sort(key=lambda x: x.created_at if x.created_at else x.id) # Keep existing sort
+        logger.debug(f"PLAN_EXECUTOR: Fetched {len(subtasks)} subtasks for plan {self.main_task_id}.")
 
-        start_plan_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Starting execution of plan: {main_task.name} (ID: {main_task.id}) with {len(subtasks)} subtasks."}, "metadata": {"thread_run_id": self.main_task_id}}
+        total_steps = len(subtasks)
+        current_step_number = 0 # Will be incremented before processing each step
+
+        start_plan_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Starting execution of plan: {main_task.name} (ID: {main_task.id}) with {total_steps} subtasks."}, "metadata": {"thread_run_id": self.main_task_id}}
         await self._send_user_message(start_plan_event)
 
         completed_subtask_ids = set()
@@ -103,6 +122,7 @@ class PlanExecutor:
         agent_signaled_completion = False # Flag for SystemCompleteTask
         completion_summary_from_agent = "" # To store summary from SystemCompleteTask
         MAX_PARAM_GENERATION_RETRIES = 2
+        all_step_results = [] # New list to accumulate results
 
         while True: # Outer loop for dependency-aware execution
             if agent_signaled_completion: # If completion tool was called, exit outer loop
@@ -138,11 +158,19 @@ class PlanExecutor:
 
             progress_made_in_pass = False
             for subtask in runnable_subtasks:
-                if plan_failed:
+                if plan_failed: # or agent_signaled_completion
                     break
 
-                logger.info(f"PLAN_EXECUTOR: Processing subtask ID: {subtask.id}, Name: '{subtask.name}', Status: {subtask.status}, Dependencies: {subtask.dependencies}")
-                subtask_start_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Now working on: {subtask.name} (ID: {subtask.id})"}, "metadata": {"thread_run_id": self.main_task_id}}
+                current_step_number += 1 # Increment for the current step being processed
+
+                logger.info(f"PLAN_EXECUTOR: Processing step {current_step_number}/{total_steps}, Subtask ID: {subtask.id}, Name: '{subtask.name}'")
+
+                subtask_start_message = f"[Paso {current_step_number} de {total_steps}] Iniciando: {subtask.name}"
+                subtask_start_event = {
+                    "type": "assistant_message_update",
+                    "content": {"role": "assistant", "content": subtask_start_message},
+                    "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps}
+                }
                 await self._send_user_message(subtask_start_event)
                 await self.task_manager.update_task(subtask.id, {"status": "running"})
                 progress_made_in_pass = True
@@ -351,14 +379,26 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                     subtask_failed_flag = True
                                 else:
                                     logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution successful for '{tool_id}__{method_name}'.")
-                                    # Check for SystemCompleteTask
+
+                                    # Accumulate successful result
+                                    if tool_result.result is not None: # Ensure there is a result to add
+                                        all_step_results.append({
+                                            "step_name": subtask.name,
+                                            "tool_used": f"{tool_id}__{method_name}",
+                                            "result": tool_result.result
+                                        })
+                                    else: # Handle cases where successful tools might return None result
+                                         all_step_results.append({
+                                            "step_name": subtask.name,
+                                            "tool_used": f"{tool_id}__{method_name}",
+                                            "result": "Tool executed successfully but returned no specific result content."
+                                        })
+
+                                    # Check for SystemCompleteTask (existing logic)
                                     if tool_id == "SystemCompleteTask" and method_name == "task_complete":
                                         logger.info(f"PLAN_EXECUTOR: Agent signaled task completion via SystemCompleteTask. Main task {self.main_task_id} will be marked as completed.")
                                         completion_summary_from_agent = tool_result.result.get("summary", "Agent marked task as complete.")
                                         agent_signaled_completion = True
-                                        # subtask_failed_flag remains False as this is a successful completion signal
-                                        # No need to set plan_failed = False explicitly here, it's already False.
-                                        # Break this inner loop; the outer loop will check agent_signaled_completion.
                                         break
 
                             except Exception as e_exec:
@@ -371,22 +411,33 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                 if subtask_failed_flag:
                     output_data_fail = json.dumps(subtask_results)
                     await self.task_manager.update_task(subtask.id, {"status": "failed", "output": output_data_fail})
-                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'failed'. Output: {json.dumps(output_data_fail, indent=2)}")
-                    subtask_failed_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Subtask FAILED: {subtask.name}. Details: {output_data_fail}"}, "metadata": {"thread_run_id": self.main_task_id}}
+                    logger.info(f"PLAN_EXECUTOR: Step {current_step_number}/{total_steps}, Subtask ID: {subtask.id} ('{subtask.name}') status updated to 'failed'.")
+
+                    subtask_failed_message = f"[Paso {current_step_number} de {total_steps}] Falló: {subtask.name}."
+                    subtask_failed_event = {
+                        "type": "assistant_message_update",
+                        "content": {"role": "assistant", "content": subtask_failed_message},
+                        "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps, "error_details": output_data_fail}
+                    }
                     await self._send_user_message(subtask_failed_event)
-                    logger.error(f"PLAN_EXECUTOR: Plan execution failed at subtask {subtask.id} ('{subtask.name}'). Stopping plan.")
+                    # logger.error(f"PLAN_EXECUTOR: Plan execution failed at subtask {subtask.id} ('{subtask.name}'). Stopping plan.") # Log already indicates failure
                     plan_failed = True
                     break
                 else:
                     output_data_complete = json.dumps(subtask_results)
                     await self.task_manager.update_task(subtask.id, {"status": "completed", "output": output_data_complete})
                     completed_subtask_ids.add(subtask.id)
-                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'completed'. Output: {json.dumps(output_data_complete, indent=2)}")
-                    subtask_complete_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Subtask COMPLETED: {subtask.name}. Output: {output_data_complete}"}, "metadata": {"thread_run_id": self.main_task_id}}
-                    await self._send_user_message(subtask_complete_event)
-                    # logger.info(f"Subtask {subtask.id} ('{subtask.name}') completed successfully.") # Redundant with status update log
+                    logger.info(f"PLAN_EXECUTOR: Step {current_step_number}/{total_steps}, Subtask ID: {subtask.id} ('{subtask.name}') status updated to 'completed'.")
 
-                if agent_signaled_completion: # If completion tool was called in the last subtask, break outer loop
+                    subtask_complete_message = f"[Paso {current_step_number} de {total_steps}] Completado: {subtask.name}."
+                    subtask_complete_event = {
+                        "type": "assistant_message_update",
+                        "content": {"role": "assistant", "content": subtask_complete_message},
+                        "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps, "raw_output": output_data_complete}
+                    }
+                    await self._send_user_message(subtask_complete_event)
+
+                if agent_signaled_completion:
                     break
 
             if plan_failed: # This handles subtask failures
@@ -404,19 +455,70 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
 
         if agent_signaled_completion:
             final_main_task_status = "completed"
-            final_main_task_message = completion_summary_from_agent
+
+            final_summary_parts = []
+            if completion_summary_from_agent:
+                final_summary_parts.append(completion_summary_from_agent)
+            else:
+                final_summary_parts.append("El agente ha completado la tarea.")
+
+            if all_step_results:
+                final_summary_parts.append("\n\nResumen de los pasos ejecutados:")
+                for step_result in all_step_results:
+                    result_str = ""
+                    try:
+                        if isinstance(step_result['result'], (dict, list)):
+                            result_str = json.dumps(step_result['result'], indent=2, ensure_ascii=False)
+                        else:
+                            result_str = str(step_result['result'])
+                    except Exception:
+                        result_str = str(step_result['result'])
+
+                    max_result_len = 200
+                    if len(result_str) > max_result_len:
+                        result_str = result_str[:max_result_len] + "..."
+
+                    final_summary_parts.append(f"- Paso '{step_result['step_name']}' (Herramienta: {step_result['tool_used']}):\n  Resultado: {result_str}")
+
+            final_main_task_message = "\n".join(final_summary_parts)
+
         elif plan_failed:
             final_main_task_status = "failed"
-            final_main_task_message = "Plan execution failed due to one or more subtask failures or deadlock."
-        else: # All subtasks completed normally without explicit agent signal or failure
+            final_main_task_message = "La ejecución del plan falló debido a errores en uno o más subpasos o un interbloqueo."
+        else:
             final_main_task_status = "completed"
-            final_main_task_message = "All subtasks processed successfully without explicit agent completion signal."
+            final_main_task_message = "Todos los subpasos se procesaron correctamente."
+            if all_step_results:
+                final_main_task_message += "\n\nResumen de los pasos ejecutados:"
+                for step_result in all_step_results:
+                    result_str = ""
+                    try:
+                        if isinstance(step_result['result'], (dict, list)):
+                            result_str = json.dumps(step_result['result'], indent=2, ensure_ascii=False)
+                        else:
+                            result_str = str(step_result['result'])
+                    except Exception:
+                        result_str = str(step_result['result'])
+
+                    max_result_len = 200
+                    if len(result_str) > max_result_len:
+                        result_str = result_str[:max_result_len] + "..."
+                    final_main_task_message += f"\n- Paso '{step_result['step_name']}' (Herramienta: {step_result['tool_used']}):\n  Resultado: {result_str}"
 
         logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} finished with status '{final_main_task_status}'. Summary: {final_main_task_message}")
 
-        final_plan_status_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Plan '{main_task.name}' {final_main_task_status.upper()}. {final_main_task_message}"}, "metadata": {"thread_run_id": self.main_task_id}}
+        final_plan_status_event_content = f"[Plan '{main_task.name}' {final_main_task_status.upper()}] {final_main_task_message}"
+        final_plan_status_event = {
+            "type": "assistant_message_update",
+            "content": {"role": "assistant", "content": final_plan_status_event_content},
+            "metadata": {"thread_run_id": self.main_task_id, "final_status": final_main_task_status}
+        }
         await self._send_user_message(final_plan_status_event)
-        await self.task_manager.update_task(self.main_task_id, {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message})})
+
+        await self.task_manager.update_task(
+            self.main_task_id,
+            {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message}, ensure_ascii=False)}
+        )
 
     async def execute_json_plan(
         self,
