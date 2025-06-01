@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, AsyncGenerator, Tuple, Union, Callable, Literal
 from dataclasses import dataclass
 from utils.logger import logger
-from agentpress.tool import ToolResult # Changed from ToolResult
-from agentpress.tool_orchestrator import ToolOrchestrator # Changed from ToolRegistry
+from agentpress.tool import ToolResult
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.plan_executor import PlanExecutor
 from litellm import completion_cost
 from langfuse.client import StatefulTraceClient
 from services.langfuse import langfuse
@@ -86,20 +87,35 @@ class ProcessorConfig:
 class ResponseProcessor:
     """Processes LLM responses, extracting and executing tool calls."""
     
-    def __init__(self, tool_orchestrator: ToolOrchestrator, add_message_callback: Callable, trace: Optional[StatefulTraceClient] = None): # Changed parameter
+    def __init__(self, tool_orchestrator: ToolOrchestrator, add_message_callback: Callable, plan_executor: PlanExecutor, trace: Optional[StatefulTraceClient] = None):
         """Initialize the ResponseProcessor.
         
         Args:
             tool_orchestrator: Orchestrator for executing tools.
             add_message_callback: Callback function to add messages to the thread.
                 MUST return the full saved message object (dict) or None.
+            plan_executor: Executor for plans.
         """
-        self.tool_orchestrator = tool_orchestrator # Changed attribute
+        self.tool_orchestrator = tool_orchestrator
         self.add_message = add_message_callback
+        self.plan_executor = plan_executor
         self.trace = trace
         if not self.trace:
             self.trace = langfuse.trace(name="anonymous:response_processor")
         
+        self.is_plan = False
+        self.plan_buffer: List[str] = []
+
+    def is_complete_json(self, json_str: str) -> bool:
+        """
+        Checks if a string is a complete JSON object.
+        """
+        try:
+            json.loads(json_str)
+            return True
+        except json.JSONDecodeError:
+            return False
+
     async def _yield_message(self, message_obj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Helper to yield a message with proper formatting.
         
@@ -185,130 +201,218 @@ class ResponseProcessor:
                     # Process content chunk
                     if delta and hasattr(delta, 'content') and delta.content:
                         chunk_content = delta.content
-                        # print(chunk_content, end='', flush=True)
-                        accumulated_content += chunk_content
-                        current_xml_content += chunk_content
+                        processed_as_plan_chunk = False
 
-                        if not (config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls):
-                            # Yield ONLY content chunk (don't save)
-                            now_chunk = datetime.now(timezone.utc).isoformat()
-                            yield {
-                                "sequence": __sequence,
-                                "message_id": None, "thread_id": thread_id, "type": "assistant",
-                                "is_llm_message": True,
-                                "content": to_json_string({"role": "assistant", "content": chunk_content}),
-                                "metadata": to_json_string({"stream_status": "chunk", "thread_run_id": thread_run_id}),
-                                "created_at": now_chunk, "updated_at": now_chunk
-                            }
-                            __sequence += 1
-                        else:
-                            logger.info("XML tool call limit reached - not yielding more content chunks")
-                            self.trace.event(name="xml_tool_call_limit_reached", level="DEFAULT", status_message=(f"XML tool call limit reached - not yielding more content chunks"))
+                        # Plan Detection Logic
+                        plan_marker = '"plan":' # Or a more specific marker like '"actions":' or '"subtasks":' based on expected LLM output for plans.
+                        if not self.is_plan and plan_marker in chunk_content:
+                            logger.debug(f"Plan detected in response stream by marker: {plan_marker}")
+                            self.is_plan = True
 
-                        # --- Process XML Tool Calls (if enabled and limit not reached) ---
-                        if config.xml_tool_calling and not (config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls):
-                            xml_chunks = self._extract_xml_chunks(current_xml_content)
-                            for xml_chunk in xml_chunks:
-                                current_xml_content = current_xml_content.replace(xml_chunk, "", 1)
-                                xml_chunks_buffer.append(xml_chunk)
-                                result = self._parse_xml_tool_call(xml_chunk)
-                                if result:
-                                    tool_call, parsing_details = result
-                                    xml_tool_call_count += 1
-                                    current_assistant_id = last_assistant_message_object['message_id'] if last_assistant_message_object else None
-                                    context = self._create_tool_context(
-                                        tool_call, tool_index, current_assistant_id, parsing_details
-                                    )
+                        if self.is_plan:
+                            processed_as_plan_chunk = True
+                            self.plan_buffer.append(chunk_content)
+                            full_json_str = "".join(self.plan_buffer)
 
-                                    if config.execute_tools and config.execute_on_stream:
-                                        # Save and Yield tool_started status
-                                        started_msg_obj = await self._yield_and_save_tool_started(context, thread_id, thread_run_id)
-                                        if started_msg_obj: yield format_for_yield(started_msg_obj)
-                                        yielded_tool_indices.add(tool_index) # Mark status as yielded
+                            if self.is_complete_json(full_json_str):
+                                logger.info("Complete plan JSON assembled from stream.")
+                                try:
+                                    plan_data = json.loads(full_json_str)
+                                    # Validate actual plan structure (e.g., presence of a specific key)
+                                    if isinstance(plan_data, dict) and plan_data and (plan_marker.strip('":') in plan_data or "actions" in plan_data or "subtasks" in plan_data): # Example validation
+                                        logger.info(f"Valid plan structure detected. Parsed plan data snippet: {str(plan_data)[:200]}...")
+                                        if hasattr(self, 'plan_executor') and self.plan_executor:
+                                            plan_execution_run_id = str(uuid.uuid4())
 
-                                        execution_task = asyncio.create_task(self._execute_tool(tool_call))
-                                        pending_tool_executions.append({
-                                            "task": execution_task, "tool_call": tool_call,
-                                            "tool_index": tool_index, "context": context
-                                        })
-                                        tool_index += 1
+                                            plan_start_content = {"status_type": "plan_execution_start", "plan_name": plan_data.get("name", "Unnamed Plan")}
+                                            plan_start_msg_obj = await self.add_message(
+                                                thread_id=thread_id, type="status", content=plan_start_content,
+                                                is_llm_message=False, metadata={"thread_run_id": plan_execution_run_id, "original_run_id": thread_run_id, "plan_data_snippet": str(plan_data)[:200]}
+                                            )
+                                            if plan_start_msg_obj: yield format_for_yield(plan_start_msg_obj)
 
-                                    if config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls:
-                                        logger.debug(f"Reached XML tool call limit ({config.max_xml_tool_calls})")
-                                        finish_reason = "xml_tool_limit_reached"
-                                        break # Stop processing more XML chunks in this delta
+                                            logger.info(f"Calling plan_executor's method for plan in thread {thread_id} (run {plan_execution_run_id})")
+                                            # Assumes PlanExecutor will have a method like `execute_json_plan(self, plan_data, thread_id, run_id)`
+                                            async for plan_result_part in self.plan_executor.execute_json_plan(plan_data, thread_id, plan_execution_run_id):
+                                                yield plan_result_part
+                                            logger.info(f"Plan execution finished for thread {thread_id} (run {plan_execution_run_id}).")
+
+                                            plan_end_content = {"status_type": "plan_execution_end"}
+                                            plan_end_msg_obj = await self.add_message(
+                                                thread_id=thread_id, type="status", content=plan_end_content,
+                                                is_llm_message=False, metadata={"thread_run_id": plan_execution_run_id}
+                                            )
+                                            if plan_end_msg_obj: yield format_for_yield(plan_end_msg_obj)
+                                        else: # No plan_executor
+                                            logger.error("PlanExecutor not available. Cannot execute detected plan.")
+                                            err_content = {"role": "system", "status_type": "error", "message": "Plan detected but PlanExecutor is not available."}
+                                            err_msg_obj = await self.add_message(thread_id=thread_id, type="status", content=err_content, is_llm_message=False, metadata={"thread_run_id": thread_run_id})
+                                            if err_msg_obj: yield format_for_yield(err_msg_obj)
+                                    else: # Not a valid plan structure
+                                        logger.warning(f"JSON assembled, but not a recognized plan structure. Content: {str(plan_data)[:200]}. Resetting is_plan state.")
+                                        logger.info(f"Dropping buffered content that was not a valid plan: {''.join(self.plan_buffer)}")
+                                        processed_as_plan_chunk = False # Fall through to regular processing for current chunk_content
+
+                                    self.plan_buffer = []
+                                    self.is_plan = False
+                                    if processed_as_plan_chunk: # If it was handled as a plan (executed or error during exec)
+                                        continue # Skip regular processing for this chunk
+                                except json.JSONDecodeError:
+                                    logger.debug("Plan JSONDecodeError (plan buffer likely incomplete), waiting for more chunks...")
+                                    # processed_as_plan_chunk is True, original logic will be skipped. Loop continues.
+                                except Exception as e_plan_exec:
+                                    logger.error(f"Error during plan processing or execution: {e_plan_exec}", exc_info=True)
+                                    err_content = {"role": "system", "status_type": "error", "message": f"Error processing/executing plan: {str(e_plan_exec)}"}
+                                    err_msg_obj = await self.add_message(thread_id=thread_id, type="status", content=err_content, is_llm_message=False, metadata={"thread_run_id": thread_run_id})
+                                    if err_msg_obj: yield format_for_yield(err_msg_obj)
+                                    self.plan_buffer = []
+                                    self.is_plan = False
+                                    continue # Skip original logic for this chunk
+                            # else: (JSON not complete yet)
+                                # logger.debug("Plan JSON not complete, waiting for more chunks...")
+                                # processed_as_plan_chunk is True. Loop will iterate for the next chunk.
+                                # No `continue` here is needed.
+
+                        if not processed_as_plan_chunk:
+                            # print(chunk_content, end='', flush=True)
+                            accumulated_content += chunk_content
+                            current_xml_content += chunk_content
+
+                            if not (config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls):
+                                # Yield ONLY content chunk (don't save)
+                                now_chunk = datetime.now(timezone.utc).isoformat()
+                                yield {
+                                    "sequence": __sequence,
+                                    "message_id": None, "thread_id": thread_id, "type": "assistant",
+                                    "is_llm_message": True,
+                                    "content": to_json_string({"role": "assistant", "content": chunk_content}),
+                                    "metadata": to_json_string({"stream_status": "chunk", "thread_run_id": thread_run_id}),
+                                    "created_at": now_chunk, "updated_at": now_chunk
+                                }
+                                __sequence += 1
+                            else:
+                                logger.info("XML tool call limit reached - not yielding more content chunks")
+                                self.trace.event(name="xml_tool_call_limit_reached", level="DEFAULT", status_message=(f"XML tool call limit reached - not yielding more content chunks"))
+
+                            # --- Process XML Tool Calls (if enabled and limit not reached) ---
+                            if config.xml_tool_calling and not (config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls):
+                                xml_chunks = self._extract_xml_chunks(current_xml_content)
+                                for xml_chunk in xml_chunks:
+                                    current_xml_content = current_xml_content.replace(xml_chunk, "", 1)
+                                    xml_chunks_buffer.append(xml_chunk)
+                                    result = self._parse_xml_tool_call(xml_chunk)
+                                    if result:
+                                        tool_call, parsing_details = result
+                                        xml_tool_call_count += 1
+                                        current_assistant_id = last_assistant_message_object['message_id'] if last_assistant_message_object else None
+                                        context = self._create_tool_context(
+                                            tool_call, tool_index, current_assistant_id, parsing_details
+                                        )
+
+                                        if config.execute_tools and config.execute_on_stream:
+                                            # Save and Yield tool_started status
+                                            started_msg_obj = await self._yield_and_save_tool_started(context, thread_id, thread_run_id)
+                                            if started_msg_obj: yield format_for_yield(started_msg_obj)
+                                            yielded_tool_indices.add(tool_index) # Mark status as yielded
+
+                                            execution_task = asyncio.create_task(self._execute_tool(tool_call))
+                                            pending_tool_executions.append({
+                                                "task": execution_task, "tool_call": tool_call,
+                                                "tool_index": tool_index, "context": context
+                                            })
+                                            tool_index += 1
+
+                                        if config.max_xml_tool_calls > 0 and xml_tool_call_count >= config.max_xml_tool_calls:
+                                            logger.debug(f"Reached XML tool call limit ({config.max_xml_tool_calls})")
+                                            finish_reason = "xml_tool_limit_reached"
+                                            break # Stop processing more XML chunks in this delta
 
                     # --- Process Native Tool Call Chunks ---
                     if config.native_tool_calling and delta and hasattr(delta, 'tool_calls') and delta.tool_calls:
-                        for tool_call_chunk in delta.tool_calls:
-                            # Yield Native Tool Call Chunk (transient status, not saved)
-                            # ... (safe extraction logic for tool_call_data_chunk) ...
-                            tool_call_data_chunk = {} # Placeholder for extracted data
-                            if hasattr(tool_call_chunk, 'model_dump'): tool_call_data_chunk = tool_call_chunk.model_dump()
-                            else: # Manual extraction...
-                                if hasattr(tool_call_chunk, 'id'): tool_call_data_chunk['id'] = tool_call_chunk.id
-                                if hasattr(tool_call_chunk, 'index'): tool_call_data_chunk['index'] = tool_call_chunk.index
-                                if hasattr(tool_call_chunk, 'type'): tool_call_data_chunk['type'] = tool_call_chunk.type
-                                if hasattr(tool_call_chunk, 'function'):
-                                    tool_call_data_chunk['function'] = {}
-                                    if hasattr(tool_call_chunk.function, 'name'): tool_call_data_chunk['function']['name'] = tool_call_chunk.function.name
-                                    if hasattr(tool_call_chunk.function, 'arguments'): tool_call_data_chunk['function']['arguments'] = tool_call_chunk.function.arguments if isinstance(tool_call_chunk.function.arguments, str) else to_json_string(tool_call_chunk.function.arguments)
+                        if not self.is_plan: # Only process native tools if not currently handling a plan via content stream
+                            for tool_call_chunk in delta.tool_calls:
+                                # Yield Native Tool Call Chunk (transient status, not saved)
+                                # ... (safe extraction logic for tool_call_data_chunk) ...
+                                tool_call_data_chunk = {} # Placeholder for extracted data
+                                if hasattr(tool_call_chunk, 'model_dump'): tool_call_data_chunk = tool_call_chunk.model_dump()
+                                else: # Manual extraction...
+                                    if hasattr(tool_call_chunk, 'id'): tool_call_data_chunk['id'] = tool_call_chunk.id
+                                    if hasattr(tool_call_chunk, 'index'): tool_call_data_chunk['index'] = tool_call_chunk.index
+                                    if hasattr(tool_call_chunk, 'type'): tool_call_data_chunk['type'] = tool_call_chunk.type
+                                    if hasattr(tool_call_chunk, 'function'):
+                                        tool_call_data_chunk['function'] = {}
+                                        if hasattr(tool_call_chunk.function, 'name'): tool_call_data_chunk['function']['name'] = tool_call_chunk.function.name
+                                        if hasattr(tool_call_chunk.function, 'arguments'): tool_call_data_chunk['function']['arguments'] = tool_call_chunk.function.arguments if isinstance(tool_call_chunk.function.arguments, str) else to_json_string(tool_call_chunk.function.arguments)
 
-                            # Log native tool call detection when fully assembled
-                            if tool_call_data_chunk.get('id') and tool_call_data_chunk.get('function', {}).get('name') and tool_call_data_chunk.get('function', {}).get('arguments'):
-                                arguments_json_string = tool_call_data_chunk['function']['arguments']
-                                # Ensure arguments is a string for logging, might already be if from to_json_string
-                                if not isinstance(arguments_json_string, str):
-                                    arguments_json_string = to_json_string(arguments_json_string)
-                                logger.debug(f"Native tool call detected: ID={tool_call_data_chunk['id']}, Function={tool_call_data_chunk['function']['name']}, Args={arguments_json_string}")
+                                # Log native tool call detection when fully assembled
+                                if tool_call_data_chunk.get('id') and tool_call_data_chunk.get('function', {}).get('name') and tool_call_data_chunk.get('function', {}).get('arguments'):
+                                    arguments_json_string = tool_call_data_chunk['function']['arguments']
+                                    # Ensure arguments is a string for logging, might already be if from to_json_string
+                                    if not isinstance(arguments_json_string, str):
+                                        arguments_json_string = to_json_string(arguments_json_string)
+                                    logger.debug(f"Native tool call detected: ID={tool_call_data_chunk['id']}, Function={tool_call_data_chunk['function']['name']}, Args={arguments_json_string}")
 
-                            now_tool_chunk = datetime.now(timezone.utc).isoformat()
-                            yield {
-                                "message_id": None, "thread_id": thread_id, "type": "status", "is_llm_message": True,
-                                "content": to_json_string({"role": "assistant", "status_type": "tool_call_chunk", "tool_call_chunk": tool_call_data_chunk}),
-                                "metadata": to_json_string({"thread_run_id": thread_run_id}),
-                                "created_at": now_tool_chunk, "updated_at": now_tool_chunk
-                            }
-
-                            # --- Buffer and Execute Complete Native Tool Calls ---
-                            if not hasattr(tool_call_chunk, 'function'): continue
-                            idx = tool_call_chunk.index if hasattr(tool_call_chunk, 'index') else 0
-                            # ... (buffer update logic remains same) ...
-                            # ... (check complete logic remains same) ...
-                            has_complete_tool_call = False # Placeholder
-                            if (tool_calls_buffer.get(idx) and
-                                tool_calls_buffer[idx]['id'] and
-                                tool_calls_buffer[idx]['function']['name'] and
-                                tool_calls_buffer[idx]['function']['arguments']):
-                                try:
-                                    safe_json_parse(tool_calls_buffer[idx]['function']['arguments'])
-                                    has_complete_tool_call = True
-                                except json.JSONDecodeError: pass
-
-
-                            if has_complete_tool_call and config.execute_tools and config.execute_on_stream:
-                                current_tool = tool_calls_buffer[idx]
-                                tool_call_data = {
-                                    "function_name": current_tool['function']['name'],
-                                    "arguments": safe_json_parse(current_tool['function']['arguments']),
-                                    "id": current_tool['id']
+                                now_tool_chunk = datetime.now(timezone.utc).isoformat()
+                                yield {
+                                    "message_id": None, "thread_id": thread_id, "type": "status", "is_llm_message": True,
+                                    "content": to_json_string({"role": "assistant", "status_type": "tool_call_chunk", "tool_call_chunk": tool_call_data_chunk}),
+                                    "metadata": to_json_string({"thread_run_id": thread_run_id}),
+                                    "created_at": now_tool_chunk, "updated_at": now_tool_chunk
                                 }
-                                current_assistant_id = last_assistant_message_object['message_id'] if last_assistant_message_object else None
-                                context = self._create_tool_context(
-                                    tool_call_data, tool_index, current_assistant_id
-                                )
 
-                                # Save and Yield tool_started status
-                                started_msg_obj = await self._yield_and_save_tool_started(context, thread_id, thread_run_id)
-                                if started_msg_obj: yield format_for_yield(started_msg_obj)
-                                yielded_tool_indices.add(tool_index) # Mark status as yielded
+                                # --- Buffer and Execute Complete Native Tool Calls ---
+                                if not hasattr(tool_call_chunk, 'function'): continue
+                                idx = tool_call_chunk.index if hasattr(tool_call_chunk, 'index') else 0
+                                # ... (buffer update logic remains same) ...
+                                # Initialize buffer for this index if it doesn't exist
+                                if idx not in tool_calls_buffer:
+                                    tool_calls_buffer[idx] = {"id": None, "function": {"name": None, "arguments": ""}}
 
-                                execution_task = asyncio.create_task(self._execute_tool(tool_call_data))
-                                pending_tool_executions.append({
-                                    "task": execution_task, "tool_call": tool_call_data,
-                                    "tool_index": tool_index, "context": context
-                                })
-                                tool_index += 1
+                                # Update buffer with new data from the chunk
+                                if hasattr(tool_call_chunk, 'id') and tool_call_chunk.id:
+                                    tool_calls_buffer[idx]['id'] = tool_call_chunk.id
+                                if hasattr(tool_call_chunk, 'function') and hasattr(tool_call_chunk.function, 'name') and tool_call_chunk.function.name:
+                                    tool_calls_buffer[idx]['function']['name'] = tool_call_chunk.function.name
+                                if hasattr(tool_call_chunk, 'function') and hasattr(tool_call_chunk.function, 'arguments') and tool_call_chunk.function.arguments:
+                                    tool_calls_buffer[idx]['function']['arguments'] += tool_call_chunk.function.arguments
+
+                                # ... (check complete logic remains same) ...
+                                has_complete_tool_call = False # Placeholder
+                                if (tool_calls_buffer.get(idx) and
+                                    tool_calls_buffer[idx]['id'] and
+                                    tool_calls_buffer[idx]['function']['name'] and
+                                    tool_calls_buffer[idx]['function']['arguments']):
+                                    try:
+                                        safe_json_parse(tool_calls_buffer[idx]['function']['arguments'])
+                                        has_complete_tool_call = True
+                                    except json.JSONDecodeError: pass
+
+
+                                if has_complete_tool_call and config.execute_tools and config.execute_on_stream:
+                                    current_tool = tool_calls_buffer[idx]
+                                    tool_call_data = {
+                                        "function_name": current_tool['function']['name'],
+                                        "arguments": safe_json_parse(current_tool['function']['arguments']),
+                                        "id": current_tool['id']
+                                    }
+                                    current_assistant_id = last_assistant_message_object['message_id'] if last_assistant_message_object else None
+                                    context = self._create_tool_context(
+                                        tool_call_data, tool_index, current_assistant_id
+                                    )
+
+                                    # Save and Yield tool_started status
+                                    started_msg_obj = await self._yield_and_save_tool_started(context, thread_id, thread_run_id)
+                                    if started_msg_obj: yield format_for_yield(started_msg_obj)
+                                    yielded_tool_indices.add(tool_index) # Mark status as yielded
+
+                                    execution_task = asyncio.create_task(self._execute_tool(tool_call_data))
+                                    pending_tool_executions.append({
+                                        "task": execution_task, "tool_call": tool_call_data,
+                                        "tool_index": tool_index, "context": context
+                                    })
+                                    tool_index += 1
+                        else:
+                            logger.debug("Skipping native tool_calls processing because a plan is currently being handled via content stream.")
 
                 if finish_reason == "xml_tool_limit_reached":
                     logger.info("Stopping stream processing after loop due to XML tool call limit")

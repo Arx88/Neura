@@ -5,14 +5,15 @@ The PlanExecutor iterates through subtasks, respecting their dependencies,
 and uses an LLM to determine parameters for assigned tools, then executes them
 via the ToolOrchestrator.
 """
-from typing import Callable, Optional, List, Dict, Any
+from typing import Callable, Optional, List, Dict, Any, AsyncGenerator
 import json
-import uuid # Added
+import uuid
 
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState # Correctly import TaskState
-from agentpress.tool import ToolResult # Correctly import ToolResult
+from agentpress.task_types import TaskState
+from agentpress.tool import ToolResult
+from agentpress.utils.json_helpers import format_for_yield
 from services.llm import make_llm_api_call
 from utils.logger import logger
 
@@ -416,6 +417,160 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
         final_plan_status_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Plan '{main_task.name}' {final_main_task_status.upper()}. {final_main_task_message}"}, "metadata": {"thread_run_id": self.main_task_id}}
         await self._send_user_message(final_plan_status_event)
         await self.task_manager.update_task(self.main_task_id, {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message})})
+
+    async def execute_json_plan(
+        self,
+        plan_data: Dict[str, Any],
+        thread_id: str, # For context and message saving
+        run_id: str,    # For linking status messages to this specific plan execution
+        add_message_callback: Optional[Callable] = None # Callback to save messages to DB
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Executes a plan provided as a JSON object.
+        The plan is expected to be a list of actions/tool calls.
+        This method directly executes tools without creating tasks in TaskStateManager.
+        Yields status messages and tool results compatible with ResponseProcessor.
+        """
+        logger.info(f"PLAN_EXECUTOR (JSON): Starting execution of JSON plan. Run ID: {run_id}, Thread ID: {thread_id}")
+        logger.debug(f"PLAN_EXECUTOR (JSON): Plan data: {json.dumps(plan_data, indent=2)}")
+
+        actions = plan_data.get("plan", plan_data.get("actions", plan_data.get("subtasks")))
+
+        if not isinstance(actions, list):
+            logger.error(f"PLAN_EXECUTOR (JSON): Plan data does not contain a list of actions/subtasks. Found: {type(actions)}. Run ID: {run_id}")
+            error_message = {
+                "role": "system", "status_type": "error",
+                "message": "Invalid plan format: 'plan', 'actions', or 'subtasks' key must be a list."
+            }
+            if add_message_callback:
+                err_msg_obj = await add_message_callback(
+                    thread_id=thread_id, type="status", content=error_message,
+                    is_llm_message=False, metadata={"thread_run_id": run_id}
+                )
+                if err_msg_obj: yield format_for_yield(err_msg_obj)
+            else: # Fallback if no callback to save, just yield a basic structure
+                yield {"type": "status", "content": json.dumps(error_message), "metadata": json.dumps({"thread_run_id": run_id})}
+            return
+
+        plan_name = plan_data.get("name", "Unnamed JSON Plan")
+        logger.info(f"PLAN_EXECUTOR (JSON): Executing plan '{plan_name}' with {len(actions)} actions. Run ID: {run_id}")
+
+        for index, action in enumerate(actions):
+            tool_name = action.get("tool_name", action.get("function_name")) # Expecting "tool_id__method_name"
+            params = action.get("parameters", action.get("arguments", {}))
+            action_id = action.get("id", str(uuid.uuid4())) # For linking start/end status
+
+            if not tool_name:
+                logger.warning(f"PLAN_EXECUTOR (JSON): Action {index} missing 'tool_name' or 'function_name'. Action: {action}. Run ID: {run_id}")
+                # Yield a warning/error status? For now, skip.
+                continue
+
+            tool_id_str, method_name_str = "", ""
+            if "__" in tool_name:
+                tool_id_str, method_name_str = tool_name.split("__", 1)
+            else:
+                logger.warning(f"PLAN_EXECUTOR (JSON): Action {index} 'tool_name' ('{tool_name}') not in 'ToolID__methodName' format. Skipping. Run ID: {run_id}")
+                # Yield warning/error?
+                continue
+
+            logger.info(f"PLAN_EXECUTOR (JSON): Preparing to execute action {index + 1}/{len(actions)}: {tool_name} with params {params}. Run ID: {run_id}")
+
+            # Yield tool_started status
+            tool_started_content = {
+                "role": "assistant", "status_type": "tool_started",
+                "function_name": tool_name, "xml_tag_name": None, # Assuming no XML tools in this plan type
+                "message": f"Starting execution of {tool_name}", "tool_index": index,
+                "tool_call_id": action_id
+            }
+            if add_message_callback:
+                started_msg_obj = await add_message_callback(
+                    thread_id=thread_id, type="status", content=tool_started_content,
+                    is_llm_message=False, metadata={"thread_run_id": run_id}
+                )
+                if started_msg_obj: yield format_for_yield(started_msg_obj)
+            else:
+                 yield {"type": "status", "content": json.dumps(tool_started_content), "metadata": json.dumps({"thread_run_id": run_id})}
+
+
+            tool_result: Optional[ToolResult] = None
+            try:
+                tool_result = await self.tool_orchestrator.execute_tool(tool_id_str, method_name_str, params)
+            except Exception as e_exec:
+                logger.error(f"PLAN_EXECUTOR (JSON): Exception during tool execution for '{tool_name}': {e_exec}. Run ID: {run_id}", exc_info=True)
+                tool_result = ToolResult(
+                    tool_id=tool_id_str, execution_id=str(uuid.uuid4()),
+                    status="failed", error=f"Exception during execution: {str(e_exec)}"
+                )
+
+            if not tool_result: # Should not happen if execute_tool always returns a ToolResult
+                 tool_result = ToolResult(
+                    tool_id=tool_id_str, execution_id=str(uuid.uuid4()),
+                    status="failed", error="Tool execution returned None unexpectedly."
+                )
+
+            # Yield tool_completed / tool_failed status
+            is_success = tool_result.status == "completed"
+            status_type = "tool_completed" if is_success else "tool_failed"
+            outcome_message = f"Tool {tool_name} {tool_result.status}"
+            if not is_success and tool_result.error:
+                outcome_message += f": {tool_result.error}"
+
+            tool_outcome_content = {
+                "role": "assistant", "status_type": status_type,
+                "function_name": tool_name, "xml_tag_name": None,
+                "message": outcome_message, "tool_index": index,
+                "tool_call_id": action_id
+            }
+
+            if add_message_callback:
+                # Save the actual tool result first (simplified, native-like)
+                tool_result_content_for_db = {
+                    "role": "tool",
+                    "tool_call_id": action_id, # Link to the "call"
+                    "name": tool_name,
+                    "content": str(tool_result.result) if is_success else str(tool_result.error)
+                }
+                saved_tool_msg_obj = await add_message_callback(
+                    thread_id=thread_id, type="tool", content=tool_result_content_for_db,
+                    is_llm_message=True, # Considered part of LLM flow
+                    metadata={"thread_run_id": run_id, "tool_execution_id": tool_result.execution_id}
+                )
+
+                outcome_metadata = {"thread_run_id": run_id}
+                if saved_tool_msg_obj and saved_tool_msg_obj.get("message_id"):
+                    tool_outcome_content["linked_tool_result_message_id"] = saved_tool_msg_obj["message_id"]
+                    outcome_metadata["linked_tool_result_message_id"] = saved_tool_msg_obj["message_id"]
+
+                completed_msg_obj = await add_message_callback(
+                    thread_id=thread_id, type="status", content=tool_outcome_content,
+                    is_llm_message=False, metadata=outcome_metadata
+                )
+                if completed_msg_obj: yield format_for_yield(completed_msg_obj)
+
+                # Yield the saved tool result itself
+                if saved_tool_msg_obj:
+                    yield format_for_yield(saved_tool_msg_obj)
+
+            else: # No callback, yield simplified structures
+                yield {"type": "status", "content": json.dumps(tool_outcome_content), "metadata": json.dumps({"thread_run_id": run_id})}
+                # Yield simplified tool result
+                yield {
+                    "type": "tool", # Mimicking OpenAI message structure
+                    "content": json.dumps({
+                        "tool_call_id": action_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": str(tool_result.result) if is_success else str(tool_result.error)
+                    }),
+                    "metadata": json.dumps({"thread_run_id": run_id, "tool_execution_id": tool_result.execution_id})
+                }
+
+            if not is_success:
+                logger.error(f"PLAN_EXECUTOR (JSON): Action {index} ('{tool_name}') failed. Stopping plan execution. Run ID: {run_id}")
+                # Optionally yield a "plan_failed" status message here
+                break # Stop plan on first failure
+
+        logger.info(f"PLAN_EXECUTOR (JSON): Finished execution of JSON plan '{plan_name}'. Run ID: {run_id}")
 
 # Example Usage (Conceptual - would require async setup and instances)
 # async def main():
