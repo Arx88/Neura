@@ -387,6 +387,15 @@ async def start_agent(
         if is_planning_request:
             logger.info(f"Initiating planning flow for existing thread: {thread_id}")
             try:
+                # Enhanced logging for task_planner
+                logger.debug(f"Attempting to use TaskPlanner in start_agent. Object: {task_planner}")
+                logger.debug(f"Type of task_planner object: {type(task_planner)}")
+                try:
+                    logger.debug(f"Attributes of task_planner object: {dir(task_planner)}")
+                except Exception as e_dir:
+                    logger.debug(f"Could not get dir(task_planner): {str(e_dir)}")
+                logger.debug(f"Checking for 'plan_task' method. hasattr(task_planner, 'plan_task'): {hasattr(task_planner, 'plan_task')}")
+
                 main_planned_task = await task_planner.plan_task(
                     task_description=prompt_text,
                     context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
@@ -1019,6 +1028,15 @@ async def initiate_agent_with_files(
         if is_planning_request:
             logger.info(f"Initiating planning flow for project: {project_id}, thread: {thread_id}")
             try:
+                # Enhanced logging for task_planner
+                logger.debug(f"Attempting to use TaskPlanner in initiate_agent_with_files. Object: {task_planner}")
+                logger.debug(f"Type of task_planner object: {type(task_planner)}")
+                try:
+                    logger.debug(f"Attributes of task_planner object: {dir(task_planner)}")
+                except Exception as e_dir:
+                    logger.debug(f"Could not get dir(task_planner): {str(e_dir)}")
+                logger.debug(f"Checking for 'plan_task' method. hasattr(task_planner, 'plan_task'): {hasattr(task_planner, 'plan_task')}")
+
                 main_planned_task = await task_planner.plan_task(
                     task_description=prompt,  # Using the original prompt for planning
                     context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
