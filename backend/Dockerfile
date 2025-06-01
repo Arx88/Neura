@@ -63,7 +63,6 @@ CMD ["sh", "-c", "gunicorn api:app \
      --forwarded-allow-ips '*' \
      --worker-connections $WORKER_CONNECTIONS \
      --worker-tmp-dir /dev/shm \
-     --preload \
      --log-level info \
      --access-logfile - \
      --error-logfile - \
