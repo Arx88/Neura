@@ -404,15 +404,12 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
         if agent_signaled_completion:
             final_main_task_status = "completed"
             final_main_task_message = completion_summary_from_agent
-            # logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} completed by agent signal.") # Replaced by more descriptive log below
         elif plan_failed:
             final_main_task_status = "failed"
             final_main_task_message = "Plan execution failed due to one or more subtask failures or deadlock."
-            # logger.error(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} failed.") # Replaced by more descriptive log below
         else: # All subtasks completed normally without explicit agent signal or failure
             final_main_task_status = "completed"
             final_main_task_message = "All subtasks processed successfully without explicit agent completion signal."
-            # logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} completed (all subtasks done).") # Replaced by more descriptive log below
 
         logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} finished with status '{final_main_task_status}'. Summary: {final_main_task_message}")
 
