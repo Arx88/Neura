@@ -20,6 +20,9 @@ from agentpress.response_processor import (
     ResponseProcessor,
     ProcessorConfig
 )
+from agentpress.plan_executor import PlanExecutor
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.task_storage_supabase import SupabaseTaskStorage
 from services.supabase import DBConnection
 from utils.logger import logger
 from langfuse.client import StatefulGenerationClient, StatefulTraceClient
@@ -49,9 +52,24 @@ class ThreadManager:
         self.trace = trace
         if not self.trace:
             self.trace = langfuse.trace(name="anonymous:thread_manager")
+
+        # Initialize TaskManager components for PlanExecutor
+        # This satisfies PlanExecutor's constructor requirements for its other methods,
+        # though execute_json_plan (called by ResponseProcessor) doesn't directly use them.
+        task_storage = SupabaseTaskStorage(db_connection=self.db)
+        task_manager_for_plan_executor = TaskStateManager(storage=task_storage)
+
+        plan_executor_instance = PlanExecutor(
+            main_task_id="dummy_json_plan_runner", # Placeholder, not used by execute_json_plan
+            task_manager=task_manager_for_plan_executor,
+            tool_orchestrator=self.tool_orchestrator,
+            user_message_callback=None # Not used by execute_json_plan via ResponseProcessor
+        )
+
         self.response_processor = ResponseProcessor(
-            tool_orchestrator=self.tool_orchestrator, # Ensure this uses the passed instance
+            tool_orchestrator=self.tool_orchestrator,
             add_message_callback=self.add_message,
+            plan_executor=plan_executor_instance, # Pass the PlanExecutor instance
             trace=self.trace
         )
         self.context_manager = ContextManager()
