@@ -132,7 +132,8 @@ async def run_agent_background(
             # Initialize TaskStateManager for this run
             logger.info(f"RUN_AGENT_BACKGROUND: Initializing TaskStateManager for agent_run_id: {agent_run_id}...")
             # db.client is the initialized Supabase client from `await db.initialize()`
-            task_storage = SupabaseTaskStorage(db_client=client) # Use 'client' which is db.client
+            # Corrected to use db_connection=db
+            task_storage = SupabaseTaskStorage(db_connection=db)
             local_task_state_manager = TaskStateManager(storage=task_storage)
             # Assuming initialize method exists and is async, as per prompt context
             # If TaskStateManager's initialize is not async, remove await
