@@ -37,6 +37,7 @@ from agentpress.task_storage_supabase import SupabaseTaskStorage
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.plan_executor import PlanExecutor # Import PlanExecutor
 from agentpress.utils.message_assembler import MessageAssembler
+from agentpress.utils.json_helpers import format_for_yield # Added for plan_executor_message_callback
 
 
 load_dotenv()
@@ -260,24 +261,61 @@ async def run_agent(
 
                 if planning_triggered:
                     # --- Keyword-based Task Planning and Execution ---
-                    logger.info(f"PLANNER_TRIGGER_SUCCESS: Planning keyword '{keyword_found}' found in user message.")
-                    logger.debug(f"PLANNER_TRIGGER_SUCCESS: Extracted task description for planner: '{actual_task_description}'")
+                    logger.info(f"Planning mode triggered by keyword '{keyword_found}'. Task description for planner: '{actual_task_description}'") # Verified/Ensured
+                    # logger.info(f"PLANNER_TRIGGER_SUCCESS: Planning keyword '{keyword_found}' found in user message.") # Old log
+                    # logger.debug(f"PLANNER_TRIGGER_SUCCESS: Extracted task description for planner: '{actual_task_description}'") # Old log
                     # The trace event below already logs keyword and description.
                     # trace.event(name="planning_keywords_triggered", level="DEFAULT", status_message=(f"Keyword: '{keyword_found}', Task: {actual_task_description}")) # This line is effectively duplicated by the log above.
 
                     # Define a callback for PlanExecutor to send messages/updates back to the user during execution.
-                    async def plan_executor_message_callback(message_content: str):
-                        if isinstance(message_content, dict): # Ensure content is stringified if complex
-                            msg_str = json.dumps(message_content)
-                        else:
-                            msg_str = str(message_content)
+                    async def plan_executor_message_callback(message_data: dict[str, Any]):
+                        message_type = message_data.get("type")
+                        # Ensure thread_manager and thread_id are accessible from the outer scope
+                        # (they are, as this is a nested function in run_agent)
 
-                        # Yield messages with a specific prefix to distinguish them as plan updates.
-                        yield {
-                            "type": "assistant",
-                            "content": json.dumps({"role": "assistant", "content": f"[Plan Update] {msg_str}"}),
-                            "metadata": json.dumps({"thread_run_id": trace.id if trace else None}) # Include trace ID for context
-                        }
+                        if message_type == "status":
+                            # Yield status messages directly
+                            yield {
+                                "type": "status",
+                                "content": json.dumps(message_data.get("content", {})),
+                                "metadata": json.dumps(message_data.get("metadata", {}))
+                            }
+                        elif message_type == "plan_tool_result_data":
+                            tool_name = message_data.get("tool_name", "unknown_tool")
+                            tool_call_id = message_data.get("tool_call_id", str(uuid4()))
+                            status = message_data.get("status", "error")
+                            result_content = message_data.get("result")
+                            error_content = message_data.get("error")
+
+                            db_content_str = json.dumps(result_content) if status == "completed" else json.dumps(error_content)
+                            tool_message_db_content = {
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "name": tool_name, # This should be ToolID__MethodName
+                                "content": db_content_str
+                            }
+
+                            # Save to database
+                            # Ensure thread_manager is available in this scope
+                            saved_tool_msg = await thread_manager.add_message(
+                                thread_id=thread_id, # thread_id from outer scope
+                                type="tool",
+                                content=tool_message_db_content,
+                                is_llm_message=True, # Tool results are part of the LLM flow
+                                metadata=message_data.get("metadata", {})
+                            )
+                            if saved_tool_msg:
+                                yield format_for_yield(saved_tool_msg)
+
+                        elif message_type == "assistant_message_update":
+                            yield {
+                                "type": "assistant",
+                                "content": json.dumps(message_data.get("content", {})),
+                                "metadata": json.dumps(message_data.get("metadata", {}))
+                            }
+                        else:
+                            logger.warning(f"PlanExecutor sent unhandled message type via callback: {message_type}. Data: {message_data}")
+
 
                     try:
                         # Instantiate dependencies for the planning and execution process.
@@ -300,11 +338,14 @@ async def run_agent(
 
                         # Instantiate the TaskPlanner.
                         planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=tool_orch_for_planner) # Pass the correct orchestrator
+
+                        logger.debug(f"Invoking TaskPlanner with description: '{actual_task_description}'") # Ensure/Add
                         # Create the plan (main task and subtasks).
                         main_planned_task = await planner.plan_task(task_description=actual_task_description)
+                        logger.debug(f"Main planned task object received from TaskPlanner: {main_planned_task.model_dump_json(indent=2) if main_planned_task else 'None'}") # Verified
 
                         if main_planned_task:
-                            logger.info(f"Task planned successfully. Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}")
+                            logger.info(f"Task planned successfully. Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}") # Keep this
                             trace.event(name="task_planning_successful", level="DEFAULT", status_message=(f"Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}"))
 
                             # Mark the original user message as processed by the planner to avoid re-triggering.
@@ -334,6 +375,7 @@ async def run_agent(
                                 tool_orchestrator=planning_process_orchestrator, # Reuse the orchestrator
                                 user_message_callback=plan_executor_message_callback # Pass the callback for updates
                             )
+                            logger.info(f"Invoking PlanExecutor for main_task_id: {main_planned_task.id}") # Ensure/Add
 
                             # Yield a status message indicating the start of plan execution.
                             yield {
@@ -357,7 +399,8 @@ async def run_agent(
                             continue_execution = False
                         else:
                             # If planning itself failed (e.g., LLM couldn't generate subtasks).
-                            logger.error(f"Task planning failed for: {actual_task_description}")
+                            logger.error(f"Task planning failed. Description: '{actual_task_description}'. Main task: {main_planned_task.model_dump_json(indent=2) if main_planned_task else 'None'}") # Ensure/Add
+                            # logger.error(f"Task planning failed for: {actual_task_description}") # Old log
                             trace.event(name="task_planning_failed", level="ERROR", status_message=(f"Task: {actual_task_description}"))
                             error_content = { "role": "assistant", "content": "I tried to create a plan, but something went wrong. Please try again or rephrase."}
                             yield {
