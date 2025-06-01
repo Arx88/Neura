@@ -164,6 +164,8 @@ class ToolOrchestrator:
         Returns:
             A ToolResult object representing the outcome of the execution.
         """
+        logger.info(f"ToolOrchestrator: Executing tool_id='{tool_id}', method_name='{method_name}'")
+        logger.debug(f"ToolOrchestrator: Received params: {params}")
         execution_id = str(uuid.uuid4())
         start_time = time.time()
 
@@ -250,6 +252,7 @@ class ToolOrchestrator:
             # to construct the `ToolResult`.
 
             # actual_result_data = await loop.run_in_executor(None, lambda: method_to_call(**params)) # This was moved up
+            logger.debug(f"ToolOrchestrator: Raw result from {tool_id}.{method_name}: {actual_result_data}")
 
             # Now, use the tool's success_response to build the ToolResult
             final_enhanced_result = tool_instance.success_response(
@@ -259,10 +262,11 @@ class ToolOrchestrator:
             )
             # The start_time was set when enhanced_result was created. We should preserve it.
             final_enhanced_result.start_time = enhanced_result.start_time
-            logger.info(f"Tool '{tool_id}' method '{method_name}' executed successfully.")
+            # logger.info(f"Tool '{tool_id}' method '{method_name}' executed successfully.") # Covered by caller log
             return final_enhanced_result
 
         except Exception as e:
+            logger.debug(f"ToolOrchestrator: Error from {tool_id}.{method_name}: {e}")
             logger.error(f"Error executing tool '{tool_id}' method '{method_name}': {e}", exc_info=True)
             # Use the tool's fail_response
             final_enhanced_result = tool_instance.fail_response(
@@ -403,7 +407,8 @@ class ToolOrchestrator:
 
                         llm_schemas.append(schema_copy)
 
-        logger.debug(f"Prepared {len(llm_schemas)} schemas for LLM consumption.")
+        logger.debug(f"ToolOrchestrator: Providing {len(llm_schemas)} OpenAPI schemas for LLM.")
+        # logger.debug(f"Prepared {len(llm_schemas)} schemas for LLM consumption.") # Replaced by above
         return llm_schemas
 
     def get_xml_schemas_for_llm(self) -> str:
@@ -433,6 +438,8 @@ class ToolOrchestrator:
             "You can use the following XML tools. Wrap the XML in <tool_code>...</tool_code> tags.\n\n"
             + "\n\n---\n\n".join(xml_schema_parts)
         )
+        logger.debug(f"ToolOrchestrator: Providing XML schema string of length {len(xml_schema_parts_joined)} for LLM.") # Corrected variable name
+        return xml_schema_parts_joined
 
 # Example Usage (for testing purposes, if run directly)
 if __name__ == '__main__':

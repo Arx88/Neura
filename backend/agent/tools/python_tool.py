@@ -1,4 +1,4 @@
-from agentpress.tool import openapi_schema # ToolResult removed
+from agentpress.tool import openapi_schema, xml_schema
 from sandbox.tool_base import SandboxToolsBase
 from agentpress.thread_manager import ThreadManager
 from uuid import uuid4
@@ -13,6 +13,27 @@ class PythonTool(SandboxToolsBase):
     def __init__(self, project_id: str, thread_manager: ThreadManager):
         super().__init__(project_id, thread_manager)
 
+    @xml_schema(
+        tag_name="execute_python_code",
+        mappings=[
+            {"param_name": "code", "node_type": "attribute", "path": "."}
+        ],
+        example='''
+        <!-- Executes the provided Python code in a sandboxed environment. -->
+        <!-- The code should be self-contained. -->
+        <!-- Output from stdout and stderr will be captured. -->
+        <execute_python_code
+            code="print('Hello from Python!')"
+        />
+
+        <!-- Example: Reading a file (ensure file exists in /workspace) -->
+        <!--
+        <execute_python_code
+            code="with open('my_file.txt', 'r') as f: print(f.read())"
+        />
+        -->
+        '''
+    )
     @openapi_schema({
         "name": "execute_python_code",
         "description": "Executes Python code in a sandboxed environment. The code should be self-contained and rely only on the Python standard library or packages available in the sandbox environment. Output from stdout and stderr will be captured.",

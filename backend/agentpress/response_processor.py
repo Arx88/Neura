@@ -254,6 +254,13 @@ class ResponseProcessor:
                                     if hasattr(tool_call_chunk.function, 'name'): tool_call_data_chunk['function']['name'] = tool_call_chunk.function.name
                                     if hasattr(tool_call_chunk.function, 'arguments'): tool_call_data_chunk['function']['arguments'] = tool_call_chunk.function.arguments if isinstance(tool_call_chunk.function.arguments, str) else to_json_string(tool_call_chunk.function.arguments)
 
+                            # Log native tool call detection when fully assembled
+                            if tool_call_data_chunk.get('id') and tool_call_data_chunk.get('function', {}).get('name') and tool_call_data_chunk.get('function', {}).get('arguments'):
+                                arguments_json_string = tool_call_data_chunk['function']['arguments']
+                                # Ensure arguments is a string for logging, might already be if from to_json_string
+                                if not isinstance(arguments_json_string, str):
+                                    arguments_json_string = to_json_string(arguments_json_string)
+                                logger.debug(f"Native tool call detected: ID={tool_call_data_chunk['id']}, Function={tool_call_data_chunk['function']['name']}, Args={arguments_json_string}")
 
                             now_tool_chunk = datetime.now(timezone.utc).isoformat()
                             yield {
@@ -322,6 +329,9 @@ class ResponseProcessor:
                 done, _ = await asyncio.wait(pending_tasks)
 
                 for execution in pending_tool_executions:
+                            # Log before tool execution (even if status already yielded)
+                            tool_call_details_string = f"Name='{execution['context'].function_name or execution['context'].xml_tag_name}', Args={execution['context'].tool_call.get('arguments', {})}"
+                            logger.info(f"Preparing to execute tool (streamed): {tool_call_details_string}")
                     tool_idx = execution.get("tool_index", -1)
                     context = execution["context"]
                     # Check if status was already yielded during stream run
@@ -684,16 +694,25 @@ class ResponseProcessor:
                              all_tool_data.extend(parsed_xml_data)
 
                      if config.native_tool_calling and hasattr(response_message, 'tool_calls') and response_message.tool_calls:
-                          for tool_call in response_message.tool_calls:
-                             if hasattr(tool_call, 'function'):
-                                 exec_tool_call = {
-                                     "function_name": tool_call.function.name,
-                                     "arguments": safe_json_parse(tool_call.function.arguments) if isinstance(tool_call.function.arguments, str) else tool_call.function.arguments,
-                                     "id": tool_call.id if hasattr(tool_call, 'id') else str(uuid.uuid4())
-                                 }
-                                 all_tool_data.append({"tool_call": exec_tool_call, "parsing_details": None})
-                                 native_tool_calls_for_message.append({
-                                     "id": exec_tool_call["id"], "type": "function",
+                        for tool_call_obj in response_message.tool_calls: # Renamed to avoid conflict
+                            if hasattr(tool_call_obj, 'function'):
+                                tool_call_id = tool_call_obj.id if hasattr(tool_call_obj, 'id') else str(uuid.uuid4())
+                                function_name = tool_call_obj.function.name
+                                arguments_raw = tool_call_obj.function.arguments
+                                arguments_parsed = safe_json_parse(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
+
+                                # Log native tool call detection
+                                arguments_json_string = arguments_raw if isinstance(arguments_raw, str) else to_json_string(arguments_parsed)
+                                logger.debug(f"Native tool call detected: ID={tool_call_id}, Function={function_name}, Args={arguments_json_string}")
+
+                                exec_tool_call = {
+                                    "function_name": function_name,
+                                    "arguments": arguments_parsed,
+                                    "id": tool_call_id
+                                }
+                                all_tool_data.append({"tool_call": exec_tool_call, "parsing_details": None})
+                                native_tool_calls_for_message.append({
+                                    "id": tool_call_id, "type": "function",
                                      "function": {
                                          "name": tool_call.function.name,
                                          "arguments": tool_call.function.arguments if isinstance(tool_call.function.arguments, str) else to_json_string(tool_call.function.arguments)
@@ -760,6 +779,13 @@ class ResponseProcessor:
             if config.execute_tools and tool_calls_to_execute:
                 logger.info(f"Executing {len(tool_calls_to_execute)} tools with strategy: {config.tool_execution_strategy}")
                 self.trace.event(name="executing_tools_with_strategy", level="DEFAULT", status_message=(f"Executing {len(tool_calls_to_execute)} tools with strategy: {config.tool_execution_strategy}"))
+
+                # Log before calling _execute_tools for non-streaming
+                for tc_to_exec in tool_calls_to_execute:
+                    tool_name_for_log = tc_to_exec.get('function_name') or f"{tc_to_exec.get('tool_id')}__{tc_to_exec.get('method_name')}"
+                    tool_call_details_string = f"Name='{tool_name_for_log}', Args={tc_to_exec.get('arguments', {})}"
+                    logger.info(f"Preparing to execute tool (non-streamed): {tool_call_details_string}")
+
                 tool_results = await self._execute_tools(tool_calls_to_execute, config.tool_execution_strategy)
 
                 for i, (returned_tool_call, result) in enumerate(tool_results):
@@ -974,6 +1000,7 @@ class ResponseProcessor:
                         if not tag_stack:  # This is our matching end tag
                             chunk_end = next_end + len(end_pattern)
                             chunk = content[chunk_start:chunk_end]
+                            logger.debug(f"Extracted XML chunk: {chunk}") # Logging extracted chunk
                             chunks.append(chunk)
                             pos = chunk_end
                             break
@@ -1012,8 +1039,8 @@ class ResponseProcessor:
             
             # This is the XML tag as it appears in the text (e.g., "create-file")
             xml_tag_name = tag_match.group(1)
-            logger.info(f"Found XML tag: {xml_tag_name}")
-            self.trace.event(name="found_xml_tag", level="DEFAULT", status_message=(f"Found XML tag: {xml_tag_name}"))
+            # logger.info(f"Found XML tag: {xml_tag_name}") # Reduced noise, covered by Parsed XML tool call
+            # self.trace.event(name="found_xml_tag", level="DEFAULT", status_message=(f"Found XML tag: {xml_tag_name}")) # Covered by Parsed XML tool call
             
             # Get tool info and schema from registry
             # With ToolOrchestrator, we need to find which registered tool_id and method_name correspond to this xml_tag_name.
@@ -1035,7 +1062,7 @@ class ResponseProcessor:
                     if target_tool_id: break
 
             if not target_tool_id or not target_method_name or not target_schema_obj:
-                logger.error(f"No tool or schema found for tag: {xml_tag_name} in ToolOrchestrator")
+                logger.error(f"Parsing failed for tag '{xml_tag_name}': No tool or schema found in ToolOrchestrator. Problematic chunk: {xml_chunk}")
                 self.trace.event(name="no_tool_or_schema_found_for_tag_orchestrator", level="ERROR", status_message=(f"No tool or schema found for tag: {xml_tag_name}"))
                 return None
             
@@ -1107,12 +1134,14 @@ class ResponseProcessor:
                 "arguments": params              # The extracted parameters
             }
             
-            logger.debug(f"Created tool call for orchestrator: {tool_call}")
+            logger.info(f"Parsed XML tool call: Tag='{xml_tag_name}', ToolID='{target_tool_id}', Method='{target_method_name}', Args={params}")
+            logger.debug(f"XML parsing details: {parsing_details}")
+            # logger.debug(f"Created tool call for orchestrator: {tool_call}") # Redundant with above
             return tool_call, parsing_details # Return both dicts
             
         except Exception as e:
-            logger.error(f"Error parsing XML chunk: {e}")
-            logger.error(f"XML chunk was: {xml_chunk}")
+            logger.error(f"Error parsing XML chunk: {e}. Problematic chunk: {xml_chunk}", exc_info=True)
+            # logger.error(f"XML chunk was: {xml_chunk}") # Covered by above
             self.trace.event(name="error_parsing_xml_chunk", level="ERROR", status_message=(f"Error parsing XML chunk: {e}"), metadata={"xml_chunk": xml_chunk})
             return None
 
@@ -1182,11 +1211,14 @@ class ResponseProcessor:
             )
 
         arguments = tool_call.get("arguments", {})
+        # Logging "Preparing to execute tool" is handled by the caller of _execute_tool for non-streaming,
+        # and within the streaming loop for streamed execution.
+
         span_name = f"execute_tool.{tool_id_for_orchestrator}.{method_name_for_orchestrator}"
         span = self.trace.span(name=span_name, input=arguments)
 
         try:
-            logger.info(f"Orchestrating tool: {tool_id_for_orchestrator}, method: {method_name_for_orchestrator} with arguments: {arguments}")
+            # logger.info(f"Orchestrating tool: {tool_id_for_orchestrator}, method: {method_name_for_orchestrator} with arguments: {arguments}") # Covered by "Preparing to execute"
             self.trace.event(name="orchestrating_tool", level="DEFAULT",
                              status_message=(f"Tool: {tool_id_for_orchestrator}, Method: {method_name_for_orchestrator}"))
             
@@ -1203,7 +1235,7 @@ class ResponseProcessor:
                 params=arguments
             )
             
-            logger.info(f"Tool execution via orchestrator complete: {tool_id_for_orchestrator}.{method_name_for_orchestrator} -> Status: {enhanced_result.status}")
+            # logger.info(f"Tool execution via orchestrator complete: {tool_id_for_orchestrator}.{method_name_for_orchestrator} -> Status: {enhanced_result.status}") # Covered by "Adding tool result"
             span.end(status_message=f"tool_executed_via_orchestrator: {enhanced_result.status}", output=enhanced_result.result or enhanced_result.error)
             return enhanced_result
             
@@ -1332,6 +1364,9 @@ class ResponseProcessor:
                 # This is a simplification; ToolResult was a class. Let's assume _format_xml_tool_result just needs a string.
                 content_to_store = self._format_xml_tool_result(tool_call, str(temp_legacy_result_obj['output']))
 
+            logger.info(f"Adding tool result to history: ToolName='{tool_name_for_logging}', Status='{result.status}', AssistantMessageID='{assistant_message_id}'")
+            logger.debug(f"Tool result content being added: {content_to_store}")
+
 
             if is_native_call:
                 tool_message_content = {
@@ -1340,7 +1375,7 @@ class ResponseProcessor:
                     "name": tool_call.get("function_name", tool_name_for_logging), # function_name from original LLM req
                     "content": content_to_store
                 }
-                logger.info(f"Adding native tool result for tool_call_id={tool_call['id']}")
+                # logger.info(f"Adding native tool result for tool_call_id={tool_call['id']}") # Covered by general log
                 msg_obj = await self.add_message(
                     thread_id=thread_id, type="tool", content=tool_message_content, # type="tool"
                     is_llm_message=True, metadata=metadata # Typically considered LLM-related
@@ -1351,7 +1386,9 @@ class ResponseProcessor:
             result_role = "user" if strategy == "user_message" else "assistant"
             # For XML, the content_payload is the full XML string <tool_result>...</tool_result>
             # This is then wrapped in a standard message structure.
-            tool_result_message_content = {"role": result_role, "content": content_payload}
+            # content_to_store here IS the <tool_result>...</tool_result> string for XML
+            tool_result_message_content = {"role": result_role, "content": content_to_store}
+
 
             # The type of message for XML tool results might depend on the strategy
             # If it's "user_message", type might be "user". If "assistant_message", type "assistant".
