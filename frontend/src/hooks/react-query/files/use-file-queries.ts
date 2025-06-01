@@ -353,7 +353,6 @@ export function useCachedFile<T = string>(
   } = {}
 ) {
   // Map old contentType values to new ones
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const mappedContentType = React.useMemo(() => {
     switch (options.contentType) {
       case 'json': return 'json';
@@ -363,7 +362,7 @@ export function useCachedFile<T = string>(
       case 'text':
       default: return 'text';
     }
-  }, [options]);
+  }, [options.contentType]);
   
   const query = useFileContentQuery(sandboxId, filePath, {
     contentType: mappedContentType,
@@ -382,7 +381,7 @@ export function useCachedFile<T = string>(
       console.error('Error processing file data:', error);
       return null;
     }
-  }, [query.data, options.processFn]);
+  }, [query.data, options]);
   
   return {
     data: processedData,

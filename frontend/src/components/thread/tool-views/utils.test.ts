@@ -23,7 +23,7 @@ describe('Tool Utils', () => {
     });
   });
 
-  describe('getIconForTool', ()_ => {
+  describe('getIconForTool', () => {
     it('should return correct icons for known tool names', () => {
       expect(getIconForTool('execute-command')).toBe(Terminal);
       expect(getIconForTool('web-search')).toBe(Search);
