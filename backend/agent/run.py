@@ -164,7 +164,7 @@ async def run_agent(
         # Retrieve the initial prompt for planning
         initial_prompt_text = None
         # Fetch the earliest user message in the thread
-        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', ascending=True).limit(1).execute()
+        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=False).limit(1).execute()
         
         if first_user_message_query.data:
             try:
