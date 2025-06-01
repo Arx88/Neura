@@ -81,7 +81,13 @@ async def lifespan(app: FastAPI):
 
         # Initialize other APIs (agent, sandbox, etc.)
         # Pass relevant initialized components if they need them
-        agent_api.initialize(db_connection, tool_orchestrator, instance_id)
+        agent_api.initialize(
+            _db=db_connection,
+            _tool_orchestrator=tool_orchestrator,
+            _task_planner=task_planner, # Added task_planner
+            _task_state_manager=task_state_manager, # Added task_state_manager
+            _instance_id=instance_id
+        )
         sandbox_api.initialize(db_connection)
         
         # Initialize Redis connection

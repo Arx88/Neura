@@ -24,11 +24,36 @@ from services.llm import make_llm_api_call
 from run_agent_background import run_agent_background, _cleanup_redis_response_list, update_agent_run_status
 from utils.constants import MODEL_NAME_ALIASES
 from agentpress.tool_orchestrator import ToolOrchestrator # Added import
+from utils.logger import logger # Ensure logger is imported if not already
+from typing import Optional # Ensure Optional is imported
+
 # Initialize shared resources
 router = APIRouter()
+
+# Imports for PlanExecutor and related components
+from agentpress.plan_executor import PlanExecutor
+from agentpress.task_planner import TaskPlanner # Added import
+from agentpress.task_state_manager import TaskStateManager # Added import
+
+PLANNING_KEYWORDS = ["plan this:", "create a plan for:", "complex task:"]
+
+
+def should_use_planner(prompt: str, enable_thinking: Optional[bool] = False) -> bool:
+    prompt_lower = prompt.lower()
+    if any(keyword in prompt_lower for keyword in PLANNING_KEYWORDS):
+        logger.info("Planning keywords detected in prompt.")
+        return True
+    # You can add other conditions here, for example, if enable_thinking is True.
+    # if enable_thinking:
+    #     logger.info("enable_thinking is True, considering for planner.")
+    #     return True
+    logger.info("No planning keywords detected in prompt.")
+    return False
 db = None
 instance_id = None # Global instance ID for this backend instance
 agent_tool_orchestrator: Optional[ToolOrchestrator] = None # New module-level global
+task_planner: Optional[TaskPlanner] = None  # Updated type hint
+task_state_manager: Optional[TaskStateManager] = None # Updated type hint
 
 # TTL for Redis response lists (24 hours)
 REDIS_RESPONSE_LIST_TTL = 3600 * 24
@@ -47,22 +72,26 @@ class InitiateAgentResponse(BaseModel):
 
 def initialize(
     _db: DBConnection,
-    _tool_orchestrator: ToolOrchestrator, # Added _tool_orchestrator
+    _tool_orchestrator: ToolOrchestrator,
+    _task_planner: TaskPlanner, # Updated type hint
+    _task_state_manager: TaskStateManager, # Updated type hint
     _instance_id: str = None
 ):
     """Initialize the agent API with resources from the main API."""
-    global db, instance_id, agent_tool_orchestrator # Added agent_tool_orchestrator to global
+    global db, instance_id, agent_tool_orchestrator, task_planner, task_state_manager
     db = _db
-    agent_tool_orchestrator = _tool_orchestrator # Assign to module-level global
+    agent_tool_orchestrator = _tool_orchestrator
+    task_planner = _task_planner
+    task_state_manager = _task_state_manager
 
     # Use provided instance_id or generate a new one
     if _instance_id:
         instance_id = _instance_id
     else:
         # Generate instance ID
-        instance_id = str(uuid.uuid4())[:8]
+        instance_id = str(uuid.uuid4())[:8] # Ensure uuid is imported
 
-    logger.info(f"Initialized agent API with instance ID: {instance_id}")
+    logger.info(f"Initialized agent API with instance ID: {instance_id}, TaskPlanner, and TaskStateManager")
 
     # Note: Redis will be initialized in the lifespan function in api.py
 
@@ -225,7 +254,7 @@ async def start_agent(
             # This specific check should probably remain as it's a precondition for the API itself
             raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
 
-        # Nueva lógica de determinación de model_name
+        # Nueva lógica de determinación de model_name (moved before fetching prompt)
         server_configured_model = config.MODEL_TO_USE
         model_name_from_request = body.model_name
         final_model_name_to_use = None
@@ -265,9 +294,27 @@ async def start_agent(
         
         logger.info(f"Final model name for LLM call (after ollama prefixing if any): {model_name}")
 
-        logger.info(f"Starting new agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager} (Instance: {instance_id})")
-        client = await db.client
+        logger.info(f"Effective model name before alias resolution: {final_model_name_to_use}")
+        # Log the model name after alias resolution
+        resolved_model = MODEL_NAME_ALIASES.get(final_model_name_to_use, final_model_name_to_use)
+        model_name = resolved_model # Esta es la variable que se usará en el resto de la función
+        logger.info(f"Model name after alias resolution: {model_name}")
 
+        # New logic to insert for Ollama model prefixing (copied from initiate_agent_with_files)
+        if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip():
+            has_known_provider_prefix = any(model_name.startswith(p) for p in ["openrouter/", "openai/", "anthropic/", "bedrock/", "ollama/"])
+            if not has_known_provider_prefix:
+                logger.info(f"OLLAMA_API_BASE is set ('{config.OLLAMA_API_BASE}') and resolved model '{model_name}' has no explicit provider prefix. Defaulting to 'ollama/' prefix.")
+                model_name = f"ollama/{model_name}"
+            elif model_name.startswith("ollama/"):
+                logger.info(f"Model '{model_name}' is already specified as an Ollama model. Using with OLLAMA_API_BASE: '{config.OLLAMA_API_BASE}'.")
+            else:
+                logger.info(f"Model '{model_name}' has a prefix for a different provider. Not prepending 'ollama/'.")
+        else:
+            logger.info(f"OLLAMA_API_BASE is not configured. Not attempting to default to Ollama for model '{model_name}'.")
+        logger.info(f"Final model name for LLM call (after ollama prefixing if any): {model_name}")
+
+        client = await db.client
         await verify_thread_access(client, thread_id, user_id)
         thread_result = await client.table('threads').select('project_id', 'account_id').eq('thread_id', thread_id).execute()
         if not thread_result.data:
@@ -275,6 +322,42 @@ async def start_agent(
         thread_data = thread_result.data[0]
         project_id = thread_data.get('project_id')
         account_id = thread_data.get('account_id')
+
+        # Fetch the latest user message for the prompt
+        prompt_text = ""
+        latest_message_query = await client.table('messages') \
+            .select('content', 'type') \
+            .eq('thread_id', thread_id) \
+            .eq('type', 'user') \
+            .order('created_at', desc=True) \
+            .limit(1) \
+            .execute()
+
+        if latest_message_query.data:
+            latest_message = latest_message_query.data[0]
+            try:
+                # Assuming content is JSON string like {"role": "user", "content": "Actual prompt"}
+                message_content_json = json.loads(latest_message['content'])
+                prompt_text = message_content_json.get('content', '')
+            except (json.JSONDecodeError, TypeError):
+                # Fallback if content is not JSON or not the expected structure
+                prompt_text = latest_message['content'] if isinstance(latest_message['content'], str) else ''
+            logger.info(f"Fetched latest user prompt for thread {thread_id}: '{prompt_text[:100]}...'")
+        else:
+            logger.warning(f"No user messages found in thread {thread_id} to use as prompt. Proceeding with empty prompt.")
+            # Potentially raise error or use a default prompt, for now, empty.
+
+        # Determine if this is a planning request
+        is_planning_request = should_use_planner(prompt_text, body.enable_thinking)
+        logger.info(f"Request type determination for thread {thread_id}: Is planning request? {is_planning_request}")
+
+        # Planner Availability Check
+        if is_planning_request and (not task_planner or not task_state_manager):
+            logger.error(f"Task planner or task state manager not initialized for thread {thread_id}. Cannot proceed with planning.")
+            is_planning_request = False # Fallback
+            logger.warning(f"Falling back to normal agent execution for thread {thread_id} due to uninitialized planner components.")
+
+        logger.info(f"Starting agent for thread: {thread_id} with config: model={model_name}, thinking={body.enable_thinking}, effort={body.reasoning_effort}, stream={body.stream}, context_manager={body.enable_context_manager}, planning_request={is_planning_request} (Instance: {instance_id})")
 
         can_use, model_message, allowed_models = await can_use_model(client, account_id, model_name)
         if not can_use:
@@ -284,56 +367,104 @@ async def start_agent(
         if not can_run:
             raise HTTPException(status_code=402, detail={"message": message, "subscription": subscription})
 
-        active_run_id = await check_for_active_project_agent_run(client, project_id)
-        if active_run_id:
-            logger.info(f"Stopping existing agent run {active_run_id} for project {project_id}")
-            await stop_agent_run(active_run_id)
-
+        # Sandbox initialization (common for both flows)
         try:
-            # Get project data to find sandbox ID
             project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
             if not project_result.data:
                 raise HTTPException(status_code=404, detail="Project not found")
-            
             project_data = project_result.data[0]
             sandbox_info = project_data.get('sandbox', {})
             if not sandbox_info.get('id'):
                 raise HTTPException(status_code=404, detail="No sandbox found for this project")
-                
             sandbox_id = sandbox_info['id']
-            sandbox = await get_or_start_sandbox(sandbox_id)
-            logger.info(f"Successfully started sandbox {sandbox_id} for project {project_id}")
-        except Exception as e_sandbox: # Keep existing specific exception handling for sandbox
-            logger.error(f"Failed to start sandbox for project {project_id}: {str(e_sandbox)}") # Existing log
-            raise HTTPException(status_code=500, detail=f"Failed to initialize sandbox: {str(e_sandbox)}") # Existing raise
+            await get_or_start_sandbox(sandbox_id) # Ensure sandbox is running
+            logger.info(f"Successfully ensured sandbox {sandbox_id} is running for project {project_id}")
+        except Exception as e_sandbox:
+            logger.error(f"Failed to start/ensure sandbox for project {project_id}: {str(e_sandbox)}")
+            raise HTTPException(status_code=500, detail=f"Failed to initialize sandbox: {str(e_sandbox)}")
 
-        agent_run = await client.table('agent_runs').insert({
-            "thread_id": thread_id, "status": "running",
-            "started_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
-        agent_run_id = agent_run.data[0]['id']
-        logger.info(f"Created new agent run: {agent_run_id}")
+        # Conditional Planning Logic
+        if is_planning_request:
+            logger.info(f"Initiating planning flow for existing thread: {thread_id}")
+            try:
+                main_planned_task = await task_planner.plan_task(
+                    task_description=prompt_text,
+                    context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
+                )
 
-        # Register this run in Redis with TTL using instance ID
-        instance_key = f"active_run:{instance_id}:{agent_run_id}"
-        try:
-            await redis.set(instance_key, "running", ex=redis.REDIS_KEY_TTL)
-        except Exception as e_redis: # More specific logging for Redis error
-            logger.warning(f"Failed to register agent run in Redis ({instance_key}): {str(e_redis)}")
-            # Depending on policy, you might want to raise here or allow continuing without Redis registration
+                if main_planned_task and main_planned_task.status == "planned":
+                    agent_run_id_for_plan = main_planned_task.id
+                    logger.info(f"Planning successful for thread {thread_id}. Main task ID: {agent_run_id_for_plan}")
 
-        # Run the agent in the background
-        run_agent_background.send(
-            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
-            project_id=project_id,
-            model_name=model_name,  # Already resolved above
-            enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
-            stream=body.stream, enable_context_manager=body.enable_context_manager
-        )
+                    active_run_id_check = await check_for_active_project_agent_run(client, project_id)
+                    if active_run_id_check and active_run_id_check != agent_run_id_for_plan: # Don't stop self if somehow reactivated
+                        logger.info(f"Stopping existing agent run {active_run_id_check} for project {project_id} before starting planned run.")
+                        await stop_agent_run(active_run_id_check)
 
-        return {"agent_run_id": agent_run_id, "status": "running"}
+                    await client.table('agent_runs').insert({
+                        "id": agent_run_id_for_plan,
+                        "thread_id": thread_id,
+                        "status": "running",
+                        "started_at": datetime.now(timezone.utc).isoformat(),
+                        "is_plan_execution": True
+                    }).execute()
+                    logger.info(f"Created agent_run record for planned execution on thread {thread_id}: {agent_run_id_for_plan}")
 
-    except Exception as e: # New outer catch-all
+                    instance_key_plan = f"active_run:{instance_id}:{agent_run_id_for_plan}"
+                    await redis.set(instance_key_plan, "running", ex=redis.REDIS_KEY_TTL)
+
+                    plan_executor = PlanExecutor(
+                        main_task_id=agent_run_id_for_plan,
+                        task_manager=task_state_manager,
+                        tool_orchestrator=agent_tool_orchestrator
+                    )
+                    asyncio.create_task(plan_executor.execute_plan())
+                    logger.info(f"Started PlanExecutor in background for task on thread {thread_id}: {agent_run_id_for_plan}")
+
+                    return {"agent_run_id": agent_run_id_for_plan, "status": "running", "plan_details": main_planned_task.model_dump()}
+                else:
+                    logger.error(f"Task planning failed for thread {thread_id}. Main task: {main_planned_task}")
+                    is_planning_request = False # Fallback
+                    logger.warning(f"Falling back to normal agent execution for thread {thread_id} due to planning failure.")
+
+            except Exception as planning_exc:
+                logger.error(f"Exception during planning phase for thread {thread_id}: {str(planning_exc)}", exc_info=True)
+                is_planning_request = False # Fallback
+                logger.warning(f"Falling back to normal agent execution for thread {thread_id} due to exception in planning.")
+
+        # Standard agent execution (if not is_planning_request or fallback)
+        if not is_planning_request:
+            logger.info(f"Proceeding with normal agent execution for thread {thread_id}.")
+
+            active_run_id = await check_for_active_project_agent_run(client, project_id)
+            if active_run_id:
+                logger.info(f"Stopping existing agent run {active_run_id} for project {project_id} before starting new normal run.")
+                await stop_agent_run(active_run_id)
+
+            agent_run_insert = await client.table('agent_runs').insert({
+                "thread_id": thread_id, "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "is_plan_execution": False
+            }).execute()
+            agent_run_id = agent_run_insert.data[0]['id']
+            logger.info(f"Created new agent run (non-plan) for thread {thread_id}: {agent_run_id}")
+
+            instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
+            try:
+                await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
+            except Exception as e_redis:
+                logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e_redis)}")
+
+            run_agent_background.send(
+                agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+                project_id=project_id,
+                model_name=model_name,
+                enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
+                stream=body.stream, enable_context_manager=body.enable_context_manager
+            )
+            return {"agent_run_id": agent_run_id, "status": "running"}
+
+    except Exception as e:
         logger.error(f"Error in start_agent for thread {thread_id}: {str(e)}", exc_info=True)
         # Potentially add cleanup logic here if needed, similar to initiate_agent_with_files
         raise HTTPException(status_code=500, detail=f"Failed to start agent: {str(e)}")
@@ -657,8 +788,19 @@ async def initiate_agent_with_files(
     # Nueva lógica de determinación de model_name
     server_configured_model = config.MODEL_TO_USE
     # model_name_from_request se obtiene del parámetro de la función 'model_name'
-    model_name_from_request = model_name 
+    model_name_from_request = model_name
     final_model_name_to_use = None
+
+    # Determine if this is a planning request
+    is_planning_request = should_use_planner(prompt, enable_thinking)
+    logger.info(f"Request type determination for new agent: Is planning request? {is_planning_request}")
+
+    # Ensure task_planner and task_state_manager are initialized
+    if is_planning_request and (not task_planner or not task_state_manager):
+        logger.error("Task planner or task state manager not initialized. Cannot proceed with planning.")
+        # Fallback to normal agent run or raise error. For now, let's fallback.
+        is_planning_request = False # Force non-planning flow
+        logger.warning("Falling back to normal agent execution due to uninitialized planner components.")
 
     if config.OLLAMA_API_BASE and config.OLLAMA_API_BASE.strip() and server_configured_model and server_configured_model.strip():
         logger.info(f"OLLAMA_API_BASE ('{config.OLLAMA_API_BASE}') and MODEL_TO_USE ('{server_configured_model}') are set in server config. Prioritizing server config for main agent model.")
@@ -695,7 +837,7 @@ async def initiate_agent_with_files(
 
     logger.info(f"Final model name for LLM call (after ollama prefixing if any): {model_name}")
 
-    logger.info(f"[\033[91mDEBUG\033[0m] Initiating new agent with prompt and {len(files)} files (Instance: {instance_id}), model: {model_name}, enable_thinking: {enable_thinking}")
+    logger.info(f"[\033[91mDEBUG\033[0m] Initiating new agent with prompt and {len(files)} files (Instance: {instance_id}), model: {model_name}, enable_thinking: {enable_thinking}, planning_request: {is_planning_request}")
     client = await db.client
     account_id = user_id # In Basejump, personal account_id is the same as user_id
     
@@ -873,31 +1015,84 @@ async def initiate_agent_with_files(
             "created_at": datetime.now(timezone.utc).isoformat()
         }).execute()
 
-        # 6. Start Agent Run
-        agent_run = await client.table('agent_runs').insert({
-            "thread_id": thread_id, "status": "running",
-            "started_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
-        agent_run_id = agent_run.data[0]['id']
-        logger.info(f"Created new agent run: {agent_run_id}")
+        # 6. Start Agent Run or Plan Execution
+        if is_planning_request:
+            logger.info(f"Initiating planning flow for project: {project_id}, thread: {thread_id}")
+            try:
+                main_planned_task = await task_planner.plan_task(
+                    task_description=prompt,  # Using the original prompt for planning
+                    context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
+                )
 
-        # Register run in Redis
-        instance_key = f"active_run:{instance_id}:{agent_run_id}"
-        try:
-            await redis.set(instance_key, "running", ex=redis.REDIS_KEY_TTL)
-        except Exception as e:
-            logger.warning(f"Failed to register agent run in Redis ({instance_key}): {str(e)}")
+                if main_planned_task and main_planned_task.status == "planned": # Assuming 'planned' is the success status
+                    agent_run_id_for_plan = main_planned_task.id
+                    logger.info(f"Planning successful. Main task ID: {agent_run_id_for_plan}")
 
-        # Run agent in background
-        run_agent_background.send(
-            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
-            project_id=project_id,
-            model_name=model_name,  # Already resolved above
-            enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-            stream=stream, enable_context_manager=enable_context_manager
-        )
+                    await client.table('agent_runs').insert({
+                        "id": agent_run_id_for_plan,
+                        "thread_id": thread_id,
+                        "status": "running", # Or "planned_execution"
+                        "started_at": datetime.now(timezone.utc).isoformat(),
+                        "is_plan_execution": True
+                    }).execute()
+                    logger.info(f"Created agent_run record for planned execution: {agent_run_id_for_plan}")
 
-        return {"thread_id": thread_id, "agent_run_id": agent_run_id}
+                    # Register run in Redis (important for streaming and control)
+                    instance_key_plan = f"active_run:{instance_id}:{agent_run_id_for_plan}"
+                    await redis.set(instance_key_plan, "running", ex=redis.REDIS_KEY_TTL)
+
+                    plan_executor = PlanExecutor(
+                        main_task_id=agent_run_id_for_plan,
+                        task_manager=task_state_manager,
+                        tool_orchestrator=agent_tool_orchestrator,
+                        # TODO: Pass other necessary params like model_name, enable_thinking if PlanExecutor needs them per-task
+                    )
+                    asyncio.create_task(plan_executor.execute_plan())
+                    logger.info(f"Started PlanExecutor in background for task: {agent_run_id_for_plan}")
+
+                    return {
+                        "thread_id": thread_id,
+                        "agent_run_id": agent_run_id_for_plan,
+                        "plan_details": main_planned_task.model_dump() # Or .dict() if not Pydantic v2
+                    }
+                else:
+                    logger.error(f"Task planning failed or returned an invalid state. Main task: {main_planned_task}")
+                    # Fallback to normal agent execution
+                    is_planning_request = False # Ensure we fall through to normal execution
+                    logger.warning("Falling back to normal agent execution due to planning failure.")
+
+            except Exception as planning_exc:
+                logger.error(f"Exception during planning phase: {str(planning_exc)}", exc_info=True)
+                # Fallback to normal agent execution
+                is_planning_request = False # Ensure we fall through to normal execution
+                logger.warning("Falling back to normal agent execution due to exception in planning.")
+
+        # This block will execute if is_planning_request is False initially, or if it was set to False due to fallback
+        if not is_planning_request:
+            logger.info("Proceeding with normal agent execution.")
+            agent_run_table_insert = await client.table('agent_runs').insert({
+                "thread_id": thread_id, "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "is_plan_execution": False # Explicitly set for normal runs
+            }).execute()
+            agent_run_id = agent_run_table_insert.data[0]['id']
+            logger.info(f"Created new agent run (non-plan): {agent_run_id}")
+
+            # Register run in Redis
+            instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
+            try:
+                await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
+            except Exception as e:
+                logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e)}")
+
+            run_agent_background.send(
+                agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+                project_id=project_id,
+                model_name=model_name,
+                enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
+                stream=stream, enable_context_manager=enable_context_manager
+            )
+            return {"thread_id": thread_id, "agent_run_id": agent_run_id}
 
     except Exception as e:
         logger.error(f"Error in agent initiation: {str(e)}\n{traceback.format_exc()}")
