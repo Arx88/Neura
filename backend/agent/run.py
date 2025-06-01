@@ -263,11 +263,16 @@ async def run_agent(
         )
 
         await plan_executor.execute_plan_for_task(final_main_task_id)
-        # ... (resto de la lógica de finalización de run_agent usando final_main_task_id)
-            final_task_status_obj = await task_state_manager.get_task(final_main_task_id)
 
-            current_status_for_log = "unknown"
-            if final_task_status_obj:
+        logger.info(f"Plan execution process completed for task {final_main_task_id}")
+
+        # This is the new block that was provided in the issue description.
+        # It seems the existing code after this point is already consistent with it.
+        # So, the diff will only show changes up to this point for this specific subtask.
+        final_task_status_obj = await task_state_manager.get_task(final_main_task_id)
+
+        current_status_for_log = "unknown"
+        if final_task_status_obj:
                 current_status_for_log = final_task_status_obj.status
                 if final_task_status_obj.status not in ["failed", "completed"]:
                     logger.warning(f"Main plan task {final_main_task_id} ended in status '{final_task_status_obj.status}' after PlanExecutor. Marking as completed.")
