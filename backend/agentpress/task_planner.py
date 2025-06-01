@@ -34,31 +34,43 @@ class TaskPlanner:
     ) -> List[Dict[str, Any]]: # Return type is a list of dicts for subtasks
         logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
 
-        SYSTEM_PROMPT = (
-            "Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal "
-            "en una secuencia de subtareas ejecutables por un agente de IA.\n"
-            "Debes devolver SIEMPRE un objeto JSON válido con una única clave \"plan\", que contiene una lista de subtareas.\n"
-            "Cada subtarea en la lista debe ser un objeto con las siguientes claves: \"tool_code\" (string), \"thought\" (string) y \"parameters\" (object).\n\n"
-            "Ejemplo de salida esperada:\n"
-            "{\n"
-            "  \"plan\": [\n"
-            "    {\n"
-            "      \"tool_code\": \"web_search\",\n"
-            "      \"thought\": \"Buscar en internet los mejores hoteles en Valencia.\",\n"
-            "      \"parameters\": {\"query\": \"mejores lugares para hospedarse en Valencia\"}\n"
-            "    },\n"
-            "    {\n"
-            "      \"tool_code\": \"web_search\",\n"
-            "      \"thought\": \"Buscar en internet los mejores restaurantes en Valencia.\",\n"
-            "      \"parameters\": {\"query\": \"mejores restaurantes en Valencia\"}\n"
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
-            "No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON.\n"
-            "Asegúrate de que los nombres de las herramientas (\"tool_code\") sean válidos y estén disponibles. "
-            "Las herramientas disponibles son: " + json.dumps(self.tool_orchestrator.get_tool_names()) + "\n"
-            "Considera usar 'SystemCompleteTask' si la tarea principal parece simple y no necesita múltiples pasos o herramientas específicas."
-        )
+        # Opción 2: Definir directamente para asegurar (RECOMENDADO PARA PRUEBAS):
+        tool_names_json = "[]"
+        try:
+            tool_names_json = json.dumps(self.tool_orchestrator.get_tool_names())
+        except Exception as e_tools:
+            logger.warning(f"Could not get tool names for system prompt: {e_tools}")
+
+        SYSTEM_PROMPT = f"""
+        Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal en una secuencia de subtareas ejecutables por un agente de IA.
+        Debes devolver SIEMPRE un objeto JSON válido con una única clave "plan", que contiene una lista de subtareas.
+        Cada subtarea en la lista debe ser un objeto con las siguientes claves: "tool_code" (string), "thought" (string) y "parameters" (object).
+
+        Ejemplo de salida esperada:
+        {{
+        "plan": [
+        {{
+        "tool_code": "web_search",
+        "thought": "Buscar en internet los mejores hoteles en Valencia.",
+        "parameters": {{
+        "query": "mejores lugares para hospedarse en Valencia"
+        }}
+        }},
+        {{
+        "tool_code": "web_search",
+        "thought": "Buscar en internet los mejores restaurantes en Valencia.",
+        "parameters": {{
+        "query": "mejores restaurantes en Valencia"
+        }}
+        }}
+        ]
+        }}
+
+        No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON.
+        Las herramientas disponibles son: {tool_names_json}.
+        Considera usar 'SystemCompleteTask' si la tarea principal parece simple y no necesita múltiples pasos o herramientas específicas.
+        Si la tarea es muy simple y puede ser respondida directamente sin herramientas (ej. "hola"), puedes devolver un plan con una única tarea usando la herramienta "SystemCompleteTask" y el "thought" conteniendo la respuesta.
+        """
 
         # The user message is now simpler as the SYSTEM_PROMPT handles the main instruction
         user_message_content = f"Task Description: {task_description}"
@@ -144,8 +156,8 @@ class TaskPlanner:
                 try:
                     parsed_json_response = json.loads(cleaned_response_content)
                 except json.JSONDecodeError as e_json:
-                    logger.debug(f"TASK_PLANNER: Raw LLM response that failed parsing (Attempt {attempts + 1}):\n---\n{llm_response_content}\n---")
                     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Failed to parse JSON: {e_json}. Response: '{cleaned_response_content}'")
+                    logger.debug(f"TASK_PLANNER: Raw LLM response that failed parsing (Attempt {attempts + 1}):\n---\n{llm_response_content}\n---")
                     attempts += 1
                     if attempts > max_retries:
                         logger.error(f"TASK_PLANNER: Max retries reached. Final JSON parsing failed. LLM Raw Response: '{llm_response_content}'")
