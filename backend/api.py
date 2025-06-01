@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Optional # Added for type hinting
 from utils.config import config, EnvMode
 import asyncio
+import json # Added import for json.dumps
 from utils.logger import logger
 import uuid
 import time
@@ -22,6 +23,7 @@ from agentpress.task_storage_supabase import SupabaseTaskStorage
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_planner import TaskPlanner
+from agentpress.plan_executor import PlanExecutor # Added import
 from agentpress.api_models_tasks import (
     CreateTaskPayload,
     UpdateTaskPayload,
@@ -138,12 +140,63 @@ task_router = APIRouter(prefix="/tasks", tags=["Tasks"])
 @task_router.post("/plan", response_model=FullTaskStateResponse)
 async def plan_new_task(
     payload: PlanTaskPayload,
-    planner: TaskPlanner = Depends(get_task_planner)
+    planner: TaskPlanner = Depends(get_task_planner),
+    # Add dependencies for TaskStateManager and ToolOrchestrator for PlanExecutor
+    tsm: TaskStateManager = Depends(get_task_state_manager),
+    tor_orch: ToolOrchestrator = Depends(get_tool_orchestrator)
 ):
     try:
         main_task = await planner.plan_task(payload.description, payload.context)
         if not main_task:
             raise HTTPException(status_code=500, detail="Task planning failed to produce a main task.")
+
+        # After successful planning, initiate execution
+        if main_task.status == "planned": # Check if planning was successful
+            # Send initial "Plan Generated!" message via Redis
+            initial_message_content = "¡Plan generado! Empezando a trabajar en tu tarea..."
+            message_data = {
+                "type": "status", # Or "assistant_message_update"
+                "status": "starting",
+                "message": initial_message_content,
+                "content": {
+                    "role": "assistant",
+                    "content": initial_message_content
+                },
+                "metadata": {
+                    "thread_run_id": main_task.id
+                }
+            }
+
+            response_list_key = f"agent_run:{main_task.id}:responses"
+            response_channel = f"agent_run:{main_task.id}:new_response"
+            message_json_str = json.dumps(message_data) # Renamed to avoid conflict
+
+            try:
+                # Import redis here if not globally available or prefer scoped import
+                from services import redis
+                await asyncio.gather(
+                    redis.rpush(response_list_key, message_json_str),
+                    redis.publish(response_channel, "new")
+                )
+                logger.info(f"API: Sent initial 'Plan Generated' message for task {main_task.id} to Redis.")
+            except Exception as e_redis: # Renamed exception variable
+                logger.error(f"API: Failed to send initial 'Plan Generated' message for task {main_task.id} to Redis: {e_redis}", exc_info=True)
+
+            logger.info(f"API: Plan created for task {main_task.id}, initiating execution.")
+
+            plan_executor = PlanExecutor(
+                main_task_id=main_task.id,
+                task_manager=tsm,
+                tool_orchestrator=tor_orch
+            )
+            asyncio.create_task(plan_executor.execute_plan())
+            logger.debug(f"API: Background execution started for task {main_task.id}")
+
+        elif main_task:
+            logger.warning(f"API: Plan created for task {main_task.id} but status is '{main_task.status}'. Initial message not sent, execution not started automatically.")
+        else: # If main_task is None - this case is technically covered by the check above main_task
+            logger.error(f"API: Task planning failed to produce a main task. No initial message sent, no execution started.")
+
         return main_task
     except Exception as e:
         logger.error(f"Error during /plan endpoint: {e}", exc_info=True)

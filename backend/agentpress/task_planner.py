@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 import json
 from pydantic import BaseModel, Field, ValidationError # Added imports
 
+from backend.agent.prompt import get_system_prompt # Added import
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_types import TaskState # For type hinting
@@ -30,106 +31,62 @@ class TaskPlanner:
 class SubtaskDecompositionItem(BaseModel):
     name: str
     description: str
-    dependencies: List[int] = Field(default_factory=list)
+    dependencies: List[int] = Field(default_factory=list) # Kept for SubtaskDecompositionItem structure, but new prompt won't generate indices.
     assigned_tools: List[str] = Field(default_factory=list)
 
-    async def _decompose_task( # Now correctly a method of TaskPlanner
-        self, # This 'self' will refer to TaskPlanner instance
+    async def _decompose_task(
+        self,
         task_description: str,
-        available_tools: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
-        logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
+    ) -> List[Dict[str, Any]]: # Return type is a list of dicts for subtasks
+        logger.debug(f"TASK_PLANNER: Decomposing task using global SYSTEM_PROMPT: {task_description}")
 
-        formatted_tools = "\n".join([
-            f"- {tool.get('name')}: {tool.get('description', 'No description')}"
-            for tool in available_tools
-        ])
-        if not formatted_tools:
-            formatted_tools = "No specific tools seem immediately available for this task, but you can still define subtasks that might require general capabilities."
+        SYSTEM_PROMPT = get_system_prompt() # Get the global system prompt
 
-        base_prompt_messages = [
-            {
-                "role": "system",
-                "content": f"""\
-You are an expert task planner. Your role is to break down a given task description into a list of smaller, actionable subtasks.
-For each subtask, provide a name, a detailed description, a list of tools (from the provided list) that might be useful for this subtask, and a list of dependencies on other subtasks you are defining in this list (using their 0-based index).
+        # The user message is now simpler as the SYSTEM_PROMPT handles the main instruction
+        user_message_content = f"Task Description: {task_description}"
+        if context:
+            user_message_content += f"\nContext: {json.dumps(context)}"
 
-Available tools:
-Each tool is listed with its unique identifier (in the format ToolID__methodName) followed by its description. When assigning tools to a subtask, you MUST use these exact unique identifiers.
-{formatted_tools}
-
-Please output your plan as a JSON array of objects. Each object MUST have the following fields:
-- "name": A concise name for the subtask (string).
-- "description": A detailed step-by-step description of what needs to be done for this subtask (string).
-- "dependencies": A list of 0-based indices of other subtasks in this plan that this subtask depends on. An empty list means no dependencies within this plan (List[int]).
-- "assigned_tools": A list of unique tool identifiers (e.g., ToolID__methodName, from the 'Available tools' list) that are most relevant for this subtask. If no specific tool is relevant, provide an empty list. (List[str]).
-
-Example JSON output for a task "Develop a new feature X":
-[
-  {{
-    "name": "Design feature X",
-    "description": "Create detailed design documents and mockups for feature X.",
-    "dependencies": [],
-    "assigned_tools": ["GraphicsGenerator__create_mockup", "CollaborationSuite__share_document"]
-  }},
-  {{
-    "name": "Implement backend for feature X",
-    "description": "Develop the server-side logic and APIs for feature X.",
-    "dependencies": [0],
-    "assigned_tools": ["CodeRepository__commit_changes", "APIDevelopmentTool__create_endpoint"]
-  }},
-  {{
-    "name": "Implement frontend for feature X",
-    "description": "Develop the user interface for feature X.",
-    "dependencies": [0, 1],
-    "assigned_tools": ["CodeRepository__commit_changes", "UIFramework__generate_component"]
-  }}
-]
-Ensure the output is ONLY a valid JSON array of objects adhering to this schema. Do not include any explanatory text before or after the JSON array.
-"""
-            },
-            {
-                "role": "user",
-                "content": f"Please decompose the following task into subtasks:\n\nTask Description: {task_description}\n\n{('Context: ' + json.dumps(context)) if context else ''}"
-            }
+        prompt_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message_content}
         ]
 
         max_retries = 2
         attempts = 0
-        llm_response_content = "" # Ensure llm_response_content is defined for logging in case of early error
+        llm_response_content = ""
 
         while attempts <= max_retries:
-            prompt_messages_for_attempt = list(base_prompt_messages) # Make a copy for this attempt
+            current_prompt_messages = list(prompt_messages) # Use a copy
             if attempts > 0:
-                # Add a system message to guide the LLM on retry
                 retry_guidance = {
                     "role": "system",
-                    "content": "Your previous response had a formatting or validation error. Please strictly adhere to the output format: A valid JSON array of objects, where each object has 'name' (string), 'description' (string), 'dependencies' (list of integers), and 'assigned_tools' (list of strings). Do not include any text outside the JSON array itself."
+                    "content": "Your previous response had a formatting or validation error. Please strictly adhere to the output format: A valid JSON object with a single key 'plan', which is a list of objects. Each object in the 'plan' list must have 'tool_code' (string), 'thought' (string), and 'parameters' (object). Do not include any text outside the JSON object itself."
                 }
-                # Insert it after the initial system prompt
-                prompt_messages_for_attempt.insert(1, retry_guidance)
+                # Insert retry guidance after the main system prompt
+                current_prompt_messages.insert(1, retry_guidance)
 
-            logger.info(f"TASK_PLANNER: Attempt {attempts + 1}/{max_retries + 1} to decompose task: {task_description}")
+            logger.info(f"TASK_PLANNER: Attempt {attempts + 1}/{max_retries + 1} to generate plan for: {task_description}")
 
             try:
                 llm_response_obj = await make_llm_api_call(
-                    messages=prompt_messages_for_attempt,
-                    model="gpt-4o",
-                    temperature=0.1, # Slightly lower for more consistent JSON
-                    max_tokens=2048,
+                    messages=current_prompt_messages,
+                    model="gpt-4o", # Or the model specified in the new system prompt if different
+                    temperature=0.1,
+                    max_tokens=2048, # Adjust if necessary
                     stream=False,
-                    json_mode=True
+                    json_mode=True # Crucial for ensuring JSON output
                 )
 
-                # Extract content based on expected structure (consistent with previous implementation)
+                # Standard response extraction
                 if isinstance(llm_response_obj, dict) and 'choices' in llm_response_obj and llm_response_obj['choices']:
                     llm_response_content = llm_response_obj['choices'][0].get('message', {}).get('content', '')
-                elif isinstance(llm_response_obj, str):
+                elif isinstance(llm_response_obj, str): # Added for direct string response
                     llm_response_content = llm_response_obj
                 elif hasattr(llm_response_obj, 'choices') and llm_response_obj.choices and \
                      hasattr(llm_response_obj.choices[0], 'message') and \
-                     hasattr(llm_response_obj.choices[0].message, 'content'):
+                     hasattr(llm_response_obj.choices[0].message, 'content'): # Added for OpenAIObject-like response
                     llm_response_content = llm_response_obj.choices[0].message.content
                 else:
                     logger.error(f"TASK_PLANNER: Unexpected LLM response structure (Attempt {attempts + 1}): {type(llm_response_obj)}")
@@ -139,75 +96,113 @@ Ensure the output is ONLY a valid JSON array of objects adhering to this schema.
                         return []
                     continue
 
+
                 if not llm_response_content or not llm_response_content.strip():
                     logger.warning(f"TASK_PLANNER: LLM returned empty content (Attempt {attempts + 1}).")
                     attempts += 1
                     if attempts > max_retries:
-                         logger.error("TASK_PLANNER: Max retries reached due to empty LLM response.")
-                         return []
+                        logger.error("TASK_PLANNER: Max retries reached due to empty LLM response.")
+                        return []
                     continue
 
-                logger.debug(f"TASK_PLANNER: LLM response for task decomposition (Attempt {attempts + 1}):\n{llm_response_content}")
+                logger.debug(f"TASK_PLANNER: LLM plan response (Attempt {attempts + 1}):\n{llm_response_content}")
 
-                # Clean potential markdown ```json ... ```
                 cleaned_response_content = llm_response_content.strip()
+                # No need to strip ```json anymore if json_mode=True works as expected,
+                # but keep it as a fallback if issues are seen.
                 if cleaned_response_content.startswith("```json"):
                     cleaned_response_content = cleaned_response_content[7:-3].strip()
                 elif cleaned_response_content.startswith("```"):
-                    cleaned_response_content = cleaned_response_content[3:-3].strip()
+                     cleaned_response_content = cleaned_response_content[3:-3].strip()
 
-                if not cleaned_response_content: # Check again after stripping markdown
-                    logger.warning(f"TASK_PLANNER: LLM returned empty content after stripping markdown (Attempt {attempts + 1}). Raw: {llm_response_content}")
+                if not cleaned_response_content:
+                    logger.warning(f"TASK_PLANNER: LLM returned empty content after stripping markdown (Attempt {attempts + 1}).")
                     attempts += 1
                     if attempts > max_retries:
-                         logger.error("TASK_PLANNER: Max retries reached due to empty LLM response after markdown stripping.")
-                         return []
+                        logger.error("TASK_PLANNER: Max retries reached due to empty LLM response after markdown stripping.")
+                        return []
                     continue
 
+                parsed_json_response = None
                 try:
-                    subtasks_data = json.loads(cleaned_response_content)
+                    parsed_json_response = json.loads(cleaned_response_content)
                 except json.JSONDecodeError as e_json:
                     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Failed to parse JSON: {e_json}. Response: '{cleaned_response_content}'")
                     attempts += 1
                     if attempts > max_retries:
                         logger.error(f"TASK_PLANNER: Max retries reached. Final JSON parsing failed. LLM Raw Response: '{llm_response_content}'")
                         return []
-                    continue # Retry
+                    continue
 
-                try:
-                    # Ensure it's a list before Pydantic validation
-                    if not isinstance(subtasks_data, list):
-                        logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: LLM did not return a list. Got: {type(subtasks_data)}. Data: '{subtasks_data}'")
-                        # Attempt to recover if it's a single dict that should have been a list
-                        if isinstance(subtasks_data, dict) and "name" in subtasks_data and "description" in subtasks_data:
-                             logger.info(f"TASK_PLANNER: Attempt {attempts + 1}: Wrapping single dictionary response in a list for validation.")
-                             subtasks_data = [subtasks_data]
-                        else: # Not a list and not a recoverable single dict
-                            raise ValidationError([{"loc": "__root__", "msg": "Data is not a list of subtasks", "type": "type_error"}], model=SubtaskDecompositionItem)
-
-
-                    validated_subtasks = [SubtaskDecompositionItem.parse_obj(item) for item in subtasks_data]
-                    logger.info(f"TASK_PLANNER: Successfully parsed and validated {len(validated_subtasks)} subtasks from LLM (Attempt {attempts + 1}).")
-                    return [item.dict() for item in validated_subtasks] # Success
-
-                except ValidationError as e_val:
-                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed: {e_val}. Data: '{subtasks_data}'")
+                # Validate the structure {"plan": [...]}
+                if not isinstance(parsed_json_response, dict) or "plan" not in parsed_json_response or not isinstance(parsed_json_response.get("plan"), list):
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: LLM response is not a dict with a 'plan' list. Got: {type(parsed_json_response)}. Data: '{parsed_json_response}'")
                     attempts += 1
                     if attempts > max_retries:
-                        logger.error(f"TASK_PLANNER: Max retries reached. Final Pydantic validation failed. LLM Parsed Data: '{subtasks_data}'")
+                        logger.error("TASK_PLANNER: Max retries reached. LLM response not a dict with 'plan' list.")
                         return []
-                    continue # Retry
+                    continue
 
-            except Exception as e_main: # Catch any other unexpected errors during LLM call or processing
-                logger.error(f"TASK_PLANNER: Attempt {attempts + 1}: Unexpected error during task decomposition: {e_main}", exc_info=True)
+                plan_steps_data = parsed_json_response["plan"]
+
+                subtasks_for_creation = []
+                for i, step in enumerate(plan_steps_data):
+                    if not isinstance(step, dict) or not all(k in step for k in ["tool_code", "thought", "parameters"]):
+                        logger.warning(f"TASK_PLANNER: Invalid step structure in plan (Attempt {attempts + 1}): {step}")
+                        continue # Skip this invalid step
+
+                    mapped_name = step.get("tool_code", f"Step {i+1}")
+                    if step.get("thought"):
+                        mapped_name += f": {step['thought'][:30]}" + ("..." if len(step['thought']) > 30 else "")
+
+                    description_parts = []
+                    if step.get("thought"):
+                        description_parts.append(f"Thought: {step['thought']}")
+                    if step.get("parameters"):
+                        try:
+                            params_str = json.dumps(step['parameters'])
+                            description_parts.append(f"Parameters: {params_str}")
+                        except TypeError:
+                             description_parts.append(f"Parameters: (Could not serialize: {step['parameters']})")
+
+                    mapped_description = "\n".join(description_parts)
+                    if not mapped_description:
+                        mapped_description = f"Execute {step.get('tool_code', 'tool')}"
+
+                    subtask_dict = {
+                        "name": mapped_name,
+                        "description": mapped_description,
+                        "dependencies": [], # New prompt does not ask for 0-indexed dependencies.
+                                           # Actual dependencies will be handled by PlanExecutor or similar.
+                        "assigned_tools": [step.get("tool_code")] if step.get("tool_code") else []
+                    }
+
+                    try:
+                        SubtaskDecompositionItem.parse_obj(subtask_dict) # Validate against Pydantic
+                        subtasks_for_creation.append(subtask_dict)
+                    except ValidationError as e_val_item:
+                        logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed for mapped step: {e_val_item}. Original step: '{step}', Mapped: '{subtask_dict}'")
+
+                if not subtasks_for_creation and plan_steps_data:
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: All plan steps failed validation after mapping. Original plan had {len(plan_steps_data)} steps.")
+                    attempts += 1
+                    if attempts > max_retries:
+                        logger.error("TASK_PLANNER: Max retries reached. All plan steps failed validation.")
+                        return []
+                    continue
+
+                logger.info(f"TASK_PLANNER: Successfully parsed and mapped {len(subtasks_for_creation)} steps from LLM plan (Attempt {attempts + 1}).")
+                return subtasks_for_creation # Success
+
+            except Exception as e_main:
+                logger.error(f"TASK_PLANNER: Attempt {attempts + 1}: Unexpected error during plan generation: {e_main}", exc_info=True)
                 attempts += 1
                 if attempts > max_retries:
                     logger.error(f"TASK_PLANNER: Max retries reached. Last error: {e_main}")
                     return []
-                # Optional: await asyncio.sleep(1) # Brief pause before retry
 
-        logger.error("TASK_PLANNER: Exhausted all retries for task decomposition.")
-        return [] # Should only be reached if all retries fail
+        logger.error("TASK_PLANNER: Exhausted all retries for plan generation.")
+        return []
 
     async def plan_task(
         self,
@@ -240,51 +235,40 @@ Ensure the output is ONLY a valid JSON array of objects adhering to this schema.
 
             logger.debug(f"Main task created with ID: {main_task.id}")
 
-            # 2. Get available tools for the LLM to consider (OpenAPI schemas)
-            # Use get_tool_schemas_for_llm which is formatted for this purpose.
-            available_tools_schemas = self.tool_orchestrator.get_tool_schemas_for_llm()
-
-            logger.debug(f"TaskPlanner: Available tool schemas for LLM planning ({len(available_tools_schemas)} total):")
-            for schema in available_tools_schemas:
-                logger.debug(f"  - Tool: {schema.get('name')}")
-            if not available_tools_schemas:
-                logger.debug("  - No tools available to the planner.")
-
-            # 3. Decompose the task into subtasks
-            subtasks_data_list = await self._decompose_task(task_description, available_tools_schemas, context)
+            # 2. Decompose the task into subtasks
+            # available_tools_schemas is removed as per new _decompose_task signature
+            subtasks_data_list = await self._decompose_task(task_description, context)
 
             if not subtasks_data_list:
                 logger.warning(f"LLM failed to decompose task or returned no subtasks for: {task_description}")
                 await self.task_manager.update_task(main_task.id, {"status": "planning_failed", "error": "No subtasks generated."})
                 return main_task # Return main task with failed status
 
-            # 4. Create and link subtasks
-            created_subtask_ids_in_order = [] # To resolve dependencies by index
+            # 3. Create and link subtasks
+            # created_subtask_ids_in_order is no longer needed for 0-indexed dependencies from planner
+            # Dependencies will be handled by a different mechanism if needed (e.g. linear, or by PlanExecutor)
 
             for subtask_data in subtasks_data_list:
-                sub_name = subtask_data.get("name", "Unnamed Subtask")
-                sub_description = subtask_data.get("description", "")
-                dependency_indices = subtask_data.get("dependencies", [])
-                assigned_tools_names = subtask_data.get("assigned_tools", [])
+                # Validated by SubtaskDecompositionItem during _decompose_task mapping
+                sub_name = subtask_data["name"]
+                sub_description = subtask_data["description"]
+                # dependencies list from subtask_data is now empty based on current mapping.
+                # If a linear dependency is desired, it could be added here:
+                # current_dependencies = [created_subtask_ids_in_order[-1]] if created_subtask_ids_in_order else []
+                current_dependencies = [] # Defaulting to no dependencies as per current mapping logic.
+                assigned_tools_names = subtask_data["assigned_tools"]
 
-                # Resolve dependency indices to actual task IDs
-                actual_dependency_ids = []
-                for dep_index in dependency_indices:
-                    if 0 <= dep_index < len(created_subtask_ids_in_order):
-                        actual_dependency_ids.append(created_subtask_ids_in_order[dep_index])
-                    else:
-                        logger.warning(f"Invalid dependency index {dep_index} for subtask '{sub_name}'. Max index: {len(created_subtask_ids_in_order)-1}")
 
                 subtask = await self.task_manager.create_task(
                     name=sub_name,
                     description=sub_description,
-                    parentId=main_task.id, # Link to main task
-                    dependencies=actual_dependency_ids,
-                    assignedTools=assigned_tools_names, # Store names for now
-                    status="pending" # Default status for new subtasks
+                    parentId=main_task.id,
+                    dependencies=current_dependencies, # Using the potentially linear dependency
+                    assignedTools=assigned_tools_names,
+                    status="pending"
                 )
                 if subtask:
-                    created_subtask_ids_in_order.append(subtask.id)
+                    # created_subtask_ids_in_order.append(subtask.id) # For linear dependency if implemented above
                     logger.debug(f"Created subtask '{sub_name}' (ID: {subtask.id}) for main task {main_task.id}")
                 else:
                     logger.error(f"Failed to create subtask '{sub_name}' for main task {main_task.id}")
