@@ -233,8 +233,8 @@ async def run_agent(
                 user_content_json = {}
                 try:
                     user_content_json = json.loads(user_content_json_str)
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse user message content as JSON: {user_content_json_str}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse user message content as JSON: {user_content_json_str}. Error: {str(e)}", exc_info=True)
                     trace.event(name="user_content_parse_error", level="ERROR", status_message="Failed to parse user message content JSON")
                     # Potentially yield an error or handle as non-plannable
 
@@ -407,6 +407,7 @@ async def run_agent(
                                 "type": "assistant", "content": json.dumps(error_content),
                                 "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
                             }
+                            continue_execution = False # ADDED LINE
                             # Let normal execution proceed to respond to the user message.
                     except Exception as e_planner:
                         logger.error(f"Exception during task planning: {e_planner}", exc_info=True)
@@ -512,9 +513,9 @@ async def run_agent(
                     logger.warning("Browser state message is missing both screenshot_url and screenshot_base64. Content: %s", browser_content)
 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse browser state JSON: {browser_message_content_raw}. Error: {e}")
-                trace.event(name="json_decode_error_browser_state", level="ERROR", status_message=(f"Failed to parse browser state: {e}"))
-                yield {"type": "status", "status": "error", "message": f"Failed to parse browser state: {e}"}
+                logger.error(f"Failed to parse browser state JSON: {browser_message_content_raw}. Error: {str(e)}", exc_info=True)
+                trace.event(name="json_decode_error_browser_state", level="ERROR", status_message=(f"Failed to parse browser state: {str(e)}"))
+                yield {"type": "status", "status": "error", "message": f"Failed to parse browser state: {str(e)}"}
                 continue_execution = False
                 break # Break from the while loop
             except Exception as e: # Catch other potential errors
@@ -558,9 +559,9 @@ async def run_agent(
 
 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse image context JSON: {image_message_content_raw}. Error: {e}")
-                trace.event(name="json_decode_error_image_context", level="ERROR", status_message=(f"Failed to parse image context: {e}"))
-                yield {"type": "status", "status": "error", "message": f"Failed to parse image context: {e}"}
+                logger.error(f"Failed to parse image context JSON: {image_message_content_raw}. Error: {str(e)}", exc_info=True)
+                trace.event(name="json_decode_error_image_context", level="ERROR", status_message=(f"Failed to parse image context: {str(e)}"))
+                yield {"type": "status", "status": "error", "message": f"Failed to parse image context: {str(e)}"}
                 continue_execution = False
                 break # Break from the while loop
             except Exception as e: # Catch other potential errors
