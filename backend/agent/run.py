@@ -45,7 +45,7 @@ from agentpress.utils.json_helpers import extract_json_from_response
 # For now, I'll rely on existing mechanisms or what's available in ThreadManager.
 # If direct LLM calls or a different TaskStateManager are needed, the subtask might be underspecified for this file structure.
 from services.llm import make_llm_api_call # Adding as per prompt
-from ..agentpress.task_state_manager import TaskStateManager # Corrected import path to agentpress
+from agentpress.task_state_manager import TaskStateManager # Corrected import path to direct import
 
 load_dotenv()
 
