@@ -283,10 +283,10 @@ async def run_agent(
                     )
                     current_status_for_log = "completed"
 
-            await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 2 (Execution) concluded, status: {current_status_for_log}.")
+        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 2 (Execution) concluded, status: {current_status_for_log}.")
 
-            langfuse.flush()
-            return
+        langfuse.flush()
+        return
 
     except Exception as e:
         logger.error(f"Error in run_agent orchestration for thread_id {thread_id}: {e}", exc_info=True)
