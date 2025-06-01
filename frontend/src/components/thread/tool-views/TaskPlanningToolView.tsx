@@ -1,9 +1,12 @@
 // Archivo: TaskPlanningToolView.tsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ToolViewProps } from './types';
 import { ToolViewWrapper } from './wrapper/ToolViewWrapper';
 import { useTaskManager } from '@/hooks/use-task-manager';
-import { CircleDashed, CheckCircle, AlertTriangle, Clock } from 'lucide-react';
+import { CircleDashed, CheckCircle, AlertTriangle, Clock, Loader, AlertCircle, ChevronRight } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Progress } from '@/components/ui/progress';
+import { getIconForTool, getLabelForTool } from './utils';
 
 export function TaskPlanningToolView({
   name,
@@ -68,19 +71,28 @@ export function TaskPlanningToolView({
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="h-4 w-4 text-green-500" />;
+        return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'running':
       case 'pending_planning':
-        return <CircleDashed className="h-4 w-4 text-blue-500 animate-spin" />;
+        return <Loader className="h-5 w-5 text-blue-500 animate-spin" />;
       case 'failed':
       case 'planning_failed':
-        return <AlertTriangle className="h-4 w-4 text-red-500" />;
+        return <AlertCircle className="h-5 w-5 text-red-500" />;
       case 'paused':
-        return <Clock className="h-4 w-4 text-yellow-500" />;
-      default:
-        return <CircleDashed className="h-4 w-4 text-zinc-500" />;
+        return <Clock className="h-5 w-5 text-yellow-500" />;
+      default: // pending, not_started yet
+        return <CircleDashed className="h-5 w-5 text-zinc-500" />;
     }
   };
+
+  // StepStatusIcon component (can be defined outside or inside TaskPlanningToolView)
+  // For simplicity, we are adapting getStatusIcon directly. If more complex logic
+  // is needed for StepStatusIcon, it can be created as a separate component.
+
+  // Calculate progress for the general progress bar
+  const completedSteps = subtasks?.filter(s => s.status === 'completed').length || 0;
+  const totalSteps = subtasks?.length || 0;
+  const progressPercentage = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
 
   return (
     <ToolViewWrapper
@@ -176,33 +188,71 @@ export function TaskPlanningToolView({
               )}
             </div>
 
-            {/* Subtasks section */}
+            {/* General Progress Bar for Subtasks */}
+            {subtasks && subtasks.length > 0 && (
+              <div className="bg-zinc-50 dark:bg-zinc-800 rounded-lg p-4 border border-zinc-200 dark:border-zinc-700">
+                <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
+                  Progreso de la Tarea
+                </h4>
+                <Progress value={progressPercentage} className="w-full h-2 my-2" />
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                  {completedSteps} de {totalSteps} pasos completados ({Math.round(progressPercentage)}%)
+                </p>
+              </div>
+            )}
+
+            {/* Subtasks section (Plan de Pasos) */}
             <div>
-              <h4 className="text-sm font-medium text-zinc-900 dark:text-zinc-100 mb-2 flex items-center">
-                Subtareas
-                {isLoadingSubtasks && <CircleDashed className="ml-2 h-3 w-3 text-zinc-400 animate-spin" />}
+              <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-3 flex items-center">
+                Plan de Pasos
+                {isLoadingSubtasks && <Loader className="ml-2 h-4 w-4 text-zinc-400 animate-spin" />}
               </h4>
 
               {subtasks && subtasks.length > 0 ? (
-                <div className="space-y-2">
-                  {subtasks.map(subtask => (
-                    <div key={subtask.id} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-md p-3">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{subtask.name}</span>
-                        <div className="flex items-center">
-                          {getStatusIcon(subtask.status)}
-                          <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">
-                            {Math.round(subtask.progress * 100)}%
-                          </span>
+                <ol className="relative border-l border-zinc-200 dark:border-zinc-700 space-y-6">
+                  {subtasks.map((step, index) => {
+                    const ToolIcon = getIconForTool(step.name); // Assuming step.name is the tool identifier
+                    return (
+                      <li key={step.id} className="ml-6">
+                        <span className="absolute flex items-center justify-center w-10 h-10 bg-zinc-100 dark:bg-zinc-800 rounded-full -left-5 ring-4 ring-white dark:ring-zinc-900">
+                          {getStatusIcon(step.status)}
+                        </span>
+                        <div className="ml-4">
+                          <div className="flex items-center mb-0.5">
+                            <ToolIcon className="w-4 h-4 mr-2 text-zinc-500 dark:text-zinc-400" />
+                            <h5 className="font-medium text-zinc-900 dark:text-zinc-100">
+                              {getLabelForTool(step.name)}
+                            </h5>
+                          </div>
+                          <p className="text-base text-zinc-700 dark:text-zinc-300 mt-1">
+                            {step.description || "Este paso no tiene descripción detallada."}
+                        </p>
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                          Estado: {step.status.replace(/_/g, ' ')} ({Math.round(step.progress * 100)}%)
                         </div>
+                        {renderProgressBar(step.progress, step.status)}
+
+                        <Collapsible className="mt-3">
+                          <CollapsibleTrigger asChild>
+                            <button className="flex items-center text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 group">
+                              Ver detalles técnicos
+                              <ChevronRight className="h-4 w-4 ml-1 transform transition-transform duration-200 group-data-[state=open]:rotate-90" />
+                            </button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-2">
+                            <pre className="bg-zinc-100 dark:bg-zinc-800 p-2 rounded-md text-xs text-zinc-700 dark:text-zinc-300 overflow-x-auto">
+                              {JSON.stringify(step, null, 2)}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
                       </div>
-                      {renderProgressBar(subtask.progress, subtask.status)}
-                    </div>
-                  ))}
-                </div>
+                      </li>
+                    );
+                  })}
+                </ol>
               ) : (
                 <div className="text-sm text-zinc-500 dark:text-zinc-400 italic">
-                  {isLoadingSubtasks ? "Cargando subtareas..." : "No hay subtareas disponibles"}
+                  {isLoadingSubtasks ? "Cargando plan de pasos..." : "No hay pasos definidos para esta tarea."}
                 </div>
               )}
             </div>

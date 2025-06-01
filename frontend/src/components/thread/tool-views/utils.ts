@@ -12,6 +12,22 @@ import {
   FileAudio,
   FileArchive,
   Table,
+  Code,
+  Search,
+  Play,
+  MousePointerClick,
+  Globe,
+  Terminal,
+  Puzzle,
+  Wrench,
+  Replace,
+  Trash2,
+  FileOutput,
+  FileSearch,
+  Database,
+  Webhook,
+  MessageSquare,
+  CheckSquare,
 } from 'lucide-react';
 
 // Helper function to format timestamp
@@ -1447,3 +1463,91 @@ export const getFileIconAndColor = (filename: string) => {
       };
   }
 };
+
+/**
+ * Returns a human-readable label for a given tool name.
+ * This function currently reuses the logic from getToolTitle.
+ * @param toolName The name of the tool.
+ * @returns A string representing the human-readable label for the tool.
+ */
+export function getLabelForTool(toolName: string): string {
+  return getToolTitle(toolName);
+}
+
+/**
+ * Returns a Lucide icon component for a given tool name.
+ * @param toolName The name of the tool (e.g., as obtained from step.tool or subtask.name).
+ * @returns A React functional component representing the icon.
+ */
+export function getIconForTool(toolName: string): React.FC<{ className?: string }> {
+  const normalizedName = toolName.toLowerCase().replace(/_/g, '-');
+
+  switch (normalizedName) {
+    // Command Execution
+    case 'execute-command':
+      return Terminal;
+    case 'check-command-output':
+      return FileSearch; // Or Terminal, depending on emphasis
+
+    // File Operations
+    case 'create-file':
+      return FileOutput; // Or FilePlus
+    case 'read-file':
+      return FileText;
+    case 'full-file-rewrite':
+      return FileCode; // Or FileEdit
+    case 'delete-file':
+      return Trash2;
+    case 'str-replace': // String replace can be file or generic
+      return Replace;
+
+    // Web Operations
+    case 'web-search':
+      return Search;
+    case 'crawl-webpage':
+    case 'scrape-webpage':
+      return Globe; // Or DownloadCloud
+
+    // Browser Interactions (more specific than general web)
+    case 'browser-navigate':
+      return Play; // Or Navigation
+    case 'browser-click':
+      return MousePointerClick;
+    case 'browser-extract':
+      return Puzzle; // Or Inspect
+    case 'browser-fill':
+      return FileOutput; // Or Edit3
+    case 'browser-wait':
+      return Code; // Or Clock
+    case 'browser-screenshot':
+      return Code; // Or Image
+
+    // Data Provider / API calls
+    case 'execute-data-provider-call':
+      return Database;
+    case 'get-data-provider-endpoints':
+      return Webhook; // Or ListTree
+
+    // Communication / User Interaction
+    case 'ask':
+      return MessageSquare; // Or HelpCircle
+
+    // Task / Plan Management
+    case 'complete': // Assuming 'complete' might be a tool name from a step
+    case 'task-complete':
+      return CheckSquare;
+
+    // Generic / Default
+    case 'generic-tool':
+    case 'default':
+      return Puzzle;
+    default:
+      // Try to infer from prefixes
+      if (normalizedName.startsWith('browser-')) return MousePointerClick;
+      if (normalizedName.includes('file')) return File;
+      if (normalizedName.includes('command') || normalizedName.includes('execute')) return Terminal;
+      if (normalizedName.includes('search') || normalizedName.includes('query')) return Search;
+      if (normalizedName.includes('web') || normalizedName.includes('http')) return Globe;
+      return Wrench; // Default fallback icon
+  }
+}
