@@ -124,6 +124,7 @@ create or replace function public.get_account_invitations(account_id uuid, resul
                                                           results_offset integer default 0)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 BEGIN
@@ -231,6 +232,7 @@ create or replace function public.create_invitation(account_id uuid, account_rol
                                                     invitation_type basejump.invitation_type)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 declare
@@ -253,6 +255,7 @@ grant execute on function public.create_invitation(uuid, basejump.account_role, 
 create or replace function public.delete_invitation(invitation_id uuid)
     returns void
     language plpgsql
+    SET search_path = public
 as
 $$
 begin

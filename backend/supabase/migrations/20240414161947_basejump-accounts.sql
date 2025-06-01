@@ -386,6 +386,7 @@ grant execute on function public.get_account_id(text) to authenticated, service_
 create or replace function public.current_user_account_role(account_id uuid)
     returns jsonb
     language plpgsql
+    SET search_path = public
 as
 $$
 DECLARE
@@ -474,6 +475,7 @@ grant execute on function public.update_account_user_role(uuid, uuid, basejump.a
 create or replace function public.get_accounts()
     returns json
     language sql
+    SET search_path = public
 as
 $$
 select coalesce(json_agg(
@@ -501,6 +503,7 @@ grant execute on function public.get_accounts() to authenticated;
 create or replace function public.get_account(account_id uuid)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 BEGIN
@@ -549,6 +552,7 @@ grant execute on function public.get_account(uuid) to authenticated, service_rol
 create or replace function public.get_account_by_slug(slug text)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 DECLARE
@@ -572,6 +576,7 @@ grant execute on function public.get_account_by_slug(text) to authenticated;
 create or replace function public.get_personal_account()
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 BEGIN
@@ -587,6 +592,7 @@ grant execute on function public.get_personal_account() to authenticated;
 create or replace function public.create_account(slug text default null, name text default null)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 DECLARE
@@ -616,6 +622,7 @@ create or replace function public.update_account(account_id uuid, slug text defa
                                                  replace_metadata boolean default false)
     returns json
     language plpgsql
+    SET search_path = public
 as
 $$
 BEGIN
@@ -690,6 +697,7 @@ grant execute on function public.get_account_members(uuid, integer, integer) to 
 create or replace function public.remove_account_member(account_id uuid, user_id uuid)
     returns void
     language plpgsql
+    SET search_path = public
 as
 $$
 BEGIN

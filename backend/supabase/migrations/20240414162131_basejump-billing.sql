@@ -185,7 +185,9 @@ grant execute on function public.get_account_billing_status(uuid) to authenticat
 CREATE OR REPLACE FUNCTION public.service_role_upsert_customer_subscription(account_id uuid,
                                                                             customer jsonb default null,
                                                                             subscription jsonb default null)
-    RETURNS void AS
+    RETURNS void
+    SET search_path = public
+    AS
 $$
 BEGIN
     -- if the customer is not null, upsert the data into billing_customers, only upsert fields that are present in the jsonb object
