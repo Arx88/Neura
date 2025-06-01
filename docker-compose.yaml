@@ -38,6 +38,7 @@ services:
     volumes:
       - ./backend/.env:/app/.env:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./LOGS/backend:/app/logs
     env_file:
       - ./backend/.env
     environment:
@@ -63,6 +64,7 @@ services:
     volumes:
       - ./backend/.env:/app/.env:ro
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./LOGS/worker:/app/logs
     env_file:
       - ./backend/.env
     environment:

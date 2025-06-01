@@ -33,6 +33,9 @@ USER appuser
 # Copy application code
 COPY --chown=appuser:appuser . .
 
+# Remove any potentially stale .pyc files or __pycache__ directories
+RUN find /app -type f -name "*.pyc" -delete -o -type d -name "__pycache__" -exec rm -rf {} +
+
 # Expose the port the app runs on
 EXPOSE 8000
 

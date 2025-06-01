@@ -249,6 +249,16 @@ async def start_agent(
 ):
     """Start an agent for a specific thread in the background."""
     try:
+        # Minimal __file__ logging for agentpress.task_planner
+        try:
+            import agentpress.task_planner
+            logger.debug(f"VERIFICATION: agentpress.task_planner module loaded from: {agentpress.task_planner.__file__}")
+        except ImportError as e_import_diag:
+            logger.error(f"VERIFICATION: Could not import agentpress.task_planner: {e_import_diag}")
+        except AttributeError as e_attr_diag:
+            logger.error(f"VERIFICATION: agentpress.task_planner imported, but no __file__ attribute? {e_attr_diag}")
+        # End of minimal __file__ logging
+
         global instance_id # Ensure instance_id is accessible
         if not instance_id:
             # This specific check should probably remain as it's a precondition for the API itself
@@ -790,6 +800,16 @@ async def initiate_agent_with_files(
     user_id: str = Depends(get_current_user_id_from_jwt)
 ):
     """Initiate a new agent session with optional file attachments."""
+    # Minimal __file__ logging for agentpress.task_planner
+    try:
+        import agentpress.task_planner
+        logger.debug(f"VERIFICATION: agentpress.task_planner module loaded from: {agentpress.task_planner.__file__}")
+    except ImportError as e_import_diag:
+        logger.error(f"VERIFICATION: Could not import agentpress.task_planner: {e_import_diag}")
+    except AttributeError as e_attr_diag:
+        logger.error(f"VERIFICATION: agentpress.task_planner imported, but no __file__ attribute? {e_attr_diag}")
+    # End of minimal __file__ logging
+
     global instance_id # Ensure instance_id is accessible
     if not instance_id:
         raise HTTPException(status_code=500, detail="Agent API not initialized with instance ID")
