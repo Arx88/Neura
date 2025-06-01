@@ -155,26 +155,21 @@ class SubtaskDecompositionItem(BaseModel):
                     if step.get("thought"):
                         mapped_name += f": {step['thought'][:30]}" + ("..." if len(step['thought']) > 30 else "")
 
-                    description_parts = []
-                    if step.get("thought"):
-                        description_parts.append(f"Thought: {step['thought']}")
-                    if step.get("parameters"):
-                        try:
-                            params_str = json.dumps(step['parameters'])
-                            description_parts.append(f"Parameters: {params_str}")
-                        except TypeError:
-                             description_parts.append(f"Parameters: (Could not serialize: {step['parameters']})")
+                    # Populate description only with thought or a default
+                    mapped_description = step.get("thought")
+                    if not mapped_description: # Handles None or empty string
+                        mapped_description = "No specific thought provided."
 
-                    mapped_description = "\n".join(description_parts)
-                    if not mapped_description:
-                        mapped_description = f"Execute {step.get('tool_code', 'tool')}"
+                    # Get raw parameters for llm_parameters
+                    llm_params = step.get("parameters")
 
                     subtask_dict = {
                         "name": mapped_name,
                         "description": mapped_description,
                         "dependencies": [], # New prompt does not ask for 0-indexed dependencies.
                                            # Actual dependencies will be handled by PlanExecutor or similar.
-                        "assigned_tools": [step.get("tool_code")] if step.get("tool_code") else []
+                        "assigned_tools": [step.get("tool_code")] if step.get("tool_code") else [],
+                        "llm_parameters": llm_params # Add raw parameters here
                     }
 
                     try:
@@ -258,6 +253,9 @@ class SubtaskDecompositionItem(BaseModel):
                 current_dependencies = [] # Defaulting to no dependencies as per current mapping logic.
                 assigned_tools_names = subtask_data["assigned_tools"]
 
+                # Retrieve llm_parameters and construct metadata
+                llm_params = subtask_data.get("llm_parameters")
+                current_metadata = {"tool_input": llm_params}
 
                 subtask = await self.task_manager.create_task(
                     name=sub_name,
@@ -265,7 +263,8 @@ class SubtaskDecompositionItem(BaseModel):
                     parentId=main_task.id,
                     dependencies=current_dependencies, # Using the potentially linear dependency
                     assignedTools=assigned_tools_names,
-                    status="pending"
+                    status="pending",
+                    metadata=current_metadata # Pass metadata here
                 )
                 if subtask:
                     # created_subtask_ids_in_order.append(subtask.id) # For linear dependency if implemented above
