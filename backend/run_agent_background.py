@@ -430,7 +430,7 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
                                     if python_path_from_cmd_v: # Check if not empty
                                         logger.info(f"'command -v' found Python at: {python_path_from_cmd_v}")
                                         # Verify this path works with a simple command
-                                        verify_cmd = f"{python_path_from_cmd_v} -c \"print(\\'Python probe success via command -v\\')\"" # Escaped single quotes
+                                        verify_cmd = f"{python_path_from_cmd_v} -c \"print('Python probe success via command -v')\"" # Corrected: Unescaped single quotes
                                         verify_req = SessionExecuteRequest(command=verify_cmd, var_async=False, cwd="/workspace")
                                         response_verify = None
                                         if use_daytona():
@@ -457,7 +457,7 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
                                 logger.info("Python not found via 'command -v', falling back to predefined list.") # Removed "with PATH"
                                 for exe_path in python_executables:
                                     logger.info(f"Probing for Python interpreter at: {exe_path}") # Removed "with PATH..."
-                                    test_cmd = f"{exe_path} -c \"print(\\'Python probe success\\')\"" # Escaped single quotes
+                                    test_cmd = f"{exe_path} -c \"print('Python probe success')\"" # Corrected: Unescaped single quotes
                                     probe_req = SessionExecuteRequest(command=test_cmd, var_async=False, cwd="/workspace")
                                     try:
                                         if use_daytona():
