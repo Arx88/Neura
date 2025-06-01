@@ -32,8 +32,7 @@ router = APIRouter()
 
 # Imports for PlanExecutor and related components
 from agentpress.plan_executor import PlanExecutor
-# Ensure TaskPlanner is imported for isinstance and other checks
-from agentpress.task_planner import TaskPlanner
+from agentpress.task_planner import TaskPlanner # Added import
 from agentpress.task_state_manager import TaskStateManager # Added import
 
 PLANNING_KEYWORDS = ["plan this:", "create a plan for:", "complex task:"]
@@ -396,25 +395,6 @@ async def start_agent(
                 except Exception as e_dir:
                     logger.debug(f"Could not get dir(task_planner): {str(e_dir)}")
                 logger.debug(f"Checking for 'plan_task' method. hasattr(task_planner, 'plan_task'): {hasattr(task_planner, 'plan_task')}")
-
-                logger.debug(f"TaskPlanner object in start_agent: {task_planner}")
-                logger.debug(f"Type of task_planner: {type(task_planner)}")
-                logger.debug(f"Is task_planner instance of TaskPlanner? {isinstance(task_planner, TaskPlanner)}")
-                logger.debug(f"Methods of task_planner: {dir(task_planner)}")
-                if hasattr(task_planner, 'plan_task'):
-                    logger.debug("task_planner HAS attribute 'plan_task'")
-                else:
-                    logger.debug("task_planner DOES NOT HAVE attribute 'plan_task'")
-                    # Also log the methods of the TaskPlanner class itself for comparison
-                    from agentpress.task_planner import TaskPlanner as TP_Class
-                    logger.debug(f"Methods of TaskPlanner class from new import: {dir(TP_Class)}")
-                    # Try to see if a freshly created instance has it
-                    temp_tp_instance = TP_Class(task_manager=task_state_manager, tool_orchestrator=agent_tool_orchestrator)
-                    logger.debug(f"Methods of a temp TaskPlanner instance: {dir(temp_tp_instance)}")
-                    if hasattr(temp_tp_instance, 'plan_task'):
-                        logger.debug("Fresh TaskPlanner instance HAS 'plan_task'")
-                    else:
-                        logger.debug("Fresh TaskPlanner instance DOES NOT HAVE 'plan_task'")
 
                 main_planned_task = await task_planner.plan_task(
                     task_description=prompt_text,
