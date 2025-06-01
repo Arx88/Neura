@@ -28,7 +28,8 @@ BEGIN
    NEW.updated_at = now();
    RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ language 'plpgsql'
+SET search_path = public;
 
 CREATE TRIGGER update_tasks_updated_at
 BEFORE UPDATE ON public.tasks

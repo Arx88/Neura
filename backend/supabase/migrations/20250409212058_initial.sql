@@ -98,7 +98,10 @@ CREATE OR REPLACE FUNCTION transfer_device(
   new_account_id UUID, -- Changed parameter name and implies new ownership target
   device_name TEXT DEFAULT NULL
 )
-RETURNS SETOF devices AS $$
+RETURNS SETOF devices
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
   device_exists BOOLEAN;
   updated_device devices;
@@ -124,7 +127,7 @@ BEGIN
     RETURN;
   END IF;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 -- Grant execute permission so that authenticated users can call this function
 -- Updated function signature
