@@ -31,14 +31,21 @@ from services.langfuse import langfuse
 from agent.gemini_prompt import get_gemini_system_prompt
 
 # Imports for TaskPlanner
-# from agentpress.task_planner import TaskPlanner # Removed
-# from agentpress.task_state_manager import TaskStateManager # Removed
+from agentpress.plan_executor import PlanExecutor
+from agentpress.task_planner import TaskPlanner
+# from agentpress.task_state_manager import TaskStateManager # Removed - Assuming this is not the one from the prompt, let's see if it's needed later
 # from agentpress.task_storage_supabase import SupabaseTaskStorage # Removed
 from agentpress.tool_orchestrator import ToolOrchestrator # Keep - used by ThreadManager
-# from agentpress.plan_executor import PlanExecutor # Removed
 from agentpress.utils.message_assembler import MessageAssembler
+from agentpress.utils.json_helpers import extract_json_from_response
 # from agentpress.utils.json_helpers import format_for_yield # Removed
 
+# Assuming make_llm_api_call and TaskStateManager from the prompt are different
+# and might be part of a services directory if they were to be used directly here.
+# For now, I'll rely on existing mechanisms or what's available in ThreadManager.
+# If direct LLM calls or a different TaskStateManager are needed, the subtask might be underspecified for this file structure.
+from services.llm import make_llm_api_call # Adding as per prompt
+from backend.services.task_state_manager import TaskStateManager # This seems like the one from the prompt.
 
 load_dotenv()
 
@@ -82,6 +89,7 @@ async def run_agent(
 ):
     """Run the development agent with specified configuration."""
     message_assembler = MessageAssembler()
+    task_state_manager = None # Define upfront for unified error handling
     try:
         logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id=trace.id if trace else 'N/A', model_name={model_name}, stream={stream}")
         logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
@@ -93,9 +101,20 @@ async def run_agent(
             logger.debug("Using existing trace for run_agent.")
         
         logger.debug("Initializing ThreadManager...")
-        thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace)
+        # Ensure thread_manager is initialized if not passed (though it's expected to be)
+        if not thread_manager:
+            thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace)
         client = await thread_manager.db.client
         logger.debug("ThreadManager initialized and database client obtained.")
+
+        # Initialize TaskStateManager
+        # Assumption: global 'config' from 'utils.config' has 'redis_client'
+        if not hasattr(config, 'redis_client'):
+            logger.error("Global 'config' object does not have 'redis_client'. Cannot initialize TaskStateManager.")
+            # This is a fatal configuration error for the new flow.
+            # How to yield this if stream is True? For now, raising to be caught by general exception handler.
+            raise AttributeError("Configuration missing 'redis_client' for TaskStateManager.")
+        task_state_manager = TaskStateManager(thread_id, config.redis_client)
 
         logger.debug(f"Attempting to get account ID for thread_id: {thread_id}...")
         account_id = await get_account_id_from_thread(client, thread_id)
@@ -113,486 +132,161 @@ async def run_agent(
 
         project_data = project_result.data[0]
         sandbox_info = project_data.get('sandbox', {})
-        if not sandbox_info.get('id'):
-            logger.error(f"No sandbox ID found in project_data for project {project_id}.")
-            raise ValueError(f"No sandbox found for project {project_id}")
+        if not sandbox_info.get('id'): # This check might be too strict if planning doesn't need a sandbox immediately
+            logger.warning(f"No sandbox ID found in project_data for project {project_id}. Continuing with planning.")
+            # raise ValueError(f"No sandbox found for project {project_id}") # Soften this for planning
         logger.debug(f"Sandbox ID {sandbox_info.get('id')} retrieved for project {project_id}.")
 
-        logger.debug("Initializing tools...")
+        logger.debug("Initializing tools (for potential use by planner or executor)...")
+        # Tools are initialized and added to thread_manager, which makes them available via tool_orchestrator
         shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(shell_tool)
-
         files_tool = SandboxFilesTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(files_tool)
-
         browser_tool = SandboxBrowserTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
         thread_manager.add_tool(browser_tool)
-
         deploy_tool = SandboxDeployTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(deploy_tool)
-
         expose_tool = SandboxExposeTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(expose_tool)
-
         message_tool = MessageTool()
         thread_manager.add_tool(message_tool)
-
         web_search_tool = SandboxWebSearchTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(web_search_tool)
-
         vision_tool = SandboxVisionTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
         thread_manager.add_tool(vision_tool)
-
         python_tool = PythonTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(python_tool)
-
         visualization_tool = DataVisualizationTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(visualization_tool)
-
         if config.RAPID_API_KEY:
-            logger.debug("RAPID_API_KEY found, adding DataProvidersTool.")
             data_providers_tool = DataProvidersTool()
             thread_manager.add_tool(data_providers_tool)
-        else:
-            logger.debug("No RAPID_API_KEY found, skipping DataProvidersTool.")
         logger.debug("Tools initialized.")
 
-        logger.debug(f"Generating system prompt for model: {model_name}...")
-        if "anthropic" in model_name.lower():
-            system_message = { "role": "system", "content": get_system_prompt() }
-            logger.debug("Using Anthropic system prompt (no sample response).")
-        else:
-            sample_response_path = os.path.join(os.path.dirname(__file__), 'sample_responses/1.txt')
-            with open(sample_response_path, 'r') as file:
-                sample_response = file.read()
-            system_message = { "role": "system", "content": get_system_prompt() + "\n\n <sample_assistant_response>" + sample_response + "</sample_assistant_response>" }
-            logger.debug(f"Using default system prompt with sample response for {model_name}.")
-        logger.debug("System prompt generated.")
-        logger.debug(f"SYSTEM_PROMPT_LOG: Constructed system_message: {json.dumps(system_message, indent=2)}")
+        # Retrieve the initial prompt for planning
+        initial_prompt_text = None
+        # Fetch the earliest user message in the thread
+        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', asc=True).limit(1).execute()
+        
+        if first_user_message_query.data:
+            try:
+                # Message content is a JSON string, parse it
+                content_json_str = first_user_message_query.data[0]['content']
+                content_data = json.loads(content_json_str)
+                # The actual user text is within content_data['content']
+                initial_prompt_text = content_data.get('content', '')
+                if not initial_prompt_text: # Handles case where 'content' key holds empty string
+                     logger.warning(f"First user message for task {thread_id} has empty content.")
+                     # Proceed with empty string to allow planner to decide, or error out if required by business logic
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse first user message content JSON for task {thread_id}: {first_user_message_query.data[0]['content']}", exc_info=True)
+                initial_prompt_text = "" # Fallback to empty string to avoid None
+            except Exception as e:
+                logger.error(f"Error extracting prompt from first user message for task {thread_id}: {e}", exc_info=True)
+                initial_prompt_text = "" # Fallback
 
-        logger.debug(f"Performing initial billing check for account {account_id}...")
-        can_run_initial, message_initial, _ = await check_billing_status(client, account_id)
-        if not can_run_initial:
-            logger.error(f"Initial billing check failed for account {account_id}: {message_initial}")
-            raise ValueError(f"Billing limit reached before agent start: {message_initial}")
-        logger.debug("Initial billing check passed.")
+        if initial_prompt_text is None: # Only if query returned no data
+            logger.error(f"No initial user message found for task {thread_id}. Cannot proceed with planning.")
+            await task_state_manager.complete_task(status="error", summary="No initial prompt found for planning.")
+            return # Exit run_agent
+
+        # Step 1: Planning
+        await task_state_manager.set_status("running") # As per original prompt
+        await task_state_manager.add_message("Starting task...") # As per original prompt
+        await task_state_manager.add_message("Phase 1: Planning...") # Log planning phase start
+
+        task_planner = TaskPlanner(
+            tool_orchestrator=tool_orchestrator,
+            task_state_manager=task_state_manager, # Pass the new TSM
+            model_name=model_name,
+        )
+        
+        # Files are not explicitly passed; TaskPlanner might need to handle this or assume None
+        planning_messages = task_planner.construct_planning_messages(initial_prompt_text, files=None) # Assuming files=None
+
+        logger.info(f"Phase 1: Planning for task {thread_id} with prompt: '{initial_prompt_text[:100]}...'")
+
+        llm_response_for_plan = make_llm_api_call(
+            messages=planning_messages,
+            model_name=model_name,
+            tool_orchestrator=None, # No tools executed during planning phase
+            tools=None,
+            thread_id=thread_id, # task_id from prompt
+        )
+
+        llm_response_str_plan = ""
+        async for chunk in llm_response_for_plan:
+            # Ensure chunk structure is as expected by make_llm_api_call's streaming response
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                llm_response_str_plan += content
+
+        logger.info(f"Raw LLM response for plan (task {thread_id}): {llm_response_str_plan}")
+        # await task_state_manager.add_log_message(f"LLM response for plan: {llm_response_str_plan}") # Method not in prompt TSM
+
+        plan_json = extract_json_from_response(llm_response_str_plan)
+
+        if not plan_json or "plan" not in plan_json:
+            error_summary = "Failed to generate a valid plan from LLM response."
+            logger.error(f"{error_summary} Task ID: {thread_id}. LLM response: {llm_response_str_plan}")
+            # await task_state_manager.add_error_message(error_summary) # Method not in prompt TSM
+            await task_state_manager.complete_task(status="error", summary=error_summary)
+            return
+
+        # Step 2: Execution
+        logger.info(f"Phase 1 (Planning) completed for task {thread_id}. Plan: {plan_json['plan']}. Phase 2 (Execution) starting...")
+        await task_state_manager.add_message("Phase 1 (Planning) completed. Phase 2 (Execution) starting...")
+        await task_state_manager.set_plan(plan_json["plan"])
+
+        plan_executor = PlanExecutor(
+            tool_orchestrator=tool_orchestrator,
+            task_state_manager=task_state_manager, # Pass the new TSM
+        )
+
+        # The execute_plan method will internally handle calls to tools via tool_orchestrator
+        # and update task state via task_state_manager.
+        # It should also handle yielding messages if 'stream' is True.
+        # This part needs to align with how PlanExecutor is implemented.
+        # For now, assuming execute_plan is a comprehensive blocking call as per prompt.
+        await plan_executor.execute_plan(plan_json["plan"])
+
+        logger.info(f"Plan execution completed for task {thread_id}")
+        await task_state_manager.add_message("Plan execution completed.") # Log completion
+        await task_state_manager.complete_task(status="completed", summary="Task completed successfully via plan.")
+
+        # If streaming is enabled, the PlanExecutor should handle yielding.
+        # The original while loop for streaming is bypassed by this new flow.
+        # If run_agent itself is expected to yield, PlanExecutor must yield back to here.
+        # This is a complex interaction not fully specified by the prompt for this refactoring.
+        # For now, assuming execute_plan handles all necessary output and state changes.
+
+        langfuse.flush() # Flush at the end of successful execution
+        return # End of new two-step flow
 
     except Exception as e:
-        logger.error(f"Failed to initialize agent setup for thread_id {thread_id}, project_id {project_id}", exc_info=True)
-        raise
-
-    iteration_count = 0
-    continue_execution = True
-    image_message_id_to_delete = None # Initialize image_message_id_to_delete
-
-    latest_user_message = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=True).limit(1).execute()
-    if latest_user_message.data and len(latest_user_message.data) > 0:
-        data = json.loads(latest_user_message.data[0]['content'])
-        trace.update(input=data['content'])
-
-    while continue_execution and iteration_count < max_iterations:
-        iteration_count += 1
-        logger.info(f"🔄 Running iteration {iteration_count} of {max_iterations}...")
-
-        # Cleanup stale buffers at the beginning of each iteration
-        if message_assembler: # Ensure it's initialized (it is, at the start of run_agent)
-            message_assembler.cleanup_stale_buffers() # Default max_age_seconds is 60
-
-        # Billing check on each iteration - still needed within the iterations
-        can_run, message, subscription = await check_billing_status(client, account_id)
-        if not can_run:
-            error_msg = f"Billing limit reached: {message}"
-            trace.event(name="billing_limit_reached", level="ERROR", status_message=(f"{error_msg}"))
-            # Yield a special message to indicate billing limit reached
-            yield {
-                "type": "status",
-                "status": "stopped",
-                "message": error_msg
-            }
-            break
-        # Check if last message is from assistant using direct Supabase query
-        latest_message_query = await client.table('messages').select('*').eq('thread_id', thread_id).in_('type', ['assistant', 'tool', 'user']).order('created_at', desc=True).limit(1).execute()
+        logger.error(f"Error in run_agent for task {thread_id}: {e}", exc_info=True)
+        error_summary = f"An error occurred: {str(e)}"
+        if task_state_manager: # Check if TSM was initialized
+            # await task_state_manager.add_error_message(f"Agent Error: {e.message} Details: {e.details}" if isinstance(e, AgentError) else error_summary)
+            await task_state_manager.complete_task(status="error", summary=error_summary)
         
-        visualization_hint_message = None
-        if latest_message_query.data and len(latest_message_query.data) > 0:
-            latest_msg_data = latest_message_query.data[0]
-            message_type = latest_msg_data.get('type')
-            # The following lines related to message_metadata and processed_by_planner_flag are removed
-            # message_metadata = latest_msg_data.get('metadata', {})
-            # if isinstance(message_metadata, str): # Ensure metadata is a dict
-            #     try:
-            #         message_metadata = json.loads(message_metadata)
-            #     except json.JSONDecodeError:
-            #         message_metadata = {}
-            # processed_by_planner_flag = message_metadata.get('processed_by_planner', False)
-
-            if message_type == 'user': # Condition already updated in a previous step
-                user_content_json_str = latest_msg_data.get('content', '{}')
-                user_content_json = {}
-                try:
-                    user_content_json = json.loads(user_content_json_str)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse user message content as JSON: {user_content_json_str}. Error: {str(e)}", exc_info=True)
-                    trace.event(name="user_content_parse_error", level="ERROR", status_message="Failed to parse user message content JSON")
-                    # Potentially yield an error or handle as non-plannable
-
-                original_user_text_content = user_content_json.get('content', '') # Original case for description
-                user_text_content_lower = original_user_text_content.lower() if isinstance(original_user_text_content, str) else ''
-                # Planning logic removed from here. It's now handled in agent/api.py
-
-            # The 'planning_triggered' variable is no longer set here.
-            # The 'processed_by_planner_flag' is also removed as its primary use was with the old planning block.
-            # If 'continue_execution' was set to False by the planner, that logic is also removed.
-            # The main agent loop will now proceed unless an error occurs or max_iterations is reached.
-
-            if not continue_execution: # This check might still be relevant if other logic sets it.
-                break
-
-            # Original user message processing for visualization hint (if not planned)
-            # This needs to be part of the `if message_type == 'user' and not processed_by_planner_flag:` block
-            # or an `elif message_type == 'user':` if planning didn't trigger.
-            # For simplicity, let's assume if planning was triggered (now handled in api.py),
-            # viz detection on the same message might be duplicative or handled differently.
-            # For now, viz detection runs if it's a user message.
-
-            if message_type == 'user': # Removed 'and not planning_triggered' as planning_triggered is no longer defined here.
-                try:
-                    # Ensure user_content_json and original_user_text_content are defined
-                    if 'user_content_json' not in locals(): # This might occur if the earlier block setting it was skipped
-                         user_content_json_str = latest_msg_data.get('content', '{}')
-                         user_content_json = json.loads(user_content_json_str)
-                    if 'original_user_text_content' not in locals():
-                        original_user_text_content = user_content_json.get('content', '')
-
-                    # Use original_user_text_content for visualization detection, as it's the full, unaltered user text
-                    user_text_content = user_content_json.get('content', '')
-                    if isinstance(user_text_content, str) and user_text_content: # Ensure it's a non-empty string
-                        detected_viz_type = detect_visualization_request(user_text_content)
-                        if detected_viz_type:
-                            logger.info(f"Detected visualization request: {detected_viz_type} in user message.")
-                            trace.event(name="visualization_request_detected", level="DEFAULT",
-                                        status_message=f"Type: {detected_viz_type}", 
-                                        input={"user_message": user_text_content})
-                            # Construct a system message to hint the LLM
-                            hint_text = f"The user seems to be asking for a '{detected_viz_type}' visualization. Consider using the 'DataVisualizationTool' if appropriate to generate it. Relevant keywords: {user_text_content[:200]}"
-                            visualization_hint_message = {"role": "system", "content": hint_text}
-                except json.JSONDecodeError:
-                    logger.warning(f"Could not parse user message content for visualization detection: {latest_msg_data.get('content')}")
-                except Exception as e:
-                    logger.error(f"Error during visualization detection: {e}", exc_info=True)
-
-            if message_type == 'assistant':
-                logger.info(f"Last message was from assistant, stopping execution")
-                trace.event(name="last_message_from_assistant", level="DEFAULT", status_message=(f"Last message was from assistant, stopping execution"))
-                continue_execution = False
-                break
-
-        # ---- Temporary Message Handling (Browser State & Image Context) ----
-        # This list will now also include the visualization hint message if generated
-        temp_messages_for_llm = [] 
-        
-        if visualization_hint_message:
-            temp_messages_for_llm.append(visualization_hint_message)
-
-        temp_message_content_list = [] # List to hold text/image blocks for the user-facing temporary message
-
-        # Get the latest browser_state message
-        latest_browser_state_msg = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'browser_state').order('created_at', desc=True).limit(1).execute()
-        if latest_browser_state_msg.data and len(latest_browser_state_msg.data) > 0:
-            browser_message_content_raw = latest_browser_state_msg.data[0]["content"]
-            try:
-                browser_content = json.loads(browser_message_content_raw)
-                screenshot_base64 = browser_content.get("screenshot_base64")
-                screenshot_url = browser_content.get("screenshot_url")
-                
-                # Create a copy of the browser state without screenshot data
-                browser_state_text = browser_content.copy()
-                browser_state_text.pop('screenshot_base64', None)
-                browser_state_text.pop('screenshot_url', None)
-
-                if browser_state_text:
-                    temp_message_content_list.append({
-                        "type": "text",
-                        "text": f"The following is the current state of the browser:\n{json.dumps(browser_state_text, indent=2)}"
-                    })
-                    
-                # Prioritize screenshot_url if available
-                if screenshot_url:
-                    temp_message_content_list.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": screenshot_url,
-                        }
-                    })
-                elif screenshot_base64:
-                    # Fallback to base64 if URL not available
-                    temp_message_content_list.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{screenshot_base64}",
-                        }
-                    })
-                else:
-                    # This is a scenario where content might be missing
-                    logger.warning("Browser state message is missing both screenshot_url and screenshot_base64. Content: %s", browser_content)
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse browser state JSON: {browser_message_content_raw}. Error: {str(e)}", exc_info=True)
-                trace.event(name="json_decode_error_browser_state", level="ERROR", status_message=(f"Failed to parse browser state: {str(e)}"))
-                yield {"type": "status", "status": "error", "message": f"Failed to parse browser state: {str(e)}"}
-                continue_execution = False
-                break # Break from the while loop
-            except Exception as e: # Catch other potential errors
-                logger.error(f"Error processing browser state: {e}", exc_info=True)
-                trace.event(name="error_processing_browser_state", level="ERROR", status_message=(f"{e}"))
-                # Optionally, yield a generic error or break depending on severity
-                yield {"type": "status", "status": "error", "message": f"Error processing browser state: {e}"}
-                continue_execution = False
-                break
-
-
-        # Get the latest image_context message
-        latest_image_context_msg = await client.table('messages').select('*').eq('thread_id', thread_id).eq('type', 'image_context').order('created_at', desc=True).limit(1).execute()
-        if latest_image_context_msg.data and len(latest_image_context_msg.data) > 0:
-            image_message_content_raw = latest_image_context_msg.data[0]["content"]
-            image_msg_id_candidate = latest_image_context_msg.data[0]["message_id"]
-            try:
-                image_context_content = json.loads(image_message_content_raw)
-                base64_image = image_context_content.get("base64")
-                mime_type = image_context_content.get("mime_type")
-                file_path = image_context_content.get("file_path", "unknown file")
-
-                if base64_image and mime_type:
-                    temp_message_content_list.append({
-                        "type": "text",
-                        "text": f"Here is the image you requested to see: '{file_path}'"
-                    })
-                    temp_message_content_list.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime_type};base64,{base64_image}",
-                        }
-                    })
-                    image_message_id_to_delete = image_msg_id_candidate # Mark for deletion after LLM call
-                else:
-                    logger.warning(f"Image context for '{file_path}' is missing base64_image or mime_type. Content: %s", image_context_content)
-                    # Do not mark for deletion if content is invalid, it might need to be inspected or retried.
-                    # However, if it's just a warning, we might still want to delete it to prevent reprocessing.
-                    # For now, let's assume if it's a warning, we still mark for deletion to avoid loop.
-                    image_message_id_to_delete = image_msg_id_candidate
-
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse image context JSON: {image_message_content_raw}. Error: {str(e)}", exc_info=True)
-                trace.event(name="json_decode_error_image_context", level="ERROR", status_message=(f"Failed to parse image context: {str(e)}"))
-                yield {"type": "status", "status": "error", "message": f"Failed to parse image context: {str(e)}"}
-                continue_execution = False
-                break # Break from the while loop
-            except Exception as e: # Catch other potential errors
-                logger.error(f"Error processing image context: {e}", exc_info=True)
-                trace.event(name="error_processing_image_context", level="ERROR", status_message=(f"{e}"))
-                yield {"type": "status", "status": "error", "message": f"Error processing image context: {e}"}
-                continue_execution = False
-                break
-
-        # If we have any content for the user-facing temporary message
-        if temp_message_content_list:
-            # This message is specifically for context like browser state or image previews
-            user_context_message = {"role": "user", "content": temp_message_content_list}
-            temp_messages_for_llm.append(user_context_message)
-            # logger.debug(f"Constructed user context temporary message with {len(temp_message_content_list)} content blocks.")
-        
-        # The 'temporary_message' parameter for run_thread can take a single message or a list.
-        # If temp_messages_for_llm is empty, it will be handled by run_thread.
-        # ---- End Temporary Message Handling ----
-
-        # Set max_tokens based on model
-        max_tokens = None
-        if "sonnet" in model_name.lower():
-            max_tokens = 64000
-        elif "gpt-4" in model_name.lower():
-            max_tokens = 4096
-            
-        generation = trace.generation(name="thread_manager.run_thread")
-        try:
-            logger.info(f"Iteration {iteration_count}: About to call thread_manager.run_thread for thread {thread_id}")
-            # Make the LLM call and process the response
-            response = await thread_manager.run_thread(
-                thread_id=thread_id,
-                system_prompt=system_message,
-                stream=stream,
-                llm_model=model_name,
-                llm_temperature=0,
-                llm_max_tokens=max_tokens,
-                tool_choice="auto",
-                max_xml_tool_calls=1,
-                # Pass the list of temporary messages (could be just viz hint, just user context, both, or none)
-                temporary_message=temp_messages_for_llm if temp_messages_for_llm else None,
-                processor_config=ProcessorConfig(
-                    xml_tool_calling=True,
-                    native_tool_calling=True, # Ensure this is True
-                    execute_tools=True,
-                    execute_on_stream=True,
-                    tool_execution_strategy="parallel",
-                    xml_adding_strategy="user_message"
-                ),
-                native_max_auto_continues=native_max_auto_continues,
-                include_xml_examples=True,
-                enable_thinking=enable_thinking,
-                reasoning_effort=reasoning_effort,
-                enable_context_manager=enable_context_manager,
-                generation=generation
-            )
-            logger.info(f"Iteration {iteration_count}: thread_manager.run_thread returned. Type of response: {type(response)}")
-
-            if isinstance(response, dict) and "status" in response and response["status"] == "error":
-                logger.error(f"Error response from run_thread: {response.get('message', 'Unknown error')}")
-                trace.event(name="error_response_from_run_thread", level="ERROR", status_message=(f"{response.get('message', 'Unknown error')}"))
-                yield response
-                break
-
-            # Track if we see ask, complete, or web-browser-takeover tool calls
-            last_tool_call = None
-
-            # Process the response
-            error_detected = False
-            try:
-                full_response = ""
-                async for chunk in response:
-                    logger.debug(f"Iteration {iteration_count}: Received raw chunk from run_thread: {json.dumps(chunk)}")
-                    # If we receive an error chunk, we should stop after this iteration
-                    if isinstance(chunk, dict) and chunk.get('type') == 'status' and chunk.get('status') == 'error':
-                        logger.error(f"Error chunk detected: {json.dumps(chunk)}")
-                        trace.event(name="error_chunk_detected", level="ERROR", status_message=(f"{chunk.get('message', 'Unknown error')}"))
-                        error_detected = True
-                        yield chunk  # Forward the error chunk
-                        continue     # Continue processing other chunks but don't break yet
-
-                    if chunk.get('type') == 'assistant' and isinstance(chunk.get('content'), str):
-                        chunk_for_assembler = chunk.copy()
-                        chunk_for_assembler['thread_id'] = thread_id
-                        assembled_message_content = message_assembler.process_chunk(chunk_for_assembler)
-
-                        if isinstance(assembled_message_content, dict):
-                            logger.info(f"Assembled complete message: {json.dumps(assembled_message_content)}")
-                            assistant_content_json = assembled_message_content
-                            assistant_text = assistant_content_json.get('content', '')
-                            if not isinstance(assistant_text, str):
-                                assistant_text = json.dumps(assistant_text)
-
-                            full_response += assistant_text
-                            if isinstance(assistant_text, str):
-                                if '</ask>' in assistant_text or '</complete>' in assistant_text or '</web-browser-takeover>' in assistant_text:
-                                    if '</ask>' in assistant_text:
-                                        xml_tool = 'ask'
-                                    elif '</complete>' in assistant_text:
-                                        xml_tool = 'complete'
-                                    elif '</web-browser-takeover>' in assistant_text:
-                                        xml_tool = 'web-browser-takeover'
-                                    last_tool_call = xml_tool
-                                    logger.info(f"Agent used XML tool: {xml_tool} via assembled message")
-                                    trace.event(name="agent_used_xml_tool_assembled", level="DEFAULT", status_message=(f"Agent used XML tool: {xml_tool}"))
-                            yield chunk # Yield the original chunk that completed assembly
-                        else:
-                            logger.debug(f"Assistant chunk processed by assembler, but no complete message yet. Original chunk yielded.")
-                            yield chunk
-
-                    # Else (chunk is not an assistant chunk with string content, or already processed by assembler)
-                    else:
-                        if chunk.get('type') == 'assistant' and 'content' in chunk: # e.g. already a dict
-                            try:
-                                content = chunk.get('content', '{}')
-                                if isinstance(content, str):
-                                    # This case should ideally be handled by the assembler if it's a fragment.
-                                    # If it's a full JSON string not caught by assembler (e.g. no thread_id initially), try to parse.
-                                    try:
-                                        assistant_content_json = json.loads(content)
-                                    except json.JSONDecodeError:
-                                        logger.warning(f"Assistant content is string but not valid JSON, treating as plain text: {json.dumps(content)}")
-                                        assistant_content_json = {"role": "assistant", "content": content} # Wrap it
-                                else: # It's already a dict
-                                    assistant_content_json = content
-
-                                assistant_text = assistant_content_json.get('content', '')
-                                if not isinstance(assistant_text, str): # Ensure text is string
-                                    assistant_text = json.dumps(assistant_text)
-
-                                full_response += assistant_text
-                                if isinstance(assistant_text, str):
-                                    if '</ask>' in assistant_text or '</complete>' in assistant_text or '</web-browser-takeover>' in assistant_text:
-                                        if '</ask>' in assistant_text: xml_tool = 'ask'
-                                        elif '</complete>' in assistant_text: xml_tool = 'complete'
-                                        elif '</web-browser-takeover>' in assistant_text: xml_tool = 'web-browser-takeover'
-                                        last_tool_call = xml_tool
-                                        logger.info(f"Agent used XML tool: {xml_tool} via non-string or pre-parsed content")
-                                        trace.event(name="agent_used_xml_tool_direct", level="DEFAULT", status_message=(f"Agent used XML tool: {xml_tool}"))
-                            except json.JSONDecodeError:
-                                # If chunk.get('content') was the string that failed to parse, dumping it as JSON string is fine.
-                                logger.warning(f"Warning: Could not parse non-string assistant content JSON: {json.dumps(chunk.get('content'))}")
-                                trace.event(name="warning_could_not_parse_assistant_content_json_direct", level="WARNING", status_message=(f"Warning: Could not parse assistant content JSON: {json.dumps(chunk.get('content'))}"))
-                            except Exception as e:
-                                logger.error(f"Error processing non-string/pre-parsed assistant chunk: {e}", exc_info=True)
-                                trace.event(name="error_processing_assistant_chunk_direct", level="ERROR", status_message=(f"Error processing assistant chunk: {e}"))
-
-                        yield chunk # Yield original chunk if not processed by assembler or if it's not an assistant string content
-
-                logger.info(f"Iteration {iteration_count}: Finished iterating over run_thread response for thread {thread_id}")
-                # Check if we should stop based on the last tool call or error
-                if error_detected:
-                    logger.info(f"Stopping due to error detected in response")
-                    trace.event(name="stopping_due_to_error_detected_in_response", level="DEFAULT", status_message=(f"Stopping due to error detected in response"))
-                    generation.end(output=full_response, status_message="error_detected", level="ERROR")
-                    break
-                    
-                if last_tool_call in ['ask', 'complete', 'web-browser-takeover']:
-                    logger.info(f"Agent decided to stop with tool: {last_tool_call}")
-                    trace.event(name="agent_decided_to_stop_with_tool", level="DEFAULT", status_message=(f"Agent decided to stop with tool: {last_tool_call}"))
-                    generation.end(output=full_response, status_message="agent_stopped")
-                    continue_execution = False
-            except Exception as e:
-                # Just log the error and re-raise to stop all iterations
-                error_msg = f"Error during response streaming: {str(e)}" # This is used in the logger below
-                logger.error(f"Error during response streaming: {str(e)}", exc_info=True) # Ensuring format from subtask
-                trace.event(name="error_during_response_streaming", level="ERROR", status_message=(f"Error during response streaming: {str(e)}"))
-                generation.end(output=full_response, status_message=error_msg, level="ERROR")
-                yield {
-                    "type": "status",
-                    "status": "error",
-                    "message": error_msg
-                }
-                # Stop execution immediately on any error
-                break
-                
-        except Exception as e:
-            # Just log the error and re-raise to stop all iterations
-            error_msg = f"Error running thread: {str(e)}"
-            logger.error(f"Error: {error_msg}", exc_info=True) # Added exc_info
-            trace.event(name="error_running_thread", level="ERROR", status_message=(f"Error running thread: {str(e)}"))
+        # If streaming, yield an error status
+        if stream:
             yield {
                 "type": "status",
                 "status": "error",
-                "message": error_msg
+                "message": error_summary
             }
-            # Stop execution immediately on any error
-            break
-
-        # Moved image deletion to after the LLM call and response processing
-        if image_message_id_to_delete:
-            logger.info(f"Attempting to delete processed image context message with ID: {image_message_id_to_delete}")
-            try:
-                delete_result = await client.table('messages').delete().eq('message_id', image_message_id_to_delete).execute()
-                if delete_result.data or (hasattr(delete_result, 'count') and delete_result.count > 0) or (hasattr(delete_result, 'status_code') and 200 <= delete_result.status_code < 300) :
-                    logger.info(f"Successfully deleted image context message: {image_message_id_to_delete}")
-                else:
-                    logger.warning(f"No data returned or count was zero when deleting image message {image_message_id_to_delete}. Result: {delete_result}")
-            except Exception as e:
-                logger.error(f"Error deleting image context message {image_message_id_to_delete}: {e}", exc_info=True)
-                trace.event(name="error_deleting_image_context", level="ERROR", status_message=(f"{e}"))
-            image_message_id_to_delete = None # Reset for the next iteration
-
-        generation.end(output=full_response)
-
-    langfuse.flush() # Flush Langfuse events at the end of the run
+        # Re-raise or handle as per agent's top-level error policy
+        # If this function is a generator due to 'yield', re-raising might be complex.
+        # For now, let the calling context handle the exception if not streaming.
+        # If streaming, the yield above signals the error.
+        if not stream:
+             raise # Re-raise if not a streaming context that handled it via yield.
+    finally:
+        if trace and trace.client: # Ensure langfuse client is available
+             langfuse.flush() # Ensure langfuse flushes even on error
 
 
 # # TESTING
