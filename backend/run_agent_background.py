@@ -401,43 +401,90 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
                             except Exception as e_path:
                                 logger.warning(f"Could not determine sandbox PATH: {e_path}")
 
-                            for exe_path in python_executables:
-                                logger.info(f"Probing for Python interpreter at: {exe_path}")
-                                test_cmd = f"{exe_path} -c \"print('Python probe success')\""
-                                probe_req = SessionExecuteRequest(command=test_cmd, var_async=False, cwd="/workspace")
-                                try:
-                                    if use_daytona():
-                                        response_probe = await sandbox_instance.process.execute_session_command(cleanup_session_id, probe_req, timeout=10)
-                                    else:
-                                        response_probe = sandbox_instance['process']['execute_session_command'](cleanup_session_id, probe_req)
+                            # Attempt 1: Use 'command -v' to find python3 or python
+                            find_python_cmd = "sh -c 'command -v python3 || command -v python'"
+                            logger.info(f"Attempting to find Python using 'command -v'...")
+                            cmd_v_req = SessionExecuteRequest(command=find_python_cmd, var_async=False, cwd="/workspace")
+                            response_cmd_v = None
+                            try:
+                                if use_daytona():
+                                    response_cmd_v = await sandbox_instance.process.execute_session_command(cleanup_session_id, cmd_v_req, timeout=10)
+                                else:
+                                    response_cmd_v = sandbox_instance['process']['execute_session_command'](cleanup_session_id, cmd_v_req)
 
-                                    if response_probe['exit_code'] == 0:
-                                        found_python_executable = exe_path
-                                        logger.info(f"Found working Python interpreter: {found_python_executable}")
-                                        # Optionally, log probe success output
-                                        probe_logs_output = "Could not retrieve probe logs."
-                                        if use_daytona():
-                                            probe_logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_probe['cmd_id'])
-                                            probe_logs_output = probe_logs.stdout if probe_logs and probe_logs.stdout else (probe_logs.stderr if probe_logs and probe_logs.stderr else "No output from probe")
-                                        else:
-                                            probe_logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_probe['cmd_id'])
-                                            probe_logs_output = probe_logs['stdout'] if probe_logs and probe_logs['stdout'] else (probe_logs['stderr'] if probe_logs and probe_logs['stderr'] else "No output from probe")
-                                        logger.debug(f"Probe success output for {exe_path}: {probe_logs_output.strip()}")
-                                        break
+                                if response_cmd_v and response_cmd_v.get('exit_code') == 0:
+                                    cmd_v_logs_output = ""
+                                    if use_daytona():
+                                        cmd_v_logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_cmd_v['cmd_id'])
+                                        cmd_v_logs_output = cmd_v_logs.stdout if cmd_v_logs and cmd_v_logs.stdout else ""
                                     else:
-                                        probe_stderr = "N/A"
-                                        try: # Try to get stderr for failed probe
+                                        cmd_v_logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_cmd_v['cmd_id'])
+                                        cmd_v_logs_output = cmd_v_logs.get('stdout', "")
+
+                                    python_path_from_cmd_v = cmd_v_logs_output.strip()
+                                    if python_path_from_cmd_v: # Check if not empty
+                                        logger.info(f"'command -v' found Python at: {python_path_from_cmd_v}")
+                                        # Verify this path works with a simple command
+                                        verify_cmd = f"{python_path_from_cmd_v} -c \"print('Python probe success via command -v')\""
+                                        verify_req = SessionExecuteRequest(command=verify_cmd, var_async=False, cwd="/workspace")
+                                        response_verify = None
+                                        if use_daytona():
+                                            response_verify = await sandbox_instance.process.execute_session_command(cleanup_session_id, verify_req, timeout=10)
+                                        else:
+                                            response_verify = sandbox_instance['process']['execute_session_command'](cleanup_session_id, verify_req)
+
+                                        if response_verify and response_verify.get('exit_code') == 0:
+                                            found_python_executable = python_path_from_cmd_v
+                                            logger.info(f"Successfully verified Python at {found_python_executable} (found by 'command -v').")
+                                        else:
+                                            logger.warning(f"Python path '{python_path_from_cmd_v}' from 'command -v' failed verification. Exit code: {response_verify.get('exit_code') if response_verify else 'N/A'}.")
+                                    else:
+                                        logger.info("'command -v' did not return a path.")
+                                else:
+                                    logger.info(f"'command -v' failed or returned non-zero exit. Exit code: {response_cmd_v.get('exit_code') if response_cmd_v else 'N/A'}")
+                            except Exception as e_cmd_v:
+                                logger.warning(f"Exception during 'command -v' Python probe: {e_cmd_v}")
+
+                            # Attempt 2: Fallback to predefined list if 'command -v' failed
+                            if not found_python_executable:
+                                logger.info("Python not found via 'command -v', falling back to predefined list.")
+                                for exe_path in python_executables:
+                                    logger.info(f"Probing for Python interpreter at: {exe_path}")
+                                    test_cmd = f"{exe_path} -c \"print('Python probe success')\""
+                                    probe_req = SessionExecuteRequest(command=test_cmd, var_async=False, cwd="/workspace")
+                                    try:
+                                        if use_daytona():
+                                            response_probe = await sandbox_instance.process.execute_session_command(cleanup_session_id, probe_req, timeout=10)
+                                        else:
+                                            response_probe = sandbox_instance['process']['execute_session_command'](cleanup_session_id, probe_req)
+
+                                        if response_probe['exit_code'] == 0:
+                                            found_python_executable = exe_path
+                                            logger.info(f"Found working Python interpreter: {found_python_executable}")
+                                            # Optionally, log probe success output
+                                            probe_logs_output = "Could not retrieve probe logs."
                                             if use_daytona():
-                                                probe_logs_fail = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_probe['cmd_id'])
-                                                probe_stderr = probe_logs_fail.stderr if probe_logs_fail and probe_logs_fail.stderr else "No stderr"
+                                                probe_logs = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_probe['cmd_id'])
+                                                probe_logs_output = probe_logs.stdout if probe_logs and probe_logs.stdout else (probe_logs.stderr if probe_logs and probe_logs.stderr else "No output from probe")
                                             else:
-                                                probe_logs_fail = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_probe['cmd_id'])
-                                                probe_stderr = probe_logs_fail['stderr'] if probe_logs_fail and probe_logs_fail['stderr'] else "No stderr"
-                                        except Exception:
-                                            pass # Ignore if log retrieval fails for failed probe
-                                        logger.warning(f"Probe failed for {exe_path}. Exit code: {response_probe['exit_code']}. Stderr: {probe_stderr.strip()}")
-                                except Exception as e_probe:
-                                    logger.warning(f"Exception during probe for {exe_path}: {e_probe}")
+                                                probe_logs = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_probe['cmd_id'])
+                                                probe_logs_output = probe_logs['stdout'] if probe_logs and probe_logs['stdout'] else (probe_logs['stderr'] if probe_logs and probe_logs['stderr'] else "No output from probe")
+                                            logger.debug(f"Probe success output for {exe_path}: {probe_logs_output.strip()}")
+                                            break
+                                        else:
+                                            probe_stderr = "N/A"
+                                            try: # Try to get stderr for failed probe
+                                                if use_daytona():
+                                                    probe_logs_fail = await sandbox_instance.process.get_session_command_logs(cleanup_session_id, response_probe['cmd_id'])
+                                                    probe_stderr = probe_logs_fail.stderr if probe_logs_fail and probe_logs_fail.stderr else "No stderr"
+                                                else:
+                                                    probe_logs_fail = sandbox_instance['process']['get_session_command_logs'](cleanup_session_id, response_probe['cmd_id'])
+                                                    probe_stderr = probe_logs_fail['stderr'] if probe_logs_fail and probe_logs_fail['stderr'] else "No stderr"
+                                            except Exception:
+                                                pass # Ignore if log retrieval fails for failed probe
+                                            logger.warning(f"Probe failed for {exe_path}. Exit code: {response_probe['exit_code']}. Stderr: {probe_stderr.strip()}")
+                                    except Exception as e_probe:
+                                        logger.warning(f"Exception during probe for {exe_path}: {e_probe}")
 
                             if found_python_executable:
                                 logger.debug(f"Attempting to execute Python cleanup script (first 200 chars): {cleanup_script_str[:200]}...")
