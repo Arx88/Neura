@@ -15,6 +15,7 @@ import { AskToolView } from '../AskToolView';
 import { CompleteToolView } from '../CompleteToolView';
 import { DataProviderEndpointsToolView } from '../DataProviderEndpointToolView';
 import { ExecuteDataProviderCallToolView } from '../DataProviderToolView';
+import { TaskPlanningToolView } from '../TaskPlanningToolView';
 
 export type ToolViewComponent = React.ComponentType<ToolViewProps>;
 
@@ -62,6 +63,11 @@ const defaultRegistry: ToolViewRegistryType = {
 
   'ask': AskToolView,
   'complete': CompleteToolView,
+
+  // New registration for the task planning tool
+  'plan-task': TaskPlanningToolView,
+  'update-task': TaskPlanningToolView,
+  'get-task': TaskPlanningToolView,
 
   'default': GenericToolView,
 };
