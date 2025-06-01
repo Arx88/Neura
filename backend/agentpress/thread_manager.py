@@ -62,8 +62,7 @@ class ThreadManager:
         plan_executor_instance = PlanExecutor(
             main_task_id="dummy_json_plan_runner", # Placeholder, not used by execute_json_plan
             task_manager=task_manager_for_plan_executor,
-            tool_orchestrator=self.tool_orchestrator,
-            user_message_callback=None # Not used by execute_json_plan via ResponseProcessor
+        tool_orchestrator=self.tool_orchestrator
         )
 
         self.response_processor = ResponseProcessor(
