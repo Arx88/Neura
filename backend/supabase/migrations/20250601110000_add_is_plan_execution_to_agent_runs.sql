@@ -1,0 +1,2 @@
+ALTER TABLE agent_runs
+ADD COLUMN is_plan_execution BOOLEAN DEFAULT FALSE;
