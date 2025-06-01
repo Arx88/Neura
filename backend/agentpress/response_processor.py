@@ -329,9 +329,9 @@ class ResponseProcessor:
                 done, _ = await asyncio.wait(pending_tasks)
 
                 for execution in pending_tool_executions:
-                            # Log before tool execution (even if status already yielded)
-                            tool_call_details_string = f"Name='{execution['context'].function_name or execution['context'].xml_tag_name}', Args={execution['context'].tool_call.get('arguments', {})}"
-                            logger.info(f"Preparing to execute tool (streamed): {tool_call_details_string}")
+                    # Log before tool execution (even if status already yielded)
+                    tool_call_details_string = f"Name='{execution['context'].function_name or execution['context'].xml_tag_name}', Args={execution['context'].tool_call.get('arguments', {})}"
+                    logger.info(f"Preparing to execute tool (streamed): {tool_call_details_string}")
                     tool_idx = execution.get("tool_index", -1)
                     context = execution["context"]
                     # Check if status was already yielded during stream run
