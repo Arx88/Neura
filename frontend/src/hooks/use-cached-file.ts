@@ -77,7 +77,7 @@ export function useCachedFile<T = string>(
     : null;
 
   // Create a cached fetch function
-  const getCachedFile = async (key: string, force = false) => {
+  const getCachedFile = useCallback(async (key: string, force = false) => {
     // Check if we have a valid cached version
     const cached = fileCache.get(key);
     const now = Date.now();
@@ -264,10 +264,10 @@ export function useCachedFile<T = string>(
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filePath, sandboxId, options.expiration, options.contentType, session, setIsLoading]);
 
   // Function to force refresh the cache
-  const refreshCache = async () => {
+  const refreshCache = useCallback(async () => {
     if (!cacheKey) return null;
     try {
       const freshData = await getCachedFile(cacheKey, true);
@@ -277,7 +277,7 @@ export function useCachedFile<T = string>(
       setError(err);
       return null;
     }
-  };
+  }, [cacheKey, getCachedFile]); // Added getCachedFile
 
   // Function to get data from cache first, then network if needed
   const getFileContent = useCallback(async () => {
@@ -292,14 +292,14 @@ export function useCachedFile<T = string>(
         
         // If cache is expired, refresh in background
         if (Date.now() - cachedItem.timestamp > (options.expiration || CACHE_EXPIRATION)) {
-          getCachedFile(cacheKey, true)
+          getCachedFile(cacheKey, true) // getCachedFile is now stable
             .then(freshData => setData(freshData))
             .catch(err => console.error("Background refresh failed:", err));
         }
       } else {
         // No cache, load fresh
         setIsLoading(true);
-        const content = await getCachedFile(cacheKey);
+        const content = await getCachedFile(cacheKey); // getCachedFile is now stable
         setData(content);
       }
     } catch (err: any) {
@@ -307,9 +307,8 @@ export function useCachedFile<T = string>(
     } finally {
       setIsLoading(false);
     }
-  }, [cacheKey, options.expiration]);
+  }, [cacheKey, options.expiration, getCachedFile]); // getCachedFile is already here and now stable
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (sandboxId && filePath) {
       getFileContent();
