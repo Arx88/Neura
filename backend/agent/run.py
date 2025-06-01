@@ -137,21 +137,23 @@ async def run_agent(
 
         account_id = await get_account_id_from_thread(client, thread_id)
         if not account_id:
-            logger.error(f"Could not determine account ID for thread_id: {{thread_id}}")
+            logger.error(f"Could not determine account ID for thread_id: {thread_id}")
             try:
-                await task_state_manager.fail_task(task_id=thread_id, error=f"Could not determine account ID for thread {{thread_id}}")
+                # Use _add_task_log_message for logging failure to task if possible, then fail_task
+                # However, fail_task is more direct if the task might not exist or be in a state to log to.
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Could not determine account ID for thread {thread_id}")
             except Exception:
-                logger.warning(f"Could not fail task with thread_id {{thread_id}} as it might not be a valid task ID.")
-            raise ValueError(f"Could not determine account ID for thread {{thread_id}}")
+                logger.warning(f"Could not fail task with thread_id {thread_id} as it might not be a valid task ID for logging/failing.")
+            raise ValueError(f"Could not determine account ID for thread {thread_id}")
 
         project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
         if not project_result.data or len(project_result.data) == 0:
-            logger.error(f"Project {{project_id}} not found.")
+            logger.error(f"Project {project_id} not found.")
             try:
-                await task_state_manager.fail_task(task_id=thread_id, error=f"Project {{project_id}} not found")
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Project {project_id} not found")
             except Exception:
-                 logger.warning(f"Could not fail task with thread_id {{thread_id}} for missing project.")
-            raise ValueError(f"Project {{project_id}} not found")
+                 logger.warning(f"Could not fail task with thread_id {thread_id} for missing project {project_id}.")
+            raise ValueError(f"Project {project_id} not found")
 
         # Tool initialization ( 그대로 유지 )
         shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager)
@@ -187,28 +189,27 @@ async def run_agent(
                 content_json_str = first_user_message_query.data[0]['content']
                 content_data = json.loads(content_json_str)
                 initial_prompt_text = content_data.get('content', '')
-                if not initial_prompt_text: logger.warning(f"First user message for thread {{thread_id}} has empty content.")
+                if not initial_prompt_text: logger.warning(f"First user message for thread {thread_id} has empty content.")
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse first user message content JSON for thread {{thread_id}}: {{first_user_message_query.data[0]['content']}}", exc_info=True)
-                initial_prompt_text = ""
-            except Exception as e:
-                logger.error(f"Error extracting prompt from first user message for thread {{thread_id}}: {{e}}", exc_info=True)
-                initial_prompt_text = ""
+                logger.error(f"Failed to parse first user message content JSON for thread {thread_id}: {first_user_message_query.data[0]['content']}", exc_info=True)
+                initial_prompt_text = "" # Set to empty string to avoid NoneType error later, handled by checks below
+            except Exception as e: # Catch any other error during extraction
+                logger.error(f"Error extracting prompt from first user message for thread {thread_id}: {e}", exc_info=True)
+                initial_prompt_text = "" # Set to empty string
+        else: # No data from query
+            logger.warning(f"No first user message found for thread {thread_id}.")
+            initial_prompt_text = None # Explicitly set to None
 
-        task_id_for_initial_fail = thread_id
+        # Check for initial_prompt_text being None (no message object) or empty string (parsing failed or content empty)
         if initial_prompt_text is None:
-            logger.error(f"No initial user message object found for thread {{thread_id}}. Cannot proceed.")
-            try:
-                await task_state_manager.fail_task(task_id=task_id_for_initial_fail, error="No initial message object found.")
-            except Exception as e_fail:
-                 logger.error(f"Could not fail task {{task_id_for_initial_fail}} for no initial message: {{e_fail}}")
+            logger.error(f"No initial user message object found for thread {thread_id}. Cannot proceed.")
+            # Try to log to thread_id as a task if it might exist, or just use general logging
+            # Not using _add_task_log_message here as task for thread_id might not be set up for logs
+            await task_state_manager.fail_task(task_id=thread_id, error="No initial user message object found.")
             return
-        if not initial_prompt_text:
-            logger.error(f"No initial user message content found for thread {{thread_id}}. Cannot proceed with planning.")
-            try:
-                await task_state_manager.fail_task(task_id=task_id_for_initial_fail, error="No initial prompt content found for planning.")
-            except Exception as e_fail:
-                 logger.error(f"Could not fail task {{task_id_for_initial_fail}} for no prompt content: {{e_fail}}")
+        if not initial_prompt_text.strip(): # Check if it's an empty string or whitespace
+            logger.error(f"Initial user message content is empty for thread {thread_id}. Cannot proceed with planning.")
+            await task_state_manager.fail_task(task_id=thread_id, error="Initial user message content is empty.")
             return
 
         # ---> This is after initial_prompt_text is validated and confirmed not empty <---
@@ -216,82 +217,66 @@ async def run_agent(
         # Initial Log using thread_id as task_id_to_update
         await _add_task_log_message(task_state_manager, thread_id, "Agent run initiated by user.", log_type="info")
 
-        # TaskPlanner instantiation
+        # --- Phase 1: Planning ---
+        logger.info(f"Phase 1: Planning for thread '{thread_id}' with prompt: '{initial_prompt_text[:100]}...'")
+        # Optional: await _add_task_log_message(task_state_manager, thread_id, "Planning phase started.", log_type="info")
+
         task_planner = TaskPlanner(
-            task_manager=task_state_manager,
+            task_manager=task_state_manager, # Key change: use task_manager
             tool_orchestrator=tool_orchestrator
-            # model_name is removed as per plan
         )
 
-        # Delegating to plan_task
         planned_main_task = await task_planner.plan_task(
             task_description=initial_prompt_text,
             context={"original_thread_id": thread_id, "project_id": project_id}
         )
 
-        # Handling plan_task Response
         if not planned_main_task or planned_main_task.status == "planning_failed":
             error_msg = "Planning failed."
             if planned_main_task and planned_main_task.metadata.get("error"):
                 error_msg = planned_main_task.metadata.get("error")
 
-            logger.error(f"{error_msg} For prompt: '{initial_prompt_text[:100]}...' (Thread ID: {thread_id})")
+            logger.error(f"Critical: Planning failed for thread '{thread_id}'. Error: {error_msg}. Prompt: '{initial_prompt_text[:100]}...'")
 
-            # Log to task if planned_main_task object exists (even if planning failed)
             task_id_for_planning_failure_log = planned_main_task.id if planned_main_task else thread_id
             try:
-                await _add_task_log_message(
-                    task_state_manager,
-                    task_id_for_planning_failure_log,
-                    f"ERROR: Planning phase failed: {error_msg}",
-                    log_type="error"
-                )
-                # Ensure the task is marked as failed if plan_task didn't do it.
-                if planned_main_task and planned_main_task.status != "planning_failed":
-                    await task_state_manager.fail_task(task_id=planned_main_task.id, error=error_msg, progress=0.1)
-                elif not planned_main_task: # If no task object was created, we might need to create a placeholder or use thread_id
-                    # This scenario should ideally be handled by TaskPlanner creating a task even for failure.
-                    # For now, we've logged against thread_id if no task.id.
-                    pass
-            except Exception as log_fail_e:
-                logger.error(f"Failed to log/fail task {task_id_for_planning_failure_log} after planning error: {log_fail_e}")
-            return # Exit run_agent
+                # Check if task exists before trying to add log, to prevent error cascade
+                # This check might be redundant if _add_task_log_message handles non-existent tasks gracefully (which it does by logging a warning)
+                # However, keeping it for explicitness based on user's detailed plan.
+                if await task_state_manager.get_task(task_id_for_planning_failure_log):
+                     await _add_task_log_message(task_state_manager, task_id_for_planning_failure_log, f"ERROR: Planning phase failed: {error_msg}", log_type="error")
+                # plan_task should ideally mark the task as failed.
+                # If planned_main_task exists but status isn't 'planning_failed', and plan_task is supposed to set it,
+                # this might indicate an issue in plan_task. For now, we follow the instruction not to call fail_task here
+                # if plan_task is responsible.
+            except Exception as log_e:
+                logger.error(f"Failed to add planning failure log to task {task_id_for_planning_failure_log}: {log_e}")
+            return # Terminate if planning failed
 
         final_main_task_id = planned_main_task.id
-        logger.info(f"Planning completed. Main plan task ID: {final_main_task_id} for original thread_id {thread_id}.")
 
-        # Post-Planning Logging (using final_main_task_id)
-        await _add_task_log_message(
-            task_state_manager,
-            final_main_task_id,
-            f"Phase 1 (Planning) completed. Main plan task ID: {final_main_task_id}"
-        )
-        # Manual plan storage via _store_plan_in_task is removed. TaskPlanner handles this.
+        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 1 (Planning) completed successfully. Main plan task ID: {final_main_task_id}")
+        # Manual plan storage (_store_plan_in_task) and set_plan are removed. TaskPlanner handles this.
 
-        # --- Execution Phase ---
-        # Execution Phase Logging and Status Update
+        # --- Phase 2: Execution ---
         await _add_task_log_message(task_state_manager, final_main_task_id, "Phase 2: Execution starting.")
         await task_state_manager.update_task(final_main_task_id, {"status": "executing_plan", "progress": 0.2})
 
-        # PlanExecutor Instantiation
         plan_executor = PlanExecutor(
             tool_orchestrator=tool_orchestrator,
             task_state_manager=task_state_manager,
             main_task_id=final_main_task_id
         )
 
-        # Calling execute_plan_for_task
         await plan_executor.execute_plan_for_task(final_main_task_id)
 
         logger.info(f"Plan execution process completed for task {final_main_task_id}")
 
-        # Fetch final task status
         final_task_status_obj = await task_state_manager.get_task(final_main_task_id)
 
         current_status_for_log = "unknown"
         if final_task_status_obj:
             current_status_for_log = final_task_status_obj.status
-            # Final Task Status Handling: Complete the task if not already completed or failed
             if final_task_status_obj.status not in ["failed", "completed"]:
                 logger.warning(f"Main plan task {final_main_task_id} ended in status '{final_task_status_obj.status}' after PlanExecutor. Marking as completed.")
                 await task_state_manager.complete_task(
@@ -299,39 +284,38 @@ async def run_agent(
                     result={"summary": "Task execution phase concluded by run_agent wrapper and marked as completed."},
                     progress=1.0
                 )
-                current_status_for_log = "completed" # Update for log message
+                current_status_for_log = "completed"
 
         await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 2 (Execution) concluded, status: {current_status_for_log}.")
 
-        langfuse.flush() # Ensure Langfuse flushes data at the end of a successful run
+        langfuse.flush()
         return
 
     except Exception as e:
         logger.error(f"Error in run_agent orchestration for thread_id {thread_id}: {e}", exc_info=True)
         error_summary = f"An orchestration error occurred: {str(e)}"
 
-        # Determine task_id_for_failure
         task_id_for_failure = final_main_task_id if 'final_main_task_id' in locals() and final_main_task_id else thread_id
 
-        if task_state_manager: # Ensure task_state_manager is available
+        if task_state_manager:
             try:
-                await _add_task_log_message(
-                    task_state_manager,
-                    task_id_for_failure,
-                    f"CRITICAL ORCHESTRATION ERROR: {error_summary}",
-                    log_type="error"
-                )
+                # Check if task exists before trying to add log
+                if await task_state_manager.get_task(task_id_for_failure):
+                    await _add_task_log_message(
+                        task_state_manager,
+                        task_id_for_failure,
+                        f"CRITICAL ORCHESTRATION ERROR: {error_summary}",
+                        log_type="error"
+                    )
                 await task_state_manager.fail_task(task_id=task_id_for_failure, error=error_summary)
             except Exception as tse:
                 logger.error(f"Further error when trying to mark task {task_id_for_failure} as failed: {tse}", exc_info=True)
-        else:
-            logger.error(f"Orchestration error for thread_id {thread_id} with no task_id established and task_state_manager unavailable. Prompt: {initial_prompt_text[:70] if 'initial_prompt_text' in locals() else 'N/A'} Error: {error_summary}")
+        else: # Should not happen if task_state_manager is a required parameter
+            logger.error(f"Orchestration error for thread_id {thread_id}, but TaskStateManager is unavailable. Prompt: {initial_prompt_text[:70] if 'initial_prompt_text' in locals() and initial_prompt_text else 'N/A'} Error: {error_summary}")
         
-        # It's important to re-raise the exception if it's not handled in a way that allows recovery
-        raise # Re-raise the original exception to ensure it's propagated
+        raise
     finally:
-        # Ensure langfuse.flush() is called in the finally block
-        if langfuse and hasattr(langfuse, 'flush'): # Check if langfuse is initialized and has flush
+        if langfuse and hasattr(langfuse, 'flush'):
              langfuse.flush()
 
 
