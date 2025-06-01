@@ -189,7 +189,7 @@ async def run_agent(
             return # Exit run_agent
 
         # Step 1: Planning
-        await task_state_manager.set_status("running") # As per original prompt
+        await task_state_manager.set_task_status(task_id=thread_id, status="running") # As per original prompt
         await task_state_manager.add_message("Starting task...") # As per original prompt
         await task_state_manager.add_message("Phase 1: Planning...") # Log planning phase start
 
