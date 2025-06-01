@@ -1,9 +1,9 @@
 import os
 import json
 import re
-import time # 1. Ensure import time is present
+import time
 from uuid import uuid4
-from typing import Optional, Any
+from typing import Optional, Any, Dict, AsyncGenerator # Added AsyncGenerator
 
 # from agent.tools.message_tool import MessageTool
 from agent.tools.message_tool import MessageTool
@@ -34,21 +34,53 @@ from agent.gemini_prompt import get_gemini_system_prompt
 # Imports for TaskPlanner
 from agentpress.plan_executor import PlanExecutor
 from agentpress.task_planner import TaskPlanner
-# from agentpress.task_state_manager import TaskStateManager # Removed - Assuming this is not the one from the prompt, let's see if it's needed later
-# from agentpress.task_storage_supabase import SupabaseTaskStorage # Removed
-from agentpress.tool_orchestrator import ToolOrchestrator # Keep - used by ThreadManager
-from agentpress.utils.message_assembler import MessageAssembler
-from agentpress.utils.json_helpers import extract_json_from_response
-# from agentpress.utils.json_helpers import format_for_yield # Removed
+# from agentpress.task_state_manager import TaskStateManager
+# from agentpress.task_storage_supabase import SupabaseTaskStorage
+from agentpress.tool_orchestrator import ToolOrchestrator
+# from agentpress.utils.message_assembler import MessageAssembler # Ensure removed
+# from agentpress.utils.json_helpers import extract_json_from_response # Ensure removed
+# from agentpress.utils.json_helpers import format_for_yield
 
-# Assuming make_llm_api_call and TaskStateManager from the prompt are different
-# and might be part of a services directory if they were to be used directly here.
-# For now, I'll rely on existing mechanisms or what's available in ThreadManager.
-# If direct LLM calls or a different TaskStateManager are needed, the subtask might be underspecified for this file structure.
-from services.llm import make_llm_api_call # Adding as per prompt
-from agentpress.task_state_manager import TaskStateManager # Corrected import path to direct import
+# from services.llm import make_llm_api_call # Ensure removed
+from agentpress.task_state_manager import TaskStateManager
 
 load_dotenv()
+
+# Module-level helpers (should already be present)
+# async def _add_task_log_message ...
+# async def _store_plan_in_task ...
+# detect_visualization_request ...
+
+# Helper function as suggested by user
+async def _add_task_log_message(tsm: TaskStateManager, task_id_to_update: str, message_text: str, log_type: str = "info"):
+    current_task = await tsm.get_task(task_id_to_update)
+    if current_task:
+        log_entry = {"timestamp": time.time(), "type": log_type, "message": message_text}
+        run_logs = current_task.metadata.get("run_logs", [])
+        if not isinstance(run_logs, list):
+            run_logs = []
+        updated_logs = run_logs + [log_entry]
+        new_metadata = current_task.metadata.copy()
+        new_metadata["run_logs"] = updated_logs
+        await tsm.update_task(
+            task_id_to_update,
+            {"metadata": new_metadata}
+        )
+    else:
+        logger.warning(f"Task {task_id_to_update} not found when trying to add log: '{message_text}'")
+
+# Helper function for storing plan - might be simplified/removed if TaskPlanner handles it
+async def _store_plan_in_task(tsm: TaskStateManager, task_id_to_update: str, plan_data: list, progress: float = 0.1):
+    current_task = await tsm.get_task(task_id_to_update)
+    if current_task:
+        new_metadata = current_task.metadata.copy()
+        new_metadata["execution_plan"] = plan_data # Store the plan
+        updates = {"metadata": new_metadata, "progress": progress}
+        if current_task.status == "pending_planning":
+            updates["status"] = "planned"
+        await tsm.update_task(task_id_to_update, updates)
+    else:
+        logger.error(f"Task {task_id_to_update} not found when trying to store plan.")
 
 def detect_visualization_request(request_text: str):
     """Detect if a request is asking for a visualization."""
@@ -88,82 +120,39 @@ async def run_agent(
     reasoning_effort: Optional[str] = 'low',
     enable_context_manager: bool = True,
     trace: Optional[StatefulTraceClient] = None
-):
-    """Run the development agent with specified configuration."""
+) -> Optional[AsyncGenerator[Dict[str, Any], None]]: # Signature from user snippet
 
-    # 2. Define the async def add_task_message helper function
-    async def add_task_message(task_id_to_update: str, message: str):
-        # Optener la tarea actual para leer sus metadatos
-        current_task = await task_state_manager.get_task(task_id_to_update)
-        if current_task:
-            new_log_entry = {"timestamp": time.time(), "message": message}
-            updated_logs = current_task.metadata.get("run_logs", []) + [new_log_entry]
-            await task_state_manager.update_task(
-                task_id_to_update,
-                {"metadata": {**current_task.metadata, "run_logs": updated_logs}}
-            )
-        else:
-            logger.warning(f"Task {task_id_to_update} not found when trying to add message: '{message}'")
+    current_task_id_for_run: Optional[str] = None
+    final_planned_task_id_for_execution: Optional[str] = None
 
-    message_assembler = MessageAssembler()
-    # task_state_manager = None # Removed as it's now a parameter
     try:
-        logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id=trace.id if trace else 'N/A', model_name={model_name}, stream={stream}")
-        logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
-
+        logger.info(f"Entering run_agent function: thread_id={{thread_id}}, project_id={{project_id}}, agent_run_id={{trace.id if trace else 'N/A'}}, model_name={{model_name}}, stream_param_ignored={{stream}}")
         if not trace:
-            logger.debug("No existing trace found, creating new trace for run_agent.")
-            trace = langfuse.trace(name="run_agent", session_id=thread_id, metadata={"project_id": project_id})
-        else:
-            logger.debug("Using existing trace for run_agent.")
-        
-        logger.debug("Initializing ThreadManager...")
-        # Ensure thread_manager is initialized if not passed (though it's expected to be)
+            trace = langfuse.trace(name="run_agent_orchestration", session_id=thread_id, metadata={{"project_id": project_id}})
+
         if not thread_manager:
             thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace)
         client = await thread_manager.db.client
-        logger.debug("ThreadManager initialized and database client obtained.")
 
-        # 3. Add the main task verification block
-        main_task = await task_state_manager.get_task(thread_id)
-        if not main_task:
-            logger.warning(f"Main task with ID {thread_id} not found in TaskStateManager. Attempting to create it.")
-            # The issue mentions: "This situation needs careful handling. For now, we're logging and proceeding."
-            # "If the task MUST exist, an error should be raised, or the task creation logic robustly handled here."
-            # "The prompt says: Critical: Main task {thread_id} must exist before run_agent can update its status."
-            # This implies we should probably not try to create it here but ensure it's created before run_agent is called.
-            # The following line is for a critical failure, but the prompt says to keep it commented out.
-            logger.error(f"Critical: Main task {thread_id} must exist before run_agent can update its status.")
-            # raise ValueError(f"Task {thread_id} not found and could not be created within run_agent.") # Keep commented out as per issue
-
-        # TaskStateManager is now passed as a parameter, so local instantiation is removed.
-        # The check for config.redis_client and the instantiation line:
-        # task_state_manager = TaskStateManager(thread_id, config.redis_client)
-        # are removed.
-
-        logger.debug(f"Attempting to get account ID for thread_id: {thread_id}...")
         account_id = await get_account_id_from_thread(client, thread_id)
         if not account_id:
-            logger.error(f"Could not determine account ID for thread_id: {thread_id}")
-            raise ValueError(f"Could not determine account ID for thread {thread_id}")
-        logger.debug(f"Account ID {account_id} retrieved for thread_id: {thread_id}.")
+            logger.error(f"Could not determine account ID for thread_id: {{thread_id}}")
+            try:
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Could not determine account ID for thread {{thread_id}}")
+            except Exception:
+                logger.warning(f"Could not fail task with thread_id {{thread_id}} as it might not be a valid task ID.")
+            raise ValueError(f"Could not determine account ID for thread {{thread_id}}")
 
-        logger.debug(f"Attempting to get project {project_id}...")
         project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
         if not project_result.data or len(project_result.data) == 0:
-            logger.error(f"Project {project_id} not found.")
-            raise ValueError(f"Project {project_id} not found")
-        logger.debug(f"Project {project_id} retrieved successfully.")
+            logger.error(f"Project {{project_id}} not found.")
+            try:
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Project {{project_id}} not found")
+            except Exception:
+                 logger.warning(f"Could not fail task with thread_id {{thread_id}} for missing project.")
+            raise ValueError(f"Project {{project_id}} not found")
 
-        project_data = project_result.data[0]
-        sandbox_info = project_data.get('sandbox', {})
-        if not sandbox_info.get('id'): # This check might be too strict if planning doesn't need a sandbox immediately
-            logger.warning(f"No sandbox ID found in project_data for project {project_id}. Continuing with planning.")
-            # raise ValueError(f"No sandbox found for project {project_id}") # Soften this for planning
-        logger.debug(f"Sandbox ID {sandbox_info.get('id')} retrieved for project {project_id}.")
-
-        logger.debug("Initializing tools (for potential use by planner or executor)...")
-        # Tools are initialized and added to thread_manager, which makes them available via tool_orchestrator
+        # Tool initialization ( 그대로 유지 )
         shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager)
         thread_manager.add_tool(shell_tool)
         files_tool = SandboxFilesTool(project_id=project_id, thread_manager=thread_manager)
@@ -187,162 +176,144 @@ async def run_agent(
         if config.RAPID_API_KEY:
             data_providers_tool = DataProvidersTool()
             thread_manager.add_tool(data_providers_tool)
-        logger.debug("Tools initialized.")
+        logger.debug("Tools initialized for ToolOrchestrator.")
 
-        # Retrieve the initial prompt for planning
         initial_prompt_text = None
-        # Fetch the earliest user message in the thread
         first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=False).limit(1).execute()
         
         if first_user_message_query.data:
             try:
-                # Message content is a JSON string, parse it
                 content_json_str = first_user_message_query.data[0]['content']
                 content_data = json.loads(content_json_str)
-                # The actual user text is within content_data['content']
                 initial_prompt_text = content_data.get('content', '')
-                if not initial_prompt_text: # Handles case where 'content' key holds empty string
-                     logger.warning(f"First user message for task {thread_id} has empty content.")
-                     # Proceed with empty string to allow planner to decide, or error out if required by business logic
+                if not initial_prompt_text: logger.warning(f"First user message for thread {{thread_id}} has empty content.")
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse first user message content JSON for task {thread_id}: {first_user_message_query.data[0]['content']}", exc_info=True)
-                initial_prompt_text = "" # Fallback to empty string to avoid None
+                logger.error(f"Failed to parse first user message content JSON for thread {{thread_id}}: {{first_user_message_query.data[0]['content']}}", exc_info=True)
+                initial_prompt_text = ""
             except Exception as e:
-                logger.error(f"Error extracting prompt from first user message for task {thread_id}: {e}", exc_info=True)
-                initial_prompt_text = "" # Fallback
+                logger.error(f"Error extracting prompt from first user message for thread {{thread_id}}: {{e}}", exc_info=True)
+                initial_prompt_text = ""
 
-        if initial_prompt_text is None: # Only if query returned no data
-            logger.error(f"No initial user message found for task {thread_id}. Cannot proceed with planning.")
-            logger.error(f"No initial user message found for task {thread_id}. Cannot proceed with planning.")
-            # 16. Change complete_task to fail_task
-            await task_state_manager.fail_task(task_id=thread_id, error="No initial prompt found for planning.")
-            return # Exit run_agent
+        task_id_for_initial_fail = thread_id
+        if initial_prompt_text is None:
+            logger.error(f"No initial user message object found for thread {{thread_id}}. Cannot proceed.")
+            try:
+                await task_state_manager.fail_task(task_id=task_id_for_initial_fail, error="No initial message object found.")
+            except Exception as e_fail:
+                 logger.error(f"Could not fail task {{task_id_for_initial_fail}} for no initial message: {{e_fail}}")
+            return
+        if not initial_prompt_text:
+            logger.error(f"No initial user message content found for thread {{thread_id}}. Cannot proceed with planning.")
+            try:
+                await task_state_manager.fail_task(task_id=task_id_for_initial_fail, error="No initial prompt content found for planning.")
+            except Exception as e_fail:
+                 logger.error(f"Could not fail task {{task_id_for_initial_fail}} for no prompt content: {{e_fail}}")
+            return
 
-        # Step 1: Planning
-        # 4. Update set_task_status with progress (Change #13 from the list)
-        # 5. Replace add_message with add_task_message helper
-        await task_state_manager.set_task_status(task_id=thread_id, status="running", progress=0.05)
-        await add_task_message(thread_id, "Starting task...")
-        await add_task_message(thread_id, "Phase 1: Planning...")
+        # --- Main Task Handling ---
+        existing_task = await task_state_manager.get_task(thread_id)
+        if not existing_task:
+            logger.info(f"No existing task found with ID={{thread_id}}. Creating a new wrapper task for this agent run.")
+            wrapper_task = await task_state_manager.create_task(
+                name=f"Agent Run for Thread: {{thread_id}} - Prompt: {{initial_prompt_text[:30]}}...",
+                description=f"Full initial prompt: {{initial_prompt_text}}",
+                status="pending_planning",
+                metadata={{"original_thread_id": thread_id, "prompt": initial_prompt_text, "model_name": model_name}}
+            )
+            if not wrapper_task:
+                logger.critical(f"CRITICAL: Failed to create a wrapper task for thread_id {{thread_id}}.")
+                raise Exception(f"TaskStateManager failed to create a new wrapper task for thread_id {{thread_id}}")
+            current_task_id_for_run = wrapper_task.id
+            logger.info(f"New wrapper task created with ID={{current_task_id_for_run}} for thread_id {{thread_id}}.")
+        else:
+            logger.info(f"Using existing task with ID={{thread_id}} as the current run task.")
+            current_task_id_for_run = thread_id
+            updated_meta = existing_task.metadata.copy()
+            updated_meta["model_name"] = model_name
+            await task_state_manager.update_task(current_task_id_for_run, {{"metadata": updated_meta}})
+
+        await task_state_manager.set_task_status(task_id=current_task_id_for_run, status="running", progress=0.01)
+        await _add_task_log_message(task_state_manager, current_task_id_for_run, f"Agent run started. Model: {{model_name}}. Initializing planning.")
+
+        # --- Planning Phase ---
+        await _add_task_log_message(task_state_manager, current_task_id_for_run, "Phase 1: Planning initiated.")
+        await task_state_manager.update_task(current_task_id_for_run, {{"progress": 0.05}})
 
         task_planner = TaskPlanner(
-            # 6. Ensure TaskPlanner instantiation is correct
-            task_manager=task_state_manager, # Renamed from task_state_manager to task_manager as per issue
-            tool_orchestrator=tool_orchestrator,
-            model_name=model_name
-        )
-        
-        # Files are not explicitly passed; TaskPlanner might need to handle this or assume None
-        planning_messages = task_planner.construct_planning_messages(initial_prompt_text, files=None) # Assuming files=None
-
-        logger.info(f"Phase 1: Planning for task {thread_id} with prompt: '{initial_prompt_text[:100]}...'")
-
-        llm_response_for_plan = make_llm_api_call(
-            messages=planning_messages,
-            model_name=model_name,
-            tool_orchestrator=None, # No tools executed during planning phase
-            tools=None,
-            thread_id=thread_id, # task_id from prompt
+            task_manager=task_state_manager,
+            tool_orchestrator=tool_orchestrator
         )
 
-        llm_response_str_plan = ""
-        async for chunk in llm_response_for_plan:
-            # Ensure chunk structure is as expected by make_llm_api_call's streaming response
-            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                llm_response_str_plan += content
+        planned_main_task_obj = await task_planner.plan_task(
+            task_description=initial_prompt_text
+        )
 
-        logger.info(f"Raw LLM response for plan (task {thread_id}): {llm_response_str_plan}")
-        # 7. Add add_task_message call after llm_response_str_plan
-        await add_task_message(thread_id, f"LLM response for plan: {llm_response_str_plan}")
-
-        plan_json = extract_json_from_response(llm_response_str_plan)
-
-        if not plan_json or "plan" not in plan_json:
-            error_summary = "Failed to generate a valid plan from LLM response."
-            logger.error(f"{error_summary} Task ID: {thread_id}. LLM response: {llm_response_str_plan}")
-            # 8. Update fail_task with progress (Change #14 from the list)
-            await task_state_manager.fail_task(task_id=thread_id, error=error_summary, progress=0.1)
+        if not planned_main_task_obj or planned_main_task_obj.status == "planning_failed":
+            error_msg = planned_main_task_obj.metadata.get("error", "Planning failed, no subtasks generated by TaskPlanner.") if planned_main_task_obj else "TaskPlanner.plan_task returned None, indicating critical planning failure."
+            logger.error(f"Planning phase failed. Error: {{error_msg}}")
+            await _add_task_log_message(task_state_manager, current_task_id_for_run, f"ERROR: Planning phase failed: {{error_msg}}", log_type="error")
+            await task_state_manager.fail_task(task_id=current_task_id_for_run, error=error_msg, progress=0.1)
             return
 
-        # Step 2: Execution
-        logger.info(f"Phase 1 (Planning) completed for task {thread_id}. Plan: {plan_json['plan']}. Phase 2 (Execution) starting...")
-        # 9. Replace add_message with add_task_message helper
-        await add_task_message(thread_id, "Phase 1 (Planning) completed. Phase 2 (Execution) starting...")
+        final_planned_task_id_for_execution = planned_main_task_obj.id
+        current_run_task_meta = (await task_state_manager.get_task(current_task_id_for_run)).metadata
+        await task_state_manager.update_task(current_task_id_for_run, {{"metadata": {{**current_run_task_meta, "planned_main_task_id": final_planned_task_id_for_execution}}}})
 
-        # 10. Replace task_state_manager.set_plan with new logic
-        current_task_for_plan = await task_state_manager.get_task(thread_id) # Obtener tarea actual
-        if current_task_for_plan:
-            await task_state_manager.update_task(
-                thread_id,
-                {"metadata": {**current_task_for_plan.metadata, "plan": plan_json["plan"]}, "progress": 0.1}
-            )
-        else:
-            logger.error(f"Task {thread_id} not found when trying to store plan.")
-            await task_state_manager.fail_task(task_id=thread_id, error="Task disappeared before plan could be stored.", progress=0.1)
-            return
+        await _add_task_log_message(task_state_manager, current_task_id_for_run, f"Planning phase completed by TaskPlanner. Main plan task ID: {{final_planned_task_id_for_execution}}.")
+        await _add_task_log_message(task_state_manager, final_planned_task_id_for_execution, "Phase 1 (Planning) completed and subtasks created.")
+
+        # --- Execution Phase ---
+        await _add_task_log_message(task_state_manager, final_planned_task_id_for_execution, "Phase 2: Execution starting.")
+        await task_state_manager.update_task(final_planned_task_id_for_execution, {{"status": "executing", "progress": 0.2}})
 
         plan_executor = PlanExecutor(
-            # 11. Ensure PlanExecutor instantiation is correct
-            tool_orchestrator=tool_orchestrator,
-            task_state_manager=task_state_manager,
-            # main_task_id=thread_id # This line is commented out in the issue, so keep it that way.
+            main_task_id=final_planned_task_id_for_execution,
+            task_manager=task_state_manager,
+            tool_orchestrator=tool_orchestrator
         )
 
-        # The execute_plan method will internally handle calls to tools via tool_orchestrator
-        # and update task state via task_state_manager.
-        # It should also handle yielding messages if 'stream' is True.
-        # This part needs to align with how PlanExecutor is implemented.
-        # For now, assuming execute_plan is a comprehensive blocking call as per prompt.
-        await plan_executor.execute_plan(plan_json["plan"])
+        await plan_executor.execute_plan_for_task(final_planned_task_id_for_execution)
 
-        logger.info(f"Plan execution completed for task {thread_id}")
-        # 12. Replace add_message with add_task_message helper
-        await add_task_message(thread_id, "Plan execution completed.")
-        # 13. Update complete_task with progress (Change #15 from the list)
-        await task_state_manager.complete_task(task_id=thread_id, result={"summary": "Task completed successfully via plan."}, progress=1.0)
+        logger.info(f"Plan execution completed for main plan task {{final_planned_task_id_for_execution}}")
+        await _add_task_log_message(task_state_manager, final_planned_task_id_for_execution, "Plan execution completed by PlanExecutor.")
 
-        # If streaming is enabled, the PlanExecutor should handle yielding.
-        # The original while loop for streaming is bypassed by this new flow.
-        # If run_agent itself is expected to yield, PlanExecutor must yield back to here.
-        # This is a complex interaction not fully specified by the prompt for this refactoring.
-        # For now, assuming execute_plan handles all necessary output and state changes.
+        final_plan_task_state = await task_state_manager.get_task(final_planned_task_id_for_execution)
+        if final_plan_task_state and final_plan_task_state.status not in ["failed", "completed"]:
+            logger.warning(f"Main plan task {{final_planned_task_id_for_execution}} ended in status '{{final_plan_task_state.status}}' by PlanExecutor. Forcing complete.")
+            await task_state_manager.complete_task(task_id=final_planned_task_id_for_execution, result={{"summary": "Task execution phase concluded by run_agent."}}, progress=1.0)
+            final_plan_task_state = await task_state_manager.get_task(final_planned_task_id_for_execution)
 
-        langfuse.flush() # Flush at the end of successful execution
-        return # End of new two-step flow
+        if final_plan_task_state:
+            current_run_task_meta_final = (await task_state_manager.get_task(current_task_id_for_run)).metadata
+            if final_plan_task_state.status == "completed":
+                await task_state_manager.complete_task(task_id=current_task_id_for_run, result={{"summary": f"Agent run completed. Plan executed under task {{final_planned_task_id_for_execution}}."}}, progress=1.0)
+            elif final_plan_task_state.status == "failed":
+                await task_state_manager.fail_task(task_id=current_task_id_for_run, error=f"Agent run failed. Plan execution failed under task {{final_planned_task_id_for_execution}}. Reason: {{final_plan_task_state.error}}", progress=final_plan_task_state.progress)
+            else:
+                await task_state_manager.update_task(current_task_id_for_run, {{"status":"unknown_completion_of_plan", "metadata": {{**current_run_task_meta_final, "final_plan_task_id": final_planned_task_id_for_execution, "final_plan_task_status": final_plan_task_state.status}} }})
+        else:
+            await task_state_manager.fail_task(task_id=current_task_id_for_run, error=f"Could not retrieve final state of plan task {{final_planned_task_id_for_execution}}.")
+
+        langfuse.flush()
+        return
 
     except Exception as e:
-        logger.error(f"Error in run_agent for task {thread_id}: {e}", exc_info=True)
-        error_summary = f"An error occurred: {str(e)}"
-        # 14. Modify main except Exception as e: block (Change #11 from the list)
-        if task_state_manager:
-            try:
-                await task_state_manager.fail_task(task_id=thread_id, error=error_summary)
-            except Exception as tse:
-                logger.error(f"Failed to use task_state_manager.fail_task: {tse}")
-                # Attempt to add a message to the task if fail_task itself fails
-                # This requires add_task_message to be defined and accessible here
-                # It also relies on get_task not failing under the same conditions as fail_task
-                current_task_err = await task_state_manager.get_task(thread_id)
-                if current_task_err:
-                    await add_task_message(thread_id, f"CRITICAL AGENT ERROR: {error_summary}")
+        logger.error(f"Error in run_agent orchestration for thread {{thread_id}}: {{e}}", exc_info=True)
+        error_summary = f"An orchestration error occurred: {{str(e)}}"
+
+        task_id_to_report_failure_on = current_task_id_for_run if current_task_id_for_run else thread_id
+
+        try:
+            if task_state_manager:
+                await _add_task_log_message(task_state_manager, task_id_to_report_failure_on, f"CRITICAL ORCHESTRATION ERROR: {{error_summary}}", log_type="error")
+                await task_state_manager.fail_task(task_id=task_id_to_report_failure_on, error=error_summary)
+        except Exception as tse:
+            logger.error(f"Further error when trying to mark task {{task_id_to_report_failure_on}} as failed: {{tse}}", exc_info=True)
         
-        # If streaming, yield an error status
-        if stream:
-            yield {
-                "type": "status",
-                "status": "error",
-                "message": error_summary
-            }
-        # Re-raise or handle as per agent's top-level error policy
-        # If this function is a generator due to 'yield', re-raising might be complex.
-        # For now, let the calling context handle the exception if not streaming.
-        # If streaming, the yield above signals the error.
-        if not stream:
-             raise # Re-raise if not a streaming context that handled it via yield.
+        raise
     finally:
-        if trace and trace.client: # Ensure langfuse client is available
-             langfuse.flush() # Ensure langfuse flushes even on error
+        if trace and trace.client:
+             langfuse.flush()
 
 
 # # TESTING
