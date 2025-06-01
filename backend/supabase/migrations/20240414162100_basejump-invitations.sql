@@ -47,14 +47,17 @@ EXECUTE FUNCTION basejump.trigger_set_timestamps();
   * accepting.  It allows us to avoid complex permissions on accounts
  */
 CREATE OR REPLACE FUNCTION basejump.trigger_set_invitation_details()
-    RETURNS TRIGGER AS
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 BEGIN
     NEW.invited_by_user_id = auth.uid();
     NEW.account_name = (select name from basejump.accounts where id = NEW.account_id);
     RETURN NEW;
 END
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER basejump_trigger_set_invitation_details
     BEFORE INSERT
