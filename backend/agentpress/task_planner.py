@@ -33,8 +33,8 @@ class SubtaskDecompositionItem(BaseModel):
     dependencies: List[int] = Field(default_factory=list)
     assigned_tools: List[str] = Field(default_factory=list)
 
-    async def _decompose_task( # Re-indented to be part of TaskPlanner
-        self,
+    async def _decompose_task( # Now correctly a method of TaskPlanner
+        self, # This 'self' will refer to TaskPlanner instance
         task_description: str,
         available_tools: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None
