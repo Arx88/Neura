@@ -77,7 +77,8 @@ async def run_agent(
     thread_id: str,
     project_id: str,
     stream: bool,
-    tool_orchestrator: ToolOrchestrator, # CORRECTED PLACEMENT
+    tool_orchestrator: ToolOrchestrator,
+    task_state_manager: TaskStateManager,  # New parameter
     thread_manager: Optional[ThreadManager] = None,
     native_max_auto_continues: int = 25,
     max_iterations: int = 100,
@@ -89,7 +90,7 @@ async def run_agent(
 ):
     """Run the development agent with specified configuration."""
     message_assembler = MessageAssembler()
-    task_state_manager = None # Define upfront for unified error handling
+    # task_state_manager = None # Removed as it's now a parameter
     try:
         logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id=trace.id if trace else 'N/A', model_name={model_name}, stream={stream}")
         logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
@@ -107,14 +108,10 @@ async def run_agent(
         client = await thread_manager.db.client
         logger.debug("ThreadManager initialized and database client obtained.")
 
-        # Initialize TaskStateManager
-        # Assumption: global 'config' from 'utils.config' has 'redis_client'
-        if not hasattr(config, 'redis_client'):
-            logger.error("Global 'config' object does not have 'redis_client'. Cannot initialize TaskStateManager.")
-            # This is a fatal configuration error for the new flow.
-            # How to yield this if stream is True? For now, raising to be caught by general exception handler.
-            raise AttributeError("Configuration missing 'redis_client' for TaskStateManager.")
-        task_state_manager = TaskStateManager(thread_id, config.redis_client)
+        # TaskStateManager is now passed as a parameter, so local instantiation is removed.
+        # The check for config.redis_client and the instantiation line:
+        # task_state_manager = TaskStateManager(thread_id, config.redis_client)
+        # are removed.
 
         logger.debug(f"Attempting to get account ID for thread_id: {thread_id}...")
         account_id = await get_account_id_from_thread(client, thread_id)
