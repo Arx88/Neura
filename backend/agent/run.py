@@ -164,7 +164,7 @@ async def run_agent(
         # Retrieve the initial prompt for planning
         initial_prompt_text = None
         # Fetch the earliest user message in the thread
-        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', asc=True).limit(1).execute()
+        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', ascending=True).limit(1).execute()
         
         if first_user_message_query.data:
             try:
@@ -228,7 +228,7 @@ async def run_agent(
             error_summary = "Failed to generate a valid plan from LLM response."
             logger.error(f"{error_summary} Task ID: {thread_id}. LLM response: {llm_response_str_plan}")
             # await task_state_manager.add_error_message(error_summary) # Method not in prompt TSM
-            await task_state_manager.complete_task(status="error", summary=error_summary)
+            await task_state_manager.fail_task(task_id=thread_id, error=error_summary)
             return
 
         # Step 2: Execution
@@ -250,7 +250,7 @@ async def run_agent(
 
         logger.info(f"Plan execution completed for task {thread_id}")
         await task_state_manager.add_message("Plan execution completed.") # Log completion
-        await task_state_manager.complete_task(status="completed", summary="Task completed successfully via plan.")
+        await task_state_manager.complete_task(task_id=thread_id, result={"summary": "Task completed successfully via plan."})
 
         # If streaming is enabled, the PlanExecutor should handle yielding.
         # The original while loop for streaming is bypassed by this new flow.
@@ -266,7 +266,7 @@ async def run_agent(
         error_summary = f"An error occurred: {str(e)}"
         if task_state_manager: # Check if TSM was initialized
             # await task_state_manager.add_error_message(f"Agent Error: {e.message} Details: {e.details}" if isinstance(e, AgentError) else error_summary)
-            await task_state_manager.complete_task(status="error", summary=error_summary)
+            await task_state_manager.fail_task(task_id=thread_id, error=error_summary)
         
         # If streaming, yield an error status
         if stream:
