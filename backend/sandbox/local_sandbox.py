@@ -116,13 +116,15 @@ class LocalSandbox:
 
     def _execute_command(self, container, command_request):
         """Ejecutar un comando en el contenedor"""
+        STANDARD_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         try:
             cmd = command_request.command if hasattr(command_request, 'command') else command_request
             cwd = command_request.cwd if hasattr(command_request, 'cwd') else "/workspace"
 
             # Ejecutar el comando
             exit_code, output = container.exec_run(
-                cmd=f"cd {cwd} && {cmd}",
+                cmd=f"sh -c 'cd {cwd} && {cmd}'",
+                environment={"PATH": STANDARD_PATH},
                 stdout=True,
                 stderr=True
             )

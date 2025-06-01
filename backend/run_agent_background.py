@@ -62,8 +62,6 @@ async def run_agent_background(
     logger.info(f"Entering run_agent_background task for agent_run_id: {agent_run_id}, thread_id: {thread_id}, project_id: {project_id}, model: {model_name}")
     await initialize()
 
-    STANDARD_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" # Define STANDARD_PATH
-
     sentry.sentry.set_tag("thread_id", thread_id)
 
     logger.info(f"Starting background agent run: {agent_run_id} for thread: {thread_id} (Instance: {instance_id})")
@@ -385,7 +383,7 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
 
                             # Log current PATH
                             try:
-                                path_cmd_req = SessionExecuteRequest(command=f"sh -c 'env PATH={STANDARD_PATH} echo $PATH'", var_async=False, cwd="/workspace")
+                                path_cmd_req = SessionExecuteRequest(command="echo $PATH", var_async=False, cwd="/workspace")
                                 if use_daytona():
                                     path_cmd_resp = await sandbox_instance.process.execute_session_command(cleanup_session_id, path_cmd_req, timeout=30)
                                 else:
@@ -402,13 +400,13 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
                                         path_logs_resp_str = path_cmd_resp.get('output', "No output from echo $PATH for local sandbox").strip()
                                 elif path_cmd_resp:
                                      logger.warning(f"echo $PATH failed with exit code {path_cmd_resp.get('exit_code')}. Output: {path_cmd_resp.get('output', '').strip()}")
-                                logger.info(f"Sandbox PATH environment variable for cleanup (attempted with forced PATH): {path_logs_resp_str}")
+                                logger.info(f"Sandbox PATH environment variable for cleanup: {path_logs_resp_str}") # Removed "(attempted with forced PATH)"
                             except Exception as e_path:
                                 logger.warning(f"Could not determine sandbox PATH: {e_path}")
 
                             # Attempt 1: Use 'command -v' to find python3 or python
-                            find_python_cmd = f"sh -c 'env PATH={STANDARD_PATH} command -v python3 || env PATH={STANDARD_PATH} command -v python'"
-                            logger.info(f"Attempting to find Python using 'command -v' with PATH: {STANDARD_PATH}...")
+                            find_python_cmd = "sh -c 'command -v python3 || command -v python'" # Reverted
+                            logger.info(f"Attempting to find Python using 'command -v'...") # Removed "with PATH..."
                             cmd_v_req = SessionExecuteRequest(command=find_python_cmd, var_async=False, cwd="/workspace")
                             response_cmd_v = None
                             try:
@@ -431,7 +429,7 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
                                     if python_path_from_cmd_v: # Check if not empty
                                         logger.info(f"'command -v' found Python at: {python_path_from_cmd_v}")
                                         # Verify this path works with a simple command
-                                        verify_cmd = f"sh -c 'env PATH={STANDARD_PATH} {python_path_from_cmd_v} -c \"print(\\'Python probe success via command -v\\')\"'"
+                                        verify_cmd = f"{python_path_from_cmd_v} -c \"print('Python probe success via command -v')\"" # Reverted
                                         verify_req = SessionExecuteRequest(command=verify_cmd, var_async=False, cwd="/workspace")
                                         response_verify = None
                                         if use_daytona():
@@ -455,10 +453,10 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
 
                             # Attempt 2: Fallback to predefined list if 'command -v' failed
                             if not found_python_executable:
-                                logger.info("Python not found via 'command -v', falling back to predefined list with PATH.")
+                                logger.info("Python not found via 'command -v', falling back to predefined list.") # Removed "with PATH"
                                 for exe_path in python_executables:
-                                    logger.info(f"Probing for Python interpreter at: {exe_path} with PATH: {STANDARD_PATH}")
-                                    test_cmd = f"sh -c 'env PATH={STANDARD_PATH} {exe_path} -c \"print(\\'Python probe success\\')\"'"
+                                    logger.info(f"Probing for Python interpreter at: {exe_path}") # Removed "with PATH..."
+                                    test_cmd = f"{exe_path} -c \"print('Python probe success')\"" # Reverted
                                     probe_req = SessionExecuteRequest(command=test_cmd, var_async=False, cwd="/workspace")
                                     try:
                                         if use_daytona():
@@ -487,11 +485,11 @@ print(f"Python cleanup script finished. Total files deleted: {files_deleted_coun
 
                             if found_python_executable:
                                 logger.debug(f"Attempting to execute Python cleanup script (first 200 chars): {cleanup_script_str[:200]}...")
-                                # Escape the script for shell command line execution (for sh -c '...')
-                                escaped_python_script = cleanup_script_str.replace('\\', '\\\\').replace("'", "'\\''")
-                                python_exec_command = f"sh -c 'env PATH={STANDARD_PATH} {found_python_executable} -c \'{escaped_python_script}\''"
+                                # Escape the script for shell command line execution (for python -c "...")
+                                escaped_python_script = cleanup_script_str.replace('\\', '\\\\').replace('"', '\\"') # Reverted
+                                python_exec_command = f"{found_python_executable} -c \"{escaped_python_script}\"" # Reverted
 
-                                logger.debug(f"Executing Python cleanup script in session {cleanup_session_id} using {found_python_executable} with PATH: {STANDARD_PATH}")
+                                logger.debug(f"Executing Python cleanup script in session {cleanup_session_id} using {found_python_executable}") # Removed "with PATH..."
                                 exec_req_python = SessionExecuteRequest(command=python_exec_command, var_async=False, cwd="/workspace")
 
                                 if use_daytona():
