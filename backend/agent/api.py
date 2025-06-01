@@ -429,66 +429,14 @@ async def start_agent(
             logger.error(f"Failed to start/ensure sandbox for project {project_id}: {str(e_sandbox)}")
             raise HTTPException(status_code=500, detail=f"Failed to initialize sandbox: {str(e_sandbox)}")
 
-        # Conditional Planning Logic
-        if is_planning_request:
-            logger.info(f"Initiating planning flow for existing thread: {thread_id}")
-            try:
-                # Enhanced logging for task_planner
-                logger.debug(f"Attempting to use TaskPlanner in start_agent. Object: {task_planner}")
-                logger.debug(f"Type of task_planner object: {type(task_planner)}")
-                try:
-                    logger.debug(f"Attributes of task_planner object: {dir(task_planner)}")
-                except Exception as e_dir:
-                    logger.debug(f"Could not get dir(task_planner): {str(e_dir)}")
-                logger.debug(f"Checking for 'plan_task' method. hasattr(task_planner, 'plan_task'): {hasattr(task_planner, 'plan_task')}")
+        # is_planning_request flag is kept for logging or metadata if needed.
+        # However, the execution path is now unified as run_agent handles planning internally.
+        # The original block for `if is_planning_request:` which directly called
+        # `task_planner.plan_task` and `plan_executor.execute_plan` is removed.
 
-                main_planned_task = await task_planner.plan_task(
-                    task_description=prompt_text,
-                    context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
-                )
-
-                if main_planned_task and main_planned_task.status == "planned":
-                    agent_run_id_for_plan = main_planned_task.id
-                    logger.info(f"Planning successful for thread {thread_id}. Main task ID: {agent_run_id_for_plan}")
-
-                    active_run_id_check = await check_for_active_project_agent_run(client, project_id)
-                    if active_run_id_check and active_run_id_check != agent_run_id_for_plan: # Don't stop self if somehow reactivated
-                        logger.info(f"Stopping existing agent run {active_run_id_check} for project {project_id} before starting planned run.")
-                        await stop_agent_run(active_run_id_check)
-
-                    await client.table('agent_runs').insert({
-                        "id": agent_run_id_for_plan,
-                        "thread_id": thread_id,
-                        "status": "running",
-                        "started_at": datetime.now(timezone.utc).isoformat(),
-                        "is_plan_execution": True
-                    }).execute()
-                    logger.info(f"Created agent_run record for planned execution on thread {thread_id}: {agent_run_id_for_plan}")
-
-                    instance_key_plan = f"active_run:{instance_id}:{agent_run_id_for_plan}"
-                    await redis.set(instance_key_plan, "running", ex=redis.REDIS_KEY_TTL)
-
-                    plan_executor = PlanExecutor(
-                        main_task_id=agent_run_id_for_plan,
-                        task_manager=task_state_manager,
-                        tool_orchestrator=agent_tool_orchestrator
-                    )
-                    asyncio.create_task(plan_executor.execute_plan())
-                    logger.info(f"Started PlanExecutor in background for task on thread {thread_id}: {agent_run_id_for_plan}")
-
-                    return {"agent_run_id": agent_run_id_for_plan, "status": "running", "plan_details": main_planned_task.model_dump()}
-                else:
-                    logger.error(f"Task planning failed for thread {thread_id}. Main task: {main_planned_task}")
-                    is_planning_request = False # Fallback
-                    logger.warning(f"Falling back to normal agent execution for thread {thread_id} due to planning failure.")
-
-            except Exception as planning_exc:
-                logger.error(f"Exception during planning phase for thread {thread_id}: {str(planning_exc)}", exc_info=True)
-                is_planning_request = False # Fallback
-                logger.warning(f"Falling back to normal agent execution for thread {thread_id} due to exception in planning.")
-
-        # Standard agent execution (if not is_planning_request or fallback)
-        if not is_planning_request:
+        # Standard agent execution (always follows this path now)
+        # The 'if not is_planning_request:' condition that previously wrapped this block is removed,
+        # making this the default and only execution path branching from here.
             logger.info(f"Proceeding with normal agent execution for thread {thread_id}.")
 
             active_run_id = await check_for_active_project_agent_run(client, project_id)
@@ -1116,69 +1064,14 @@ async def initiate_agent_with_files(
             "created_at": datetime.now(timezone.utc).isoformat()
         }).execute()
 
-        # 6. Start Agent Run or Plan Execution
-        if is_planning_request:
-            logger.info(f"Initiating planning flow for project: {project_id}, thread: {thread_id}")
-            try:
-                # Enhanced logging for task_planner
-                logger.debug(f"Attempting to use TaskPlanner in initiate_agent_with_files. Object: {task_planner}")
-                logger.debug(f"Type of task_planner object: {type(task_planner)}")
-                try:
-                    logger.debug(f"Attributes of task_planner object: {dir(task_planner)}")
-                except Exception as e_dir:
-                    logger.debug(f"Could not get dir(task_planner): {str(e_dir)}")
-                logger.debug(f"Checking for 'plan_task' method. hasattr(task_planner, 'plan_task'): {hasattr(task_planner, 'plan_task')}")
+        # is_planning_request flag is kept for logging or metadata if needed.
+        # However, the execution path is now unified as run_agent handles planning internally.
+        # The original block for `if is_planning_request:` which directly called
+        # `task_planner.plan_task` and `plan_executor.execute_plan` is removed.
 
-                main_planned_task = await task_planner.plan_task(
-                    task_description=prompt,  # Using the original prompt for planning
-                    context={"project_id": project_id, "thread_id": thread_id, "user_id": user_id}
-                )
-
-                if main_planned_task and main_planned_task.status == "planned": # Assuming 'planned' is the success status
-                    agent_run_id_for_plan = main_planned_task.id
-                    logger.info(f"Planning successful. Main task ID: {agent_run_id_for_plan}")
-
-                    await client.table('agent_runs').insert({
-                        "id": agent_run_id_for_plan,
-                        "thread_id": thread_id,
-                        "status": "running", # Or "planned_execution"
-                        "started_at": datetime.now(timezone.utc).isoformat(),
-                        "is_plan_execution": True
-                    }).execute()
-                    logger.info(f"Created agent_run record for planned execution: {agent_run_id_for_plan}")
-
-                    # Register run in Redis (important for streaming and control)
-                    instance_key_plan = f"active_run:{instance_id}:{agent_run_id_for_plan}"
-                    await redis.set(instance_key_plan, "running", ex=redis.REDIS_KEY_TTL)
-
-                    plan_executor = PlanExecutor(
-                        main_task_id=agent_run_id_for_plan,
-                        task_manager=task_state_manager,
-                        tool_orchestrator=agent_tool_orchestrator,
-                        # TODO: Pass other necessary params like model_name, enable_thinking if PlanExecutor needs them per-task
-                    )
-                    asyncio.create_task(plan_executor.execute_plan())
-                    logger.info(f"Started PlanExecutor in background for task: {agent_run_id_for_plan}")
-
-                    return {
-                        "thread_id": thread_id,
-                        "agent_run_id": agent_run_id_for_plan,
-                        "plan_details": main_planned_task.model_dump() # Or .dict() if not Pydantic v2
-                    }
-                else:
-                    logger.error(f"Task planning failed or returned an invalid state. Main task: {main_planned_task}")
-                    # Fallback to normal agent execution
-                    is_planning_request = False # Ensure we fall through to normal execution
-                    logger.warning("Falling back to normal agent execution due to planning failure.")
-
-            except Exception as planning_exc:
-                logger.error(f"Exception during planning phase: {str(planning_exc)}", exc_info=True)
-                # Fallback to normal agent execution
-                is_planning_request = False # Ensure we fall through to normal execution
-                logger.warning("Falling back to normal agent execution due to exception in planning.")
-
-        # This block will execute if is_planning_request is False initially, or if it was set to False due to fallback
-        if not is_planning_request:
+        # This block will execute. The 'if not is_planning_request:' condition that previously
+        # wrapped this block (or was the alternative to a planning block) is removed,
+        # making this the default and only execution path branching from here for starting the agent.
             logger.info("Proceeding with normal agent execution.")
             agent_run_table_insert = await client.table('agent_runs').insert({
                 "thread_id": thread_id, "status": "running",
