@@ -36,6 +36,7 @@ from agentpress.task_state_manager import TaskStateManager
 from agentpress.task_storage_supabase import SupabaseTaskStorage
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.plan_executor import PlanExecutor # Import PlanExecutor
+from agentpress.utils.message_assembler import MessageAssembler
 
 
 load_dotenv()
@@ -81,6 +82,7 @@ async def run_agent(
     trace: Optional[StatefulTraceClient] = None
 ):
     """Run the development agent with specified configuration."""
+    message_assembler = MessageAssembler()
     try:
         logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id=trace.id if trace else 'N/A', model_name={model_name}, stream={stream}")
         logger.info(f"🚀 Starting agent with model: {model_name} for thread_id: {thread_id}, project_id: {project_id}")
@@ -192,6 +194,10 @@ async def run_agent(
     while continue_execution and iteration_count < max_iterations:
         iteration_count += 1
         logger.info(f"🔄 Running iteration {iteration_count} of {max_iterations}...")
+
+        # Cleanup stale buffers at the beginning of each iteration
+        if message_assembler: # Ensure it's initialized (it is, at the start of run_agent)
+            message_assembler.cleanup_stale_buffers() # Default max_age_seconds is 60
 
         # Billing check on each iteration - still needed within the iterations
         can_run, message, subscription = await check_billing_status(client, account_id)
@@ -585,50 +591,83 @@ async def run_agent(
             try:
                 full_response = ""
                 async for chunk in response:
-                    logger.debug(f"Iteration {iteration_count}: Received chunk from run_thread: {str(chunk)[:200]}")
+                    logger.debug(f"Iteration {iteration_count}: Received raw chunk from run_thread: {json.dumps(chunk)}")
                     # If we receive an error chunk, we should stop after this iteration
                     if isinstance(chunk, dict) and chunk.get('type') == 'status' and chunk.get('status') == 'error':
-                        logger.error(f"Error chunk detected: {chunk.get('message', 'Unknown error')}")
+                        logger.error(f"Error chunk detected: {json.dumps(chunk)}")
                         trace.event(name="error_chunk_detected", level="ERROR", status_message=(f"{chunk.get('message', 'Unknown error')}"))
                         error_detected = True
                         yield chunk  # Forward the error chunk
                         continue     # Continue processing other chunks but don't break yet
-                        
-                    # Check for XML versions like <ask>, <complete>, or <web-browser-takeover> in assistant content chunks
-                    if chunk.get('type') == 'assistant' and 'content' in chunk:
-                        try:
-                            # The content field might be a JSON string or object
-                            content = chunk.get('content', '{}')
-                            if isinstance(content, str):
-                                assistant_content_json = json.loads(content)
-                            else:
-                                assistant_content_json = content
 
-                            # The actual text content is nested within
+                    if chunk.get('type') == 'assistant' and isinstance(chunk.get('content'), str):
+                        chunk_for_assembler = chunk.copy()
+                        chunk_for_assembler['thread_id'] = thread_id
+                        assembled_message_content = message_assembler.process_chunk(chunk_for_assembler)
+
+                        if isinstance(assembled_message_content, dict):
+                            logger.info(f"Assembled complete message: {json.dumps(assembled_message_content)}")
+                            assistant_content_json = assembled_message_content
                             assistant_text = assistant_content_json.get('content', '')
+                            if not isinstance(assistant_text, str):
+                                assistant_text = json.dumps(assistant_text)
+
                             full_response += assistant_text
-                            if isinstance(assistant_text, str): # Ensure it's a string
-                                 # Check for the closing tags as they signal the end of the tool usage
+                            if isinstance(assistant_text, str):
                                 if '</ask>' in assistant_text or '</complete>' in assistant_text or '</web-browser-takeover>' in assistant_text:
-                                   if '</ask>' in assistant_text:
-                                       xml_tool = 'ask'
-                                   elif '</complete>' in assistant_text:
-                                       xml_tool = 'complete'
-                                   elif '</web-browser-takeover>' in assistant_text:
-                                       xml_tool = 'web-browser-takeover'
+                                    if '</ask>' in assistant_text:
+                                        xml_tool = 'ask'
+                                    elif '</complete>' in assistant_text:
+                                        xml_tool = 'complete'
+                                    elif '</web-browser-takeover>' in assistant_text:
+                                        xml_tool = 'web-browser-takeover'
+                                    last_tool_call = xml_tool
+                                    logger.info(f"Agent used XML tool: {xml_tool} via assembled message")
+                                    trace.event(name="agent_used_xml_tool_assembled", level="DEFAULT", status_message=(f"Agent used XML tool: {xml_tool}"))
+                            yield chunk # Yield the original chunk that completed assembly
+                        else:
+                            logger.debug(f"Assistant chunk processed by assembler, but no complete message yet. Original chunk yielded.")
+                            yield chunk
 
-                                   last_tool_call = xml_tool
-                                   logger.info(f"Agent used XML tool: {xml_tool}")
-                                   trace.event(name="agent_used_xml_tool", level="DEFAULT", status_message=(f"Agent used XML tool: {xml_tool}"))
-                        except json.JSONDecodeError:
-                            # Handle cases where content might not be valid JSON
-                            logger.warning(f"Warning: Could not parse assistant content JSON: {chunk.get('content')}")
-                            trace.event(name="warning_could_not_parse_assistant_content_json", level="WARNING", status_message=(f"Warning: Could not parse assistant content JSON: {chunk.get('content')}"))
-                        except Exception as e:
-                            logger.error(f"Error processing assistant chunk: {e}", exc_info=True) # Ensured exc_info=True
-                            trace.event(name="error_processing_assistant_chunk", level="ERROR", status_message=(f"Error processing assistant chunk: {e}"))
+                    # Else (chunk is not an assistant chunk with string content, or already processed by assembler)
+                    else:
+                        if chunk.get('type') == 'assistant' and 'content' in chunk: # e.g. already a dict
+                            try:
+                                content = chunk.get('content', '{}')
+                                if isinstance(content, str):
+                                    # This case should ideally be handled by the assembler if it's a fragment.
+                                    # If it's a full JSON string not caught by assembler (e.g. no thread_id initially), try to parse.
+                                    try:
+                                        assistant_content_json = json.loads(content)
+                                    except json.JSONDecodeError:
+                                        logger.warning(f"Assistant content is string but not valid JSON, treating as plain text: {json.dumps(content)}")
+                                        assistant_content_json = {"role": "assistant", "content": content} # Wrap it
+                                else: # It's already a dict
+                                    assistant_content_json = content
 
-                    yield chunk
+                                assistant_text = assistant_content_json.get('content', '')
+                                if not isinstance(assistant_text, str): # Ensure text is string
+                                    assistant_text = json.dumps(assistant_text)
+
+                                full_response += assistant_text
+                                if isinstance(assistant_text, str):
+                                    if '</ask>' in assistant_text or '</complete>' in assistant_text or '</web-browser-takeover>' in assistant_text:
+                                        if '</ask>' in assistant_text: xml_tool = 'ask'
+                                        elif '</complete>' in assistant_text: xml_tool = 'complete'
+                                        elif '</web-browser-takeover>' in assistant_text: xml_tool = 'web-browser-takeover'
+                                        last_tool_call = xml_tool
+                                        logger.info(f"Agent used XML tool: {xml_tool} via non-string or pre-parsed content")
+                                        trace.event(name="agent_used_xml_tool_direct", level="DEFAULT", status_message=(f"Agent used XML tool: {xml_tool}"))
+                            except json.JSONDecodeError:
+                                # If chunk.get('content') was the string that failed to parse, dumping it as JSON string is fine.
+                                logger.warning(f"Warning: Could not parse non-string assistant content JSON: {json.dumps(chunk.get('content'))}")
+                                trace.event(name="warning_could_not_parse_assistant_content_json_direct", level="WARNING", status_message=(f"Warning: Could not parse assistant content JSON: {json.dumps(chunk.get('content'))}"))
+                            except Exception as e:
+                                logger.error(f"Error processing non-string/pre-parsed assistant chunk: {e}", exc_info=True)
+                                trace.event(name="error_processing_assistant_chunk_direct", level="ERROR", status_message=(f"Error processing assistant chunk: {e}"))
+
+                        yield chunk # Yield original chunk if not processed by assembler or if it's not an assistant string content
+
                 logger.info(f"Iteration {iteration_count}: Finished iterating over run_thread response for thread {thread_id}")
                 # Check if we should stop based on the last tool call or error
                 if error_detected:
