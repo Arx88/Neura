@@ -292,6 +292,7 @@ CREATE OR REPLACE FUNCTION get_llm_formatted_messages(p_thread_id UUID)
 RETURNS JSONB
 SECURITY DEFINER -- Changed to SECURITY DEFINER to allow service role access
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 DECLARE
     messages_array JSONB := '[]'::JSONB;

@@ -97,7 +97,10 @@ create policy "Basejump settings can be read by authenticated users" on basejump
   This is not accessible from the outside, so can only be used inside postgres functions
  */
 CREATE OR REPLACE FUNCTION basejump.get_config()
-    RETURNS json AS
+    RETURNS json
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 DECLARE
     result RECORD;
@@ -105,7 +108,7 @@ BEGIN
     SELECT * from basejump.config limit 1 into result;
     return row_to_json(result);
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 grant execute on function basejump.get_config() to authenticated, service_role;
 
@@ -115,7 +118,10 @@ grant execute on function basejump.get_config() to authenticated, service_role;
   Check a specific boolean config value
  */
 CREATE OR REPLACE FUNCTION basejump.is_set(field_name text)
-    RETURNS boolean AS
+    RETURNS boolean
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 DECLARE
     result BOOLEAN;
@@ -123,7 +129,7 @@ BEGIN
     execute format('select %I from basejump.config limit 1', field_name) into result;
     return result;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 grant execute on function basejump.is_set(text) to authenticated;
 
@@ -133,7 +139,10 @@ grant execute on function basejump.is_set(text) to authenticated;
   * on tables
  */
 CREATE OR REPLACE FUNCTION basejump.trigger_set_timestamps()
-    RETURNS TRIGGER AS
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 BEGIN
     if TG_OP = 'INSERT' then
@@ -145,7 +154,7 @@ BEGIN
     end if;
     RETURN NEW;
 END
-$$ LANGUAGE plpgsql;
+$$;
 
 
 /**
@@ -153,7 +162,10 @@ $$ LANGUAGE plpgsql;
   * on tables
  */
 CREATE OR REPLACE FUNCTION basejump.trigger_set_user_tracking()
-    RETURNS TRIGGER AS
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 BEGIN
     if TG_OP = 'INSERT' then
@@ -165,7 +177,7 @@ BEGIN
     end if;
     RETURN NEW;
 END
-$$ LANGUAGE plpgsql;
+$$;
 
 /**
   basejump.generate_token(length)
@@ -174,13 +186,16 @@ $$ LANGUAGE plpgsql;
   how it's used
  */
 CREATE OR REPLACE FUNCTION basejump.generate_token(length int)
-    RETURNS text AS
+    RETURNS text
+    LANGUAGE sql
+    SET search_path = basejump
+AS
 $$
 select regexp_replace(replace(
                               replace(replace(replace(encode(gen_random_bytes(length)::bytea, 'base64'), '/', ''), '+',
                                               ''), '\', ''),
                               '=',
                               ''), E'[\\n\\r]+', '', 'g');
-$$ LANGUAGE sql;
+$$;
 
 grant execute on function basejump.generate_token(int) to authenticated;

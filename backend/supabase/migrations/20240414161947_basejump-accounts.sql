@@ -80,7 +80,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE basejump.accounts TO authenticated
  * primary_owner_user_id should be updated using the dedicated function
  */
 CREATE OR REPLACE FUNCTION basejump.protect_account_fields()
-    RETURNS TRIGGER AS
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 BEGIN
     IF current_user IN ('authenticated', 'anon') THEN
@@ -96,7 +99,7 @@ BEGIN
 
     RETURN NEW;
 END
-$$ LANGUAGE plpgsql;
+$$;
 
 -- trigger to protect account fields
 CREATE TRIGGER basejump_protect_account_fields
@@ -107,7 +110,10 @@ EXECUTE FUNCTION basejump.protect_account_fields();
 
 -- convert any character in the slug that's not a letter, number, or dash to a dash on insert/update for accounts
 CREATE OR REPLACE FUNCTION basejump.slugify_account_slug()
-    RETURNS TRIGGER AS
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = basejump
+AS
 $$
 BEGIN
     if NEW.slug is not null then
@@ -116,7 +122,7 @@ BEGIN
 
     RETURN NEW;
 END
-$$ LANGUAGE plpgsql;
+$$;
 
 -- trigger to slugify the account slug
 CREATE TRIGGER basejump_slugify_account_slug
