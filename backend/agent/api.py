@@ -437,35 +437,35 @@ async def start_agent(
         # Standard agent execution (always follows this path now)
         # The 'if not is_planning_request:' condition that previously wrapped this block is removed,
         # making this the default and only execution path branching from here.
-            logger.info(f"Proceeding with normal agent execution for thread {thread_id}.")
+        logger.info(f"Proceeding with normal agent execution for thread {thread_id}.")
 
-            active_run_id = await check_for_active_project_agent_run(client, project_id)
-            if active_run_id:
-                logger.info(f"Stopping existing agent run {active_run_id} for project {project_id} before starting new normal run.")
-                await stop_agent_run(active_run_id)
+        active_run_id = await check_for_active_project_agent_run(client, project_id)
+        if active_run_id:
+            logger.info(f"Stopping existing agent run {active_run_id} for project {project_id} before starting new normal run.")
+            await stop_agent_run(active_run_id)
 
-            agent_run_insert = await client.table('agent_runs').insert({
-                "thread_id": thread_id, "status": "running",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "is_plan_execution": False
-            }).execute()
-            agent_run_id = agent_run_insert.data[0]['id']
-            logger.info(f"Created new agent run (non-plan) for thread {thread_id}: {agent_run_id}")
+        agent_run_insert = await client.table('agent_runs').insert({
+            "thread_id": thread_id, "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "is_plan_execution": False
+        }).execute()
+        agent_run_id = agent_run_insert.data[0]['id']
+        logger.info(f"Created new agent run (non-plan) for thread {thread_id}: {agent_run_id}")
 
-            instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
-            try:
-                await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
-            except Exception as e_redis:
-                logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e_redis)}")
+        instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
+        try:
+            await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
+        except Exception as e_redis:
+            logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e_redis)}")
 
-            run_agent_background.send(
-                agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
-                project_id=project_id,
-                model_name=model_name,
-                enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
-                stream=body.stream, enable_context_manager=body.enable_context_manager
-            )
-            return {"agent_run_id": agent_run_id, "status": "running"}
+        run_agent_background.send(
+            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+            project_id=project_id,
+            model_name=model_name,
+            enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
+            stream=body.stream, enable_context_manager=body.enable_context_manager
+        )
+        return {"agent_run_id": agent_run_id, "status": "running"}
 
     except Exception as e:
         logger.error(f"Error in start_agent for thread {thread_id}: {str(e)}", exc_info=True)
@@ -1072,30 +1072,30 @@ async def initiate_agent_with_files(
         # This block will execute. The 'if not is_planning_request:' condition that previously
         # wrapped this block (or was the alternative to a planning block) is removed,
         # making this the default and only execution path branching from here for starting the agent.
-            logger.info("Proceeding with normal agent execution.")
-            agent_run_table_insert = await client.table('agent_runs').insert({
-                "thread_id": thread_id, "status": "running",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "is_plan_execution": False # Explicitly set for normal runs
-            }).execute()
-            agent_run_id = agent_run_table_insert.data[0]['id']
-            logger.info(f"Created new agent run (non-plan): {agent_run_id}")
+        logger.info("Proceeding with normal agent execution.")
+        agent_run_table_insert = await client.table('agent_runs').insert({
+            "thread_id": thread_id, "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "is_plan_execution": False # Explicitly set for normal runs
+        }).execute()
+        agent_run_id = agent_run_table_insert.data[0]['id']
+        logger.info(f"Created new agent run (non-plan): {agent_run_id}")
 
-            # Register run in Redis
-            instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
-            try:
-                await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
-            except Exception as e:
-                logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e)}")
+        # Register run in Redis
+        instance_key_normal = f"active_run:{instance_id}:{agent_run_id}"
+        try:
+            await redis.set(instance_key_normal, "running", ex=redis.REDIS_KEY_TTL)
+        except Exception as e:
+            logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e)}")
 
-            run_agent_background.send(
-                agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
-                project_id=project_id,
-                model_name=model_name,
-                enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-                stream=stream, enable_context_manager=enable_context_manager
-            )
-            return {"thread_id": thread_id, "agent_run_id": agent_run_id}
+        run_agent_background.send(
+            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+            project_id=project_id,
+            model_name=model_name,
+            enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
+            stream=stream, enable_context_manager=enable_context_manager
+        )
+        return {"thread_id": thread_id, "agent_run_id": agent_run_id}
 
     except Exception as e:
         logger.error(f"Error in agent initiation: {str(e)}\n{traceback.format_exc()}")
