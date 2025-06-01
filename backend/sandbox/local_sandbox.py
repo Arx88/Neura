@@ -118,12 +118,15 @@ class LocalSandbox:
         """Ejecutar un comando en el contenedor"""
         STANDARD_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         try:
-            cmd = command_request.command if hasattr(command_request, 'command') else command_request
+            cmd_text = command_request.command if hasattr(command_request, 'command') else command_request
             cwd = command_request.cwd if hasattr(command_request, 'cwd') else "/workspace"
 
+            # Construct the shell script string that sh -c will execute
+            shell_script_to_execute = f"cd {cwd} && {cmd_text}"
+
             # Ejecutar el comando
-            exit_code, output = container.exec_run(
-                cmd=f"sh -c 'cd {cwd} && {cmd}'",
+            exit_code, output_bytes = container.exec_run(
+                cmd=['/bin/sh', '-c', shell_script_to_execute],
                 environment={"PATH": STANDARD_PATH},
                 stdout=True,
                 stderr=True
@@ -132,7 +135,7 @@ class LocalSandbox:
             return {
                 'cmd_id': str(uuid.uuid4()),
                 'exit_code': exit_code,
-                'output': output.decode('utf-8', errors='replace')
+                'output': output_bytes.decode('utf-8', errors='replace')
             }
         except Exception as e:
             self.logger.error(f"Error al ejecutar comando en sandbox local: {str(e)}")
