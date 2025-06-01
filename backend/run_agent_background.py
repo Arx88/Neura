@@ -16,6 +16,8 @@ from dramatiq.brokers.rabbitmq import RabbitmqBroker
 from utils.config import config # Added import
 from services.langfuse import langfuse
 from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.task_storage_supabase import SupabaseTaskStorage # Added import
+from agentpress.task_state_manager import TaskStateManager # Added import
 # Imports for sandbox stopping
 from sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
@@ -127,13 +129,24 @@ async def run_agent_background(
             local_tool_orchestrator.load_tools_from_directory() # This uses the corrected absolute path
             logger.info(f"RUN_AGENT_BACKGROUND: ToolOrchestrator for worker initialized. {len(local_tool_orchestrator.get_tool_schemas_for_llm())} tools loaded.")
 
+            # Initialize TaskStateManager for this run
+            logger.info(f"RUN_AGENT_BACKGROUND: Initializing TaskStateManager for agent_run_id: {agent_run_id}...")
+            # db.client is the initialized Supabase client from `await db.initialize()`
+            task_storage = SupabaseTaskStorage(db_client=client) # Use 'client' which is db.client
+            local_task_state_manager = TaskStateManager(storage=task_storage)
+            # Assuming initialize method exists and is async, as per prompt context
+            # If TaskStateManager's initialize is not async, remove await
+            await local_task_state_manager.initialize()
+            logger.info("RUN_AGENT_BACKGROUND: TaskStateManager initialized.")
+
             # Initialize agent generator
             agent_gen = run_agent(
                 thread_id=thread_id, project_id=project_id, stream=stream,
                 model_name=model_name,
                 enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
                 enable_context_manager=enable_context_manager,
-                tool_orchestrator=local_tool_orchestrator, # Use the new local instance
+                tool_orchestrator=local_tool_orchestrator,
+                task_state_manager=local_task_state_manager, # Pass the new instance
                 trace=trace
             )
         except Exception as e_agent_init:
