@@ -85,37 +85,38 @@ class PlanExecutor:
         except Exception as e:
             logger.error(f"PLAN_EXECUTOR: Error sending message via Redis for main_task_id {self.main_task_id}: {e}", exc_info=True)
 
-    async def execute_plan(self):
+    async def execute_plan_for_task(self, main_task_id: str):
         """
-        Executes the plan associated with `self.main_task_id`.
+        Executes the plan associated with the provided `main_task_id`.
 
         This method orchestrates the execution of subtasks according to their
         dependencies. It updates task statuses and reports progress via logs
         and the user message callback. If any subtask fails, the overall plan
         is marked as failed.
         """
-        logger.info(f"PLAN_EXECUTOR: Starting execution of plan for main_task_id: {self.main_task_id}")
-        await self.task_manager.update_task(self.main_task_id, {"status": "running"})
+        logger.info(f"PLAN_EXECUTOR: Starting execution of plan for main_task_id: {main_task_id}")
+        await self.task_manager.update_task(main_task_id, {"status": "running"})
 
-        main_task = await self.task_manager.get_task(self.main_task_id)
+        main_task = await self.task_manager.get_task(main_task_id)
         if not main_task:
-            logger.error(f"PLAN_EXECUTOR: Main task {self.main_task_id} not found. Cannot execute plan.")
-            error_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Error: Could not find the main plan task (ID: {self.main_task_id})."}, "metadata": {"thread_run_id": self.main_task_id}}
-            await self._send_user_message(error_event)
-            await self.task_manager.update_task(self.main_task_id, {"status": "failed", "output": "Main task not found during execution."})
+            logger.error(f"PLAN_EXECUTOR: Main task {main_task_id} not found. Cannot execute plan.")
+            # Note: _send_user_message uses self.main_task_id from __init__. This is acceptable if they are the same.
+            error_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Error: Could not find the main plan task (ID: {main_task_id})."}, "metadata": {"thread_run_id": main_task_id}}
+            await self._send_user_message(error_event) # self.main_task_id used here for channel
+            await self.task_manager.update_task(main_task_id, {"status": "failed", "output": "Main task not found during execution."})
             return
 
         logger.debug(f"PLAN_EXECUTOR: Main task '{main_task.name}' (ID: {main_task.id}) fetched. Description: {main_task.description}")
 
-        subtasks: List[TaskState] = await self.task_manager.get_subtasks(self.main_task_id)
+        subtasks: List[TaskState] = await self.task_manager.get_subtasks(main_task_id)
         subtasks.sort(key=lambda x: x.created_at if x.created_at else x.id) # Keep existing sort
-        logger.debug(f"PLAN_EXECUTOR: Fetched {len(subtasks)} subtasks for plan {self.main_task_id}.")
+        logger.debug(f"PLAN_EXECUTOR: Fetched {len(subtasks)} subtasks for plan {main_task_id}.")
 
         total_steps = len(subtasks)
         current_step_number = 0 # Will be incremented before processing each step
 
-        start_plan_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Starting execution of plan: {main_task.name} (ID: {main_task.id}) with {total_steps} subtasks."}, "metadata": {"thread_run_id": self.main_task_id}}
-        await self._send_user_message(start_plan_event)
+        start_plan_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Starting execution of plan: {main_task.name} (ID: {main_task.id}) with {total_steps} subtasks."}, "metadata": {"thread_run_id": main_task_id}}
+        await self._send_user_message(start_plan_event) # self.main_task_id used here for channel
 
         completed_subtask_ids = set()
         plan_failed = False
@@ -150,9 +151,9 @@ class PlanExecutor:
 
             if not runnable_subtasks:
                 if pending_subtasks_exist:
-                    logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {self.main_task_id}. No runnable subtasks but pending tasks exist. Marking plan failed.")
-                    deadlock_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": "[Plan Update] Error: Plan execution cannot continue due to a deadlock (circular dependency or failed upstream task)."}, "metadata": {"thread_run_id": self.main_task_id}}
-                    await self._send_user_message(deadlock_event)
+                    logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {main_task_id}. No runnable subtasks but pending tasks exist. Marking plan failed.")
+                    deadlock_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": "[Plan Update] Error: Plan execution cannot continue due to a deadlock (circular dependency or failed upstream task)."}, "metadata": {"thread_run_id": main_task_id}}
+                    await self._send_user_message(deadlock_event) # self.main_task_id used here for channel
                     plan_failed = True
                 break
 
@@ -169,9 +170,9 @@ class PlanExecutor:
                 subtask_start_event = {
                     "type": "assistant_message_update",
                     "content": {"role": "assistant", "content": subtask_start_message},
-                    "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps}
+                    "metadata": {"thread_run_id": main_task_id, "step_current": current_step_number, "step_total": total_steps}
                 }
-                await self._send_user_message(subtask_start_event)
+                await self._send_user_message(subtask_start_event) # self.main_task_id used here for channel
                 await self.task_manager.update_task(subtask.id, {"status": "running"})
                 progress_made_in_pass = True
 
@@ -183,8 +184,8 @@ class PlanExecutor:
                     output_data = {"message": "No tools assigned, subtask auto-completed."}
                     logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} ('{subtask.name}') status updated to 'completed'. Output: {json.dumps(output_data, indent=2)}")
                     await self.task_manager.update_task(subtask.id, {"status": "completed", "output": json.dumps(output_data)})
-                    no_tool_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Subtask '{subtask.name}' completed (no tools were assigned)."}, "metadata": {"thread_run_id": self.main_task_id}}
-                    await self._send_user_message(no_tool_event)
+                    no_tool_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": f"[Plan Update] Subtask '{subtask.name}' completed (no tools were assigned)."}, "metadata": {"thread_run_id": main_task_id}}
+                    await self._send_user_message(no_tool_event) # self.main_task_id used here for channel
                     completed_subtask_ids.add(subtask.id)
                     continue
 
@@ -324,9 +325,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                         "message": f"Starting execution of tool {tool_name_for_event} for subtask '{subtask.name}'",
                                         "tool_index": 0 # Placeholder, could be subtask index or tool index within subtask
                                     },
-                                    "metadata": {"thread_run_id": self.main_task_id }
+                                    "metadata": {"thread_run_id": main_task_id }
                                 }
-                                await self._send_user_message(tool_started_event)
+                                await self._send_user_message(tool_started_event) # self.main_task_id used here for channel
 
                                 tool_result: ToolResult = await self.tool_orchestrator.execute_tool(tool_id, method_name, params)
 
@@ -342,9 +343,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                     "status": tool_result.status,
                                     "result": tool_result.result,
                                     "error": tool_result.error,
-                                    "metadata": {"thread_run_id": self.main_task_id }
+                                    "metadata": {"thread_run_id": main_task_id }
                                 }
-                                await self._send_user_message(tool_data_event)
+                                await self._send_user_message(tool_data_event) # self.main_task_id used here for channel
 
                                 status_type = "tool_completed" if tool_result.status == "completed" else "tool_failed"
                                 outcome_message = f"Tool {tool_name_from_result} {tool_result.status}"
@@ -357,9 +358,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                                         "tool_call_id": tool_call_id_for_event,
                                         "message": outcome_message,
                                     },
-                                    "metadata": {"thread_run_id": self.main_task_id }
+                                    "metadata": {"thread_run_id": main_task_id }
                                 }
-                                await self._send_user_message(tool_outcome_event)
+                                await self._send_user_message(tool_outcome_event) # self.main_task_id used here for channel
 
                                 tool_result_dict = {}
                                 if hasattr(tool_result, 'to_dict') and callable(tool_result.to_dict):
@@ -396,7 +397,7 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
 
                                     # Check for SystemCompleteTask (existing logic)
                                     if tool_id == "SystemCompleteTask" and method_name == "task_complete":
-                                        logger.info(f"PLAN_EXECUTOR: Agent signaled task completion via SystemCompleteTask. Main task {self.main_task_id} will be marked as completed.")
+                                        logger.info(f"PLAN_EXECUTOR: Agent signaled task completion via SystemCompleteTask. Main task {main_task_id} will be marked as completed.")
                                         completion_summary_from_agent = tool_result.result.get("summary", "Agent marked task as complete.")
                                         agent_signaled_completion = True
                                         break
@@ -417,9 +418,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                     subtask_failed_event = {
                         "type": "assistant_message_update",
                         "content": {"role": "assistant", "content": subtask_failed_message},
-                        "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps, "error_details": output_data_fail}
+                        "metadata": {"thread_run_id": main_task_id, "step_current": current_step_number, "step_total": total_steps, "error_details": output_data_fail}
                     }
-                    await self._send_user_message(subtask_failed_event)
+                    await self._send_user_message(subtask_failed_event) # self.main_task_id used here for channel
                     # logger.error(f"PLAN_EXECUTOR: Plan execution failed at subtask {subtask.id} ('{subtask.name}'). Stopping plan.") # Log already indicates failure
                     plan_failed = True
                     break
@@ -433,9 +434,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                     subtask_complete_event = {
                         "type": "assistant_message_update",
                         "content": {"role": "assistant", "content": subtask_complete_message},
-                        "metadata": {"thread_run_id": self.main_task_id, "step_current": current_step_number, "step_total": total_steps, "raw_output": output_data_complete}
+                        "metadata": {"thread_run_id": main_task_id, "step_current": current_step_number, "step_total": total_steps, "raw_output": output_data_complete}
                     }
-                    await self._send_user_message(subtask_complete_event)
+                    await self._send_user_message(subtask_complete_event) # self.main_task_id used here for channel
 
                 if agent_signaled_completion:
                     break
@@ -447,9 +448,9 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                 break
 
             if not progress_made_in_pass and pending_subtasks_exist:
-                 logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {self.main_task_id} on second check. No progress made but pending tasks exist. Marking plan failed.")
-                 no_progress_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": "[Plan Update] Error: Plan execution cannot continue due to a deadlock (no progress made on pending tasks)."}, "metadata": {"thread_run_id": self.main_task_id}}
-                 await self._send_user_message(no_progress_event)
+                 logger.error(f"PLAN_EXECUTOR: Deadlock detected in plan {main_task_id} on second check. No progress made but pending tasks exist. Marking plan failed.")
+                 no_progress_event = {"type": "assistant_message_update", "content": {"role": "assistant", "content": "[Plan Update] Error: Plan execution cannot continue due to a deadlock (no progress made on pending tasks)."}, "metadata": {"thread_run_id": main_task_id}}
+                 await self._send_user_message(no_progress_event) # self.main_task_id used here for channel
                  plan_failed = True
                  break
 
@@ -505,18 +506,18 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                         result_str = result_str[:max_result_len] + "..."
                     final_main_task_message += f"\n- Paso '{step_result['step_name']}' (Herramienta: {step_result['tool_used']}):\n  Resultado: {result_str}"
 
-        logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {self.main_task_id} finished with status '{final_main_task_status}'. Summary: {final_main_task_message}")
+        logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {main_task_id} finished with status '{final_main_task_status}'. Summary: {final_main_task_message}")
 
         final_plan_status_event_content = f"[Plan '{main_task.name}' {final_main_task_status.upper()}] {final_main_task_message}"
         final_plan_status_event = {
             "type": "assistant_message_update",
             "content": {"role": "assistant", "content": final_plan_status_event_content},
-            "metadata": {"thread_run_id": self.main_task_id, "final_status": final_main_task_status}
+            "metadata": {"thread_run_id": main_task_id, "final_status": final_main_task_status}
         }
-        await self._send_user_message(final_plan_status_event)
+        await self._send_user_message(final_plan_status_event) # self.main_task_id used here for channel
 
         await self.task_manager.update_task(
-            self.main_task_id,
+            main_task_id,
             {"status": final_main_task_status, "output": json.dumps({"message": final_main_task_message}, ensure_ascii=False)}
         )
 
