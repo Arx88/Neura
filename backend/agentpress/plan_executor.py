@@ -5,7 +5,7 @@ The PlanExecutor iterates through subtasks, respecting their dependencies,
 and uses an LLM to determine parameters for assigned tools, then executes them
 via the ToolOrchestrator.
 """
-from typing import Optional, List, Dict, Any, AsyncGenerator # Updated imports
+from typing import Optional, List, Dict, Any, AsyncGenerator, Callable # Updated imports
 import json
 import uuid
 import asyncio # Added import
