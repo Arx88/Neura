@@ -6,6 +6,7 @@ them as proper JSONB objects in the database.
 """
 
 import json
+import logging # Added import
 from typing import Any, Union, Dict, List
 
 
@@ -171,4 +172,28 @@ def format_for_yield(message_object: Dict[str, Any]) -> Dict[str, Any]:
     if 'metadata' in formatted and not isinstance(formatted['metadata'], str):
         formatted['metadata'] = json.dumps(formatted['metadata'])
         
-    return formatted 
+    return formatted
+
+def extract_json_from_response(response_text: str):
+    """
+    Extrae un bloque de código JSON de una cadena de texto,
+    incluso si está envuelto en markdown.
+    """
+    try:
+        # Busca el inicio del bloque de código JSON
+        json_start_index = response_text.find('{')
+        # Busca el final del bloque de código JSON
+        json_end_index = response_text.rfind('}') + 1
+
+        if json_start_index == -1 or json_end_index == 0:
+            logging.warning("No se encontró un objeto JSON en la respuesta.")
+            return None
+
+        json_str = response_text[json_start_index:json_end_index]
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logging.error(f"Error al decodificar JSON: {e}\nRespuesta recibida: {response_text}")
+        return None
+    except Exception as e:
+        logging.error(f"Error inesperado al extraer JSON: {e}")
+        return None
