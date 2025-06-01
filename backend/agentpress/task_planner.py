@@ -39,9 +39,17 @@ class SubtaskDecompositionItem(BaseModel):
         task_description: str,
         context: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]: # Return type is a list of dicts for subtasks
-        logger.debug(f"TASK_PLANNER: Decomposing task using global SYSTEM_PROMPT: {task_description}")
+        logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
 
-        SYSTEM_PROMPT = get_system_prompt() # Get the global system prompt
+        SYSTEM_PROMPT = """
+Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal en una secuencia de subtareas ejecutables por un agente de IA. Debes devolver SIEMPRE un objeto JSON válido con una única clave "plan", que contiene una lista de subtareas. Cada subtarea en la lista debe ser un objeto con las siguientes claves: "tool_code", "thought" y "parameters".
+
+"tool_code": El nombre exacto de la herramienta a utilizar.
+"thought": Una descripción clara y concisa de lo que hace este paso.
+"parameters": Un objeto con los parámetros necesarios para la herramienta.
+Ejemplo de salida esperada: { "plan": [ { "tool_code": "web_search", "thought": "Buscar en internet los mejores hoteles en Valencia.", "parameters": { "query": "mejores lugares para hospedarse en Valencia" } }, { "tool_code": "web_search", "thought": "Buscar en internet los mejores restaurantes en Valencia.", "parameters": { "query": "mejores restaurantes en Valencia" } } ] }
+
+No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON. """
 
         # The user message is now simpler as the SYSTEM_PROMPT handles the main instruction
         user_message_content = f"Task Description: {task_description}"
@@ -127,6 +135,7 @@ class SubtaskDecompositionItem(BaseModel):
                 try:
                     parsed_json_response = json.loads(cleaned_response_content)
                 except json.JSONDecodeError as e_json:
+                    logger.debug(f"TASK_PLANNER: Raw LLM response that failed parsing:\n---\n{llm_response_content}\n---")
                     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Failed to parse JSON: {e_json}. Response: '{cleaned_response_content}'")
                     attempts += 1
                     if attempts > max_retries:
