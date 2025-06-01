@@ -27,13 +27,6 @@ class TaskPlanner:
         self.tool_orchestrator = tool_orchestrator
         logger.info("TaskPlanner initialized.")
 
-# Pydantic model for subtask structure
-class SubtaskDecompositionItem(BaseModel):
-    name: str
-    description: str
-    dependencies: List[int] = Field(default_factory=list) # Kept for SubtaskDecompositionItem structure, but new prompt won't generate indices.
-    assigned_tools: List[str] = Field(default_factory=list)
-
     async def _decompose_task(
         self,
         task_description: str,
@@ -41,15 +34,31 @@ class SubtaskDecompositionItem(BaseModel):
     ) -> List[Dict[str, Any]]: # Return type is a list of dicts for subtasks
         logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
 
-        SYSTEM_PROMPT = """
-Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal en una secuencia de subtareas ejecutables por un agente de IA. Debes devolver SIEMPRE un objeto JSON válido con una única clave "plan", que contiene una lista de subtareas. Cada subtarea en la lista debe ser un objeto con las siguientes claves: "tool_code", "thought" y "parameters".
-
-"tool_code": El nombre exacto de la herramienta a utilizar.
-"thought": Una descripción clara y concisa de lo que hace este paso.
-"parameters": Un objeto con los parámetros necesarios para la herramienta.
-Ejemplo de salida esperada: { "plan": [ { "tool_code": "web_search", "thought": "Buscar en internet los mejores hoteles en Valencia.", "parameters": { "query": "mejores lugares para hospedarse en Valencia" } }, { "tool_code": "web_search", "thought": "Buscar en internet los mejores restaurantes en Valencia.", "parameters": { "query": "mejores restaurantes en Valencia" } } ] }
-
-No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON. """
+        SYSTEM_PROMPT = (
+            "Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal "
+            "en una secuencia de subtareas ejecutables por un agente de IA.\n"
+            "Debes devolver SIEMPRE un objeto JSON válido con una única clave \"plan\", que contiene una lista de subtareas.\n"
+            "Cada subtarea en la lista debe ser un objeto con las siguientes claves: \"tool_code\" (string), \"thought\" (string) y \"parameters\" (object).\n\n"
+            "Ejemplo de salida esperada:\n"
+            "{\n"
+            "  \"plan\": [\n"
+            "    {\n"
+            "      \"tool_code\": \"web_search\",\n"
+            "      \"thought\": \"Buscar en internet los mejores hoteles en Valencia.\",\n"
+            "      \"parameters\": {\"query\": \"mejores lugares para hospedarse en Valencia\"}\n"
+            "    },\n"
+            "    {\n"
+            "      \"tool_code\": \"web_search\",\n"
+            "      \"thought\": \"Buscar en internet los mejores restaurantes en Valencia.\",\n"
+            "      \"parameters\": {\"query\": \"mejores restaurantes en Valencia\"}\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON.\n"
+            "Asegúrate de que los nombres de las herramientas (\"tool_code\") sean válidos y estén disponibles. "
+            "Las herramientas disponibles son: " + json.dumps(self.tool_orchestrator.get_tool_names()) + "\n"
+            "Considera usar 'SystemCompleteTask' si la tarea principal parece simple y no necesita múltiples pasos o herramientas específicas."
+        )
 
         # The user message is now simpler as the SYSTEM_PROMPT handles the main instruction
         user_message_content = f"Task Description: {task_description}"
@@ -135,7 +144,7 @@ No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe
                 try:
                     parsed_json_response = json.loads(cleaned_response_content)
                 except json.JSONDecodeError as e_json:
-                    logger.debug(f"TASK_PLANNER: Raw LLM response that failed parsing:\n---\n{llm_response_content}\n---")
+                    logger.debug(f"TASK_PLANNER: Raw LLM response that failed parsing (Attempt {attempts + 1}):\n---\n{llm_response_content}\n---")
                     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Failed to parse JSON: {e_json}. Response: '{cleaned_response_content}'")
                     attempts += 1
                     if attempts > max_retries:
@@ -181,14 +190,13 @@ No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe
                         "llm_parameters": llm_params # Add raw parameters here
                     }
 
-                    try:
-                        SubtaskDecompositionItem.parse_obj(subtask_dict) # Validate against Pydantic
-                        subtasks_for_creation.append(subtask_dict)
-                    except ValidationError as e_val_item:
-                        logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed for mapped step: {e_val_item}. Original step: '{step}', Mapped: '{subtask_dict}'")
+                    # No Pydantic validation here anymore
+                    subtasks_for_creation.append(subtask_dict)
+                    # except ValidationError as e_val_item: # Removed Pydantic validation
+                    #     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed for mapped step: {e_val_item}. Original step: '{step}', Mapped: '{subtask_dict}'")
 
-                if not subtasks_for_creation and plan_steps_data:
-                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: All plan steps failed validation after mapping. Original plan had {len(plan_steps_data)} steps.")
+                if not subtasks_for_creation and plan_steps_data: # This check might need adjustment if we no longer validate individual items with Pydantic before appending
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: No subtasks were added to creation list, though plan data existed. Original plan had {len(plan_steps_data)} steps.")
                     attempts += 1
                     if attempts > max_retries:
                         logger.error("TASK_PLANNER: Max retries reached. All plan steps failed validation.")

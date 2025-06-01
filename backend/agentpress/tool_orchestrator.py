@@ -22,6 +22,10 @@ class ToolOrchestrator:
         self.plugin_sources: Dict[str, str] = {} # tool_id -> path of plugin file
         logger.info("ToolOrchestrator initialized.")
 
+    def get_tool_names(self) -> List[str]:
+        """Returns a list of registered tool names (their IDs)."""
+        return list(self.tools.keys())
+
     def register_tool(self, tool_instance: Tool, tool_id: Optional[str] = None, plugin_path: Optional[str] = None):
         """
         Registers a tool instance with the orchestrator.
