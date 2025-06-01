@@ -249,6 +249,42 @@ async def start_agent(
 ):
     """Start an agent for a specific thread in the background."""
     try:
+        # Detailed diagnostic block
+        logger.debug("DETAILED_DIAG: Attempting to inspect agentpress.task_planner.")
+        task_planner_module_path = None
+        try:
+            import agentpress.task_planner
+            task_planner_module_path = agentpress.task_planner.__file__
+            logger.debug(f"DETAILED_DIAG: agentpress.task_planner.__file__ is: {task_planner_module_path}")
+
+            if task_planner_module_path and task_planner_module_path.endswith('.py'): # Avoid reading .pyc if that's somehow returned
+                logger.debug(f"DETAILED_DIAG: Attempting to read content of: {task_planner_module_path}")
+                with open(task_planner_module_path, 'r', encoding='utf-8') as f_src:
+                    source_code = f_src.read()
+                # Log only a portion if it's too long, or a hash, to avoid flooding logs.
+                # For now, let's log first 1000 chars and last 500.
+                log_msg_source = f"DETAILED_DIAG: Source of {task_planner_module_path} (first 1000 chars):\n{source_code[:1000]}"
+                logger.debug(log_msg_source)
+                if len(source_code) > 1500:
+                    log_msg_source_end = f"DETAILED_DIAG: Source of {task_planner_module_path} (last 500 chars):\n{source_code[-500:]}"
+                    logger.debug(log_msg_source_end)
+
+            # Now import the class and inspect it
+            from agentpress.task_planner import TaskPlanner as TP_Class_Detailed
+            logger.debug(f"DETAILED_DIAG: dir(TP_Class_Detailed): {dir(TP_Class_Detailed)}")
+            try:
+                logger.debug(f"DETAILED_DIAG: TP_Class_Detailed.__dict__: {TP_Class_Detailed.__dict__}")
+            except Exception as e_dict:
+                logger.error(f"DETAILED_DIAG: Error accessing TP_Class_Detailed.__dict__: {e_dict}")
+
+        except ImportError as e_import_diag_detail:
+            logger.error(f"DETAILED_DIAG: Could not import agentpress.task_planner: {e_import_diag_detail}")
+        except AttributeError as e_attr_diag_detail:
+            logger.error(f"DETAILED_DIAG: AttributeError during detailed inspection: {e_attr_diag_detail}")
+        except Exception as e_general_diag_detail:
+            logger.error(f"DETAILED_DIAG: General error during detailed inspection: {e_general_diag_detail}", exc_info=True)
+        # End of detailed diagnostic block
+
         # Minimal __file__ logging for agentpress.task_planner
         try:
             import agentpress.task_planner
@@ -800,6 +836,42 @@ async def initiate_agent_with_files(
     user_id: str = Depends(get_current_user_id_from_jwt)
 ):
     """Initiate a new agent session with optional file attachments."""
+    # Detailed diagnostic block
+    logger.debug("DETAILED_DIAG: Attempting to inspect agentpress.task_planner.")
+    task_planner_module_path = None
+    try:
+        import agentpress.task_planner
+        task_planner_module_path = agentpress.task_planner.__file__
+        logger.debug(f"DETAILED_DIAG: agentpress.task_planner.__file__ is: {task_planner_module_path}")
+
+        if task_planner_module_path and task_planner_module_path.endswith('.py'): # Avoid reading .pyc if that's somehow returned
+            logger.debug(f"DETAILED_DIAG: Attempting to read content of: {task_planner_module_path}")
+            with open(task_planner_module_path, 'r', encoding='utf-8') as f_src:
+                source_code = f_src.read()
+            # Log only a portion if it's too long, or a hash, to avoid flooding logs.
+            # For now, let's log first 1000 chars and last 500.
+            log_msg_source = f"DETAILED_DIAG: Source of {task_planner_module_path} (first 1000 chars):\n{source_code[:1000]}"
+            logger.debug(log_msg_source)
+            if len(source_code) > 1500:
+                log_msg_source_end = f"DETAILED_DIAG: Source of {task_planner_module_path} (last 500 chars):\n{source_code[-500:]}"
+                logger.debug(log_msg_source_end)
+
+        # Now import the class and inspect it
+        from agentpress.task_planner import TaskPlanner as TP_Class_Detailed
+        logger.debug(f"DETAILED_DIAG: dir(TP_Class_Detailed): {dir(TP_Class_Detailed)}")
+        try:
+            logger.debug(f"DETAILED_DIAG: TP_Class_Detailed.__dict__: {TP_Class_Detailed.__dict__}")
+        except Exception as e_dict:
+            logger.error(f"DETAILED_DIAG: Error accessing TP_Class_Detailed.__dict__: {e_dict}")
+
+    except ImportError as e_import_diag_detail:
+        logger.error(f"DETAILED_DIAG: Could not import agentpress.task_planner: {e_import_diag_detail}")
+    except AttributeError as e_attr_diag_detail:
+        logger.error(f"DETAILED_DIAG: AttributeError during detailed inspection: {e_attr_diag_detail}")
+    except Exception as e_general_diag_detail:
+        logger.error(f"DETAILED_DIAG: General error during detailed inspection: {e_general_diag_detail}", exc_info=True)
+    # End of detailed diagnostic block
+
     # Minimal __file__ logging for agentpress.task_planner
     try:
         import agentpress.task_planner
