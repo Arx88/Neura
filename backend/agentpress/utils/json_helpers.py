@@ -7,7 +7,10 @@ them as proper JSONB objects in the database.
 
 import json
 import logging # Added import
+import re
 from typing import Any, Union, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_dict(value: Union[str, Dict[str, Any], None], default: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -174,26 +177,73 @@ def format_for_yield(message_object: Dict[str, Any]) -> Dict[str, Any]:
         
     return formatted
 
-def extract_json_from_response(response_text: str):
+def extract_json_from_response(response_text: str) -> Union[Dict, List, None]:
     """
-    Extrae un bloque de código JSON de una cadena de texto,
-    incluso si está envuelto en markdown.
+    Extrae un bloque de código JSON de una cadena de texto.
+    Busca el primer objeto JSON completo y balanceado.
+    También intenta manejar bloques JSON envueltos en markdown ```json ... ```.
     """
-    try:
-        # Busca el inicio del bloque de código JSON
-        json_start_index = response_text.find('{')
-        # Busca el final del bloque de código JSON
-        json_end_index = response_text.rfind('}') + 1
-
-        if json_start_index == -1 or json_end_index == 0:
-            logging.warning("No se encontró un objeto JSON en la respuesta.")
-            return None
-
-        json_str = response_text[json_start_index:json_end_index]
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logging.error(f"Error al decodificar JSON: {e}\nRespuesta recibida: {response_text}")
+    if not response_text:
+        logger.warning("Respuesta de texto vacía, no se puede extraer JSON.")
         return None
-    except Exception as e:
-        logging.error(f"Error inesperado al extraer JSON: {e}")
+
+    # Intento 1: Extraer de un bloque de código Markdown ```json ... ```
+    match_markdown_json = re.search(r"```json\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", response_text, re.DOTALL)
+    if match_markdown_json:
+        json_str_markdown = match_markdown_json.group(1)
+        try:
+            # logger.debug(f"JSON extraído de bloque Markdown: {json_str_markdown[:200]}...")
+            return json.loads(json_str_markdown)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Error al decodificar JSON de bloque Markdown: {e}. Contenido: {json_str_markdown[:500]}...")
+            # Continuar si este método específico falla, para probar otros.
+
+    # Intento 2: Encontrar el primer '{' o '[' y buscar su delimitador de cierre correspondiente.
+    # Esto es más robusto para extraer el primer objeto/array JSON completo.
+
+    # Determinar si buscamos un objeto o un array basado en el primer carácter relevante
+    first_brace = response_text.find('{')
+    first_bracket = response_text.find('[')
+
+    json_start_index = -1
+    start_char = ''
+    end_char = ''
+
+    if first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
+        json_start_index = first_brace
+        start_char = '{'
+        end_char = '}'
+    elif first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace):
+        json_start_index = first_bracket
+        start_char = '['
+        end_char = ']'
+    else:
+        logger.warning("No se encontró '{' o '[' inicial para extraer JSON de la respuesta.")
+        return None
+
+    open_delimiters = 0
+    json_end_index = -1
+
+    for i in range(json_start_index, len(response_text)):
+        char = response_text[i]
+        if char == start_char:
+            open_delimiters += 1
+        elif char == end_char:
+            open_delimiters -= 1
+
+        if open_delimiters == 0:
+            json_end_index = i + 1
+            break
+
+    if json_end_index != -1:
+        json_str_balanced = response_text[json_start_index:json_end_index]
+        try:
+            # logger.debug(f"JSON extraído (delimitadores balanceados '{start_char}{end_char}'): {json_str_balanced[:200]}...")
+            return json.loads(json_str_balanced)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error al decodificar JSON extraído con delimitadores balanceados ('{start_char}{end_char}'): {e}\nFragmento: {json_str_balanced[:500]}...\nInicio de respuesta: {response_text[:1000]}...")
+            # Si la extracción balanceada falla, no intentar métodos más simples que podrían ser incorrectos.
+            return None
+    else:
+        logger.warning(f"No se encontró un objeto/array JSON balanceado ('{start_char}{end_char}') comenzando desde el índice {json_start_index} en la respuesta: {response_text[:500]}...")
         return None
