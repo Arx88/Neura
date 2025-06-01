@@ -31,18 +31,16 @@ from services.langfuse import langfuse
 from agent.gemini_prompt import get_gemini_system_prompt
 
 # Imports for TaskPlanner
-from agentpress.task_planner import TaskPlanner
-from agentpress.task_state_manager import TaskStateManager
-from agentpress.task_storage_supabase import SupabaseTaskStorage
-from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.plan_executor import PlanExecutor # Import PlanExecutor
+# from agentpress.task_planner import TaskPlanner # Removed
+# from agentpress.task_state_manager import TaskStateManager # Removed
+# from agentpress.task_storage_supabase import SupabaseTaskStorage # Removed
+from agentpress.tool_orchestrator import ToolOrchestrator # Keep - used by ThreadManager
+# from agentpress.plan_executor import PlanExecutor # Removed
 from agentpress.utils.message_assembler import MessageAssembler
-from agentpress.utils.json_helpers import format_for_yield # Added for plan_executor_message_callback
+# from agentpress.utils.json_helpers import format_for_yield # Removed
 
 
 load_dotenv()
-
-PLANNING_KEYWORDS = ["plan this:", "create a plan for:", "complex task:"]
 
 def detect_visualization_request(request_text: str):
     """Detect if a request is asking for a visualization."""
@@ -219,16 +217,16 @@ async def run_agent(
         if latest_message_query.data and len(latest_message_query.data) > 0:
             latest_msg_data = latest_message_query.data[0]
             message_type = latest_msg_data.get('type')
-            message_metadata = latest_msg_data.get('metadata', {})
-            if isinstance(message_metadata, str): # Ensure metadata is a dict
-                try:
-                    message_metadata = json.loads(message_metadata)
-                except json.JSONDecodeError:
-                    message_metadata = {}
+            # The following lines related to message_metadata and processed_by_planner_flag are removed
+            # message_metadata = latest_msg_data.get('metadata', {})
+            # if isinstance(message_metadata, str): # Ensure metadata is a dict
+            #     try:
+            #         message_metadata = json.loads(message_metadata)
+            #     except json.JSONDecodeError:
+            #         message_metadata = {}
+            # processed_by_planner_flag = message_metadata.get('processed_by_planner', False)
 
-            processed_by_planner_flag = message_metadata.get('processed_by_planner', False)
-
-            if message_type == 'user' and not processed_by_planner_flag:
+            if message_type == 'user': # Condition already updated in a previous step
                 user_content_json_str = latest_msg_data.get('content', '{}')
                 user_content_json = {}
                 try:
@@ -240,201 +238,27 @@ async def run_agent(
 
                 original_user_text_content = user_content_json.get('content', '') # Original case for description
                 user_text_content_lower = original_user_text_content.lower() if isinstance(original_user_text_content, str) else ''
+                # Planning logic removed from here. It's now handled in agent/api.py
 
-                # Intensive logging for keyword detection
-                logger.debug(f"PLANNER_TRIGGER_CHECK: User message content (lowercase): '{user_text_content_lower}'")
-                logger.debug(f"PLANNER_TRIGGER_CHECK: Checking against PLANNING_KEYWORDS: {PLANNING_KEYWORDS}")
+            # The 'planning_triggered' variable is no longer set here.
+            # The 'processed_by_planner_flag' is also removed as its primary use was with the old planning block.
+            # If 'continue_execution' was set to False by the planner, that logic is also removed.
+            # The main agent loop will now proceed unless an error occurs or max_iterations is reached.
 
-                planning_triggered = False
-                actual_task_description = ""
-                keyword_found = ""
-
-                if isinstance(user_text_content_lower, str) and user_text_content_lower: # Ensure not empty string
-                    for keyword in PLANNING_KEYWORDS:
-                        if keyword in user_text_content_lower:
-                            planning_triggered = True
-                            keyword_found = keyword # Store the keyword that triggered planning
-                            # Extract text *after* the found keyword from the original content
-                            keyword_original_case_index = original_user_text_content.lower().find(keyword) # find on lowercased
-                            actual_task_description = original_user_text_content[keyword_original_case_index + len(keyword):].strip()
-                            break
-
-                if planning_triggered:
-                    # --- Keyword-based Task Planning and Execution ---
-                    logger.info(f"Planning mode triggered by keyword '{keyword_found}'. Task description for planner: '{actual_task_description}'") # Verified/Ensured
-                    # logger.info(f"PLANNER_TRIGGER_SUCCESS: Planning keyword '{keyword_found}' found in user message.") # Old log
-                    # logger.debug(f"PLANNER_TRIGGER_SUCCESS: Extracted task description for planner: '{actual_task_description}'") # Old log
-                    # The trace event below already logs keyword and description.
-                    # trace.event(name="planning_keywords_triggered", level="DEFAULT", status_message=(f"Keyword: '{keyword_found}', Task: {actual_task_description}")) # This line is effectively duplicated by the log above.
-
-                    # Define a callback for PlanExecutor to send messages/updates back to the user during execution.
-                    async def plan_executor_message_callback(message_data: dict[str, Any]):
-                        message_type = message_data.get("type")
-                        # Ensure thread_manager and thread_id are accessible from the outer scope
-                        # (they are, as this is a nested function in run_agent)
-
-                        if message_type == "status":
-                            # Yield status messages directly
-                            yield {
-                                "type": "status",
-                                "content": json.dumps(message_data.get("content", {})),
-                                "metadata": json.dumps(message_data.get("metadata", {}))
-                            }
-                        elif message_type == "plan_tool_result_data":
-                            tool_name = message_data.get("tool_name", "unknown_tool")
-                            tool_call_id = message_data.get("tool_call_id", str(uuid4()))
-                            status = message_data.get("status", "error")
-                            result_content = message_data.get("result")
-                            error_content = message_data.get("error")
-
-                            db_content_str = json.dumps(result_content) if status == "completed" else json.dumps(error_content)
-                            tool_message_db_content = {
-                                "role": "tool",
-                                "tool_call_id": tool_call_id,
-                                "name": tool_name, # This should be ToolID__MethodName
-                                "content": db_content_str
-                            }
-
-                            # Save to database
-                            # Ensure thread_manager is available in this scope
-                            saved_tool_msg = await thread_manager.add_message(
-                                thread_id=thread_id, # thread_id from outer scope
-                                type="tool",
-                                content=tool_message_db_content,
-                                is_llm_message=True, # Tool results are part of the LLM flow
-                                metadata=message_data.get("metadata", {})
-                            )
-                            if saved_tool_msg:
-                                yield format_for_yield(saved_tool_msg)
-
-                        elif message_type == "assistant_message_update":
-                            yield {
-                                "type": "assistant",
-                                "content": json.dumps(message_data.get("content", {})),
-                                "metadata": json.dumps(message_data.get("metadata", {}))
-                            }
-                        else:
-                            logger.warning(f"PlanExecutor sent unhandled message type via callback: {message_type}. Data: {message_data}")
-
-
-                    try:
-                        # Instantiate dependencies for the planning and execution process.
-                        # Use the ToolOrchestrator from the ThreadManager, which has all agent tools registered.
-                        # This ensures the planner is aware of the same tools as the main agent.
-                        planning_process_orchestrator = thread_manager.tool_orchestrator
-                        # No need to call planning_process_orchestrator.load_tools_from_directory() here,
-                        # as the main agent's ToolOrchestrator should already be populated.
-
-                        # TaskStateManager requires a storage backend.
-                        # The `thread_manager.db` is the DBConnection instance.
-                        task_storage = SupabaseTaskStorage(db_connection=thread_manager.db)
-                        task_manager = TaskStateManager(storage=task_storage)
-                        await task_manager.initialize() # Initialize to load any existing task data if needed.
-
-                        # Log the schemas from the orchestrator instance being passed to the planner.
-                        tool_orch_for_planner = planning_process_orchestrator # This is thread_manager.tool_orchestrator
-                        schemas_for_planner_llm = tool_orch_for_planner.get_tool_schemas_for_llm()
-                        logger.debug(f"PLANNER_ORCHESTRATOR_CHECK: Tool Orchestrator for TaskPlanner has {len(schemas_for_planner_llm)} schemas. Schemas: {json.dumps(schemas_for_planner_llm, indent=2)}")
-
-                        # Instantiate the TaskPlanner.
-                        planner = TaskPlanner(task_manager=task_manager, tool_orchestrator=tool_orch_for_planner) # Pass the correct orchestrator
-
-                        logger.debug(f"Invoking TaskPlanner with description: '{actual_task_description}'") # Ensure/Add
-                        # Create the plan (main task and subtasks).
-                        main_planned_task = await planner.plan_task(task_description=actual_task_description)
-                        logger.debug(f"Main planned task object received from TaskPlanner: {main_planned_task.model_dump_json(indent=2) if main_planned_task else 'None'}") # Verified
-
-                        if main_planned_task:
-                            logger.info(f"Task planned successfully. Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}") # Keep this
-                            trace.event(name="task_planning_successful", level="DEFAULT", status_message=(f"Main task ID: {main_planned_task.id}, Status: {main_planned_task.status}"))
-
-                            # Mark the original user message as processed by the planner to avoid re-triggering.
-                            current_message_metadata = latest_msg_data.get('metadata', {})
-                            if isinstance(current_message_metadata, str):
-                                try: current_message_metadata = json.loads(current_message_metadata)
-                                except: current_message_metadata = {}
-                            elif current_message_metadata is None: current_message_metadata = {}
-                            current_message_metadata['processed_by_planner'] = True
-                            await client.table('messages').update({'metadata': current_message_metadata}).eq('message_id', latest_msg_data['message_id']).execute()
-
-                            # Inform the user that the plan has been created and execution will start.
-                            plan_confirmation_content = {
-                                "role": "assistant",
-                                "content": f"I have created a plan with ID: {main_planned_task.id} (status: {main_planned_task.status}). I will now proceed to execute this plan."
-                            }
-                            yield {
-                                "type": "assistant",
-                                "content": json.dumps(plan_confirmation_content),
-                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
-                            }
-
-                            # Instantiate the PlanExecutor with the created plan and shared dependencies.
-                            plan_executor = PlanExecutor(
-                                main_task_id=main_planned_task.id,
-                                task_manager=task_manager, # Reuse the task_manager
-                                tool_orchestrator=planning_process_orchestrator, # Reuse the orchestrator
-                                user_message_callback=plan_executor_message_callback # Pass the callback for updates
-                            )
-                            logger.info(f"Invoking PlanExecutor for main_task_id: {main_planned_task.id}") # Ensure/Add
-
-                            # Yield a status message indicating the start of plan execution.
-                            yield {
-                                "type": "status",
-                                "content": json.dumps({"status_type": "plan_execution_start", "message": f"Starting execution of plan {main_planned_task.id}..."}),
-                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
-                            }
-
-                            # Execute the plan.
-                            await plan_executor.execute_plan()
-
-                            # Yield a status message indicating the end of plan execution.
-                            yield {
-                                "type": "status",
-                                "content": json.dumps({"status_type": "plan_execution_end", "message": f"Execution of plan {main_planned_task.id} finished."}),
-                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None, "planned_task_id": main_planned_task.id})
-                            }
-
-                            # After plan creation and execution, stop the current agent cycle
-                            # to prevent the normal LLM response flow for this user message.
-                            continue_execution = False
-                        else:
-                            # If planning itself failed (e.g., LLM couldn't generate subtasks).
-                            logger.error(f"Task planning failed. Description: '{actual_task_description}'. Main task: {main_planned_task.model_dump_json(indent=2) if main_planned_task else 'None'}") # Ensure/Add
-                            # logger.error(f"Task planning failed for: {actual_task_description}") # Old log
-                            trace.event(name="task_planning_failed", level="ERROR", status_message=(f"Task: {actual_task_description}"))
-                            error_content = { "role": "assistant", "content": "I tried to create a plan, but something went wrong. Please try again or rephrase."}
-                            yield {
-                                "type": "assistant", "content": json.dumps(error_content),
-                                "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
-                            }
-                            continue_execution = False # ADDED LINE
-                            # Let normal execution proceed to respond to the user message.
-                    except Exception as e_planner:
-                        logger.error(f"Exception during task planning: {e_planner}", exc_info=True)
-                        trace.event(name="task_planning_exception", level="CRITICAL", status_message=str(e_planner))
-                        error_content = { "role": "assistant", "content": f"An error occurred while trying to plan your request: {str(e_planner)}"}
-                        yield {
-                            "type": "assistant", "content": json.dumps(error_content),
-                            "metadata": json.dumps({"thread_run_id": trace.id if trace else None})
-                        }
-                        # Let normal execution proceed.
-                else: # Corresponds to 'if planning_triggered:'
-                    logger.info("PLANNER_TRIGGER_FAIL: No planning keyword detected in user message. Proceeding with normal agent response.")
-
-
-            if not continue_execution: # If planning happened and we decided to stop this cycle
+            if not continue_execution: # This check might still be relevant if other logic sets it.
                 break
 
             # Original user message processing for visualization hint (if not planned)
             # This needs to be part of the `if message_type == 'user' and not processed_by_planner_flag:` block
             # or an `elif message_type == 'user':` if planning didn't trigger.
-            # For simplicity, let's assume if planning was triggered, viz detection on the same message is skipped.
-            # If planning was NOT triggered, then viz detection runs.
+            # For simplicity, let's assume if planning was triggered (now handled in api.py),
+            # viz detection on the same message might be duplicative or handled differently.
+            # For now, viz detection runs if it's a user message.
 
-            if message_type == 'user' and not planning_triggered: # Check planning_triggered here
+            if message_type == 'user': # Removed 'and not planning_triggered' as planning_triggered is no longer defined here.
                 try:
-                    # Ensure user_content_json and original_user_text_content are defined if not set by planner block
-                    if 'user_content_json' not in locals():
+                    # Ensure user_content_json and original_user_text_content are defined
+                    if 'user_content_json' not in locals(): # This might occur if the earlier block setting it was skipped
                          user_content_json_str = latest_msg_data.get('content', '{}')
                          user_content_json = json.loads(user_content_json_str)
                     if 'original_user_text_content' not in locals():
