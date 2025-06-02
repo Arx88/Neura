@@ -17,8 +17,8 @@ import asyncio
 from unittest.mock import patch
 from openai import OpenAIError
 import litellm
-from ..utils.logger import logger
-from ..utils.config import config
+from backend.utils.logger import logger
+from backend.utils.config import config
 
 # litellm.set_verbose=True
 litellm.modify_params=True

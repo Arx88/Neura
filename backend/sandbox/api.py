@@ -6,10 +6,10 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, APIRouter, Form, D
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .sandbox import get_or_start_sandbox
-from ..utils.logger import logger
-from ..utils.auth_utils import get_optional_user_id
-from ..services.supabase import DBConnection
+from backend.sandbox.sandbox import get_or_start_sandbox
+from backend.utils.logger import logger
+from backend.utils.auth_utils import get_optional_user_id
+from backend.services.supabase import DBConnection
 
 # Initialize shared resources
 router = APIRouter(tags=["sandbox"])
