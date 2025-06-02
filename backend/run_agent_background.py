@@ -1,6 +1,7 @@
 import sentry
 import asyncio
 import json
+import logging
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
@@ -27,6 +28,90 @@ from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
 rabbitmq_broker = RabbitmqBroker(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT, middleware=[dramatiq.middleware.AsyncIO()]) # Use config
 dramatiq.set_broker(rabbitmq_broker)
+
+# En backend/run_agent_background.py
+# Después de dramatiq.set_broker(rabbitmq_broker)
+# y después de from agent.run import run_agent (y other relevant top-level imports)
+
+# import asyncio # Asegúrate de que asyncio esté importado (should be from previous step)
+# import logging # Asegúrate de que logging esté importado (should be from previous step)
+# from typing import Optional # Already present
+# from agent.run import run_agent # Already present
+# from agentpress.tool_orchestrator import ToolOrchestrator # Already present
+# from agentpress.task_state_manager import TaskStateManager # Already present
+# from services.langfuse import initialize_langfuse # langfuse is imported
+# from utils.config import config # config is imported
+
+# Placeholder: Para este actor, podríamos necesitar pasar IDs o referencias
+# y luego reconstruir/re-obtener las instancias dentro del actor si no son serializables
+# o no están disponibles globalmente en el contexto del worker.
+
+@dramatiq.actor(queue_name="default", store_results=True) # Forzar uso de cola "default"
+def execute_run_agent_task(thread_id: str, project_id: str, stream: bool, 
+                           initial_prompt_text: Optional[str] = None, # Argumentos que necesita run_agent
+                           native_max_auto_continues: int = 25,
+                           max_iterations: int = 100,
+                           model_name: str = "anthropic/claude-3-7-sonnet-latest", # O tomar de config
+                           enable_thinking: Optional[bool] = False,
+                           reasoning_effort: Optional[str] = 'low',
+                           enable_context_manager: bool = True
+                           # No pases objetos complejos como tool_orchestrator o task_state_manager directamente
+                           # si no son serializables o si su estado no se comparte entre API y worker.
+                           # Pasa IDs o datos necesarios para recrearlos/obtenerlos en el worker.
+                           ):
+    try:
+        diag_logger_actor = logging.getLogger("dramatiq_actor_diag")
+        if not diag_logger_actor.handlers: # Evitar duplicar handlers si el actor se llama múltiples veces
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - ACTOR - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            diag_logger_actor.addHandler(handler)
+            diag_logger_actor.setLevel(logging.INFO)
+
+        diag_logger_actor.info(f"ACTOR 'execute_run_agent_task' INVOCADO para thread_id: {thread_id}")
+
+        # Reconstruir/obtener instancias necesarias dentro del worker si no se pasan:
+        # Esto es CRÍTICO y depende de la arquitectura de tu aplicación.
+        # El siguiente es un EJEMPLO y probablemente necesite un ajuste significativo.
+
+        # Supongamos que task_state_manager y tool_orchestrator se inicializan globalmente
+        # en el contexto del worker o se pueden crear bajo demanda.
+        # Si ya tienes 'task_state_manager_singleton' y 'tool_orchestrator_singleton'
+        # inicializados en run_agent_background.py (fuera de esta función de actor), podrías usarlos.
+        # Pero deben ser seguros para usar entre diferentes ejecuciones de tareas.
+
+        # ESTA PARTE ES LA MÁS COMPLEJA Y REQUIERE CONOCIMIENTO DE TU APLICACIÓN:
+        # Cómo obtener/crear 'tool_orchestrator' y 'task_state_manager' válidos aquí.
+        # Por ahora, solo loguearemos y no llamaremos a run_agent para evitar errores si no están disponibles.
+
+        diag_logger_actor.info(f"Placeholder: Aquí se llamaría a run_agent para thread_id: {thread_id}")
+        diag_logger_actor.info(f"Argumentos recibidos: project_id={project_id}, stream={stream}, initial_prompt_text_len={len(initial_prompt_text) if initial_prompt_text else 0}")
+
+        # EJEMPLO de cómo podrías intentar llamar a run_agent (NECESITARÁ ADAPTACIÓN):
+        # trace_client = initialize_langfuse(config, user_id="dramatiq_worker", session_id=thread_id) # O alguna forma de obtenerlo
+        # tool_orchestrator_instance = ToolOrchestrator(project_id, trace_client) # Esto es una suposición
+        # task_state_manager_instance = TaskStateManager(project_id, supabase_client_override=None) # Esto es una suposición
+        # 
+        # asyncio.run(run_agent(
+        #     thread_id=thread_id,
+        #     project_id=project_id,
+        #     stream=stream, # run_agent es async, stream=True podría no tener sentido aquí si el actor es síncrono y devuelve resultado
+        #     tool_orchestrator=tool_orchestrator_instance,
+        #     task_state_manager=task_state_manager_instance,
+        #     initial_prompt_text=initial_prompt_text, # Pasar el prompt
+        #     native_max_auto_continues=native_max_auto_continues,
+        #     max_iterations=max_iterations,
+        #     model_name=model_name,
+        #     enable_thinking=enable_thinking,
+        #     reasoning_effort=reasoning_effort,
+        #     enable_context_manager=enable_context_manager,
+        #     trace=trace_client
+        # ))
+        # diag_logger_actor.info(f"LLAMADA ASÍNCRONA A run_agent COMPLETADA para thread_id: {thread_id}")
+
+    except Exception as e:
+        diag_logger_actor.error(f"ACTOR 'execute_run_agent_task' FALLÓ para thread_id: {thread_id}. Error: {str(e)}", exc_info=True)
+        raise # Re-lanzar la excepción para que Dramatiq la maneje (ej. reintentos)
 
 _initialized = False
 db = DBConnection()
