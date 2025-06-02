@@ -1,5 +1,5 @@
 import unittest
-from backend.agent.run import detect_visualization_request # Adjust import based on actual file structure
+from agent.run import detect_visualization_request # Adjust import based on actual file structure
 
 class TestDetectVisualizationRequest(unittest.TestCase):
 

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 import uuid
 import json
 
-from backend.run_agent_background import run_agent_background, _cleanup_redis_instance_key, _cleanup_redis_response_list, update_agent_run_status # Import the target function
+from run_agent_background import run_agent_background, _cleanup_redis_instance_key, _cleanup_redis_response_list, update_agent_run_status # Import the target function
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest
 
@@ -31,10 +31,10 @@ langfuse_mock = MagicMock()
 langfuse_mock.trace = MagicMock(return_value=MagicMock(span=MagicMock(return_value=MagicMock(end=MagicMock()))))
 
 
-@patch('backend.run_agent_background.logger', logger_mock)
-@patch('backend.run_agent_background.redis', redis_mock)
-@patch('backend.run_agent_background.db', db_mock) # Patch the global db instance used by the actor
-@patch('backend.run_agent_background.langfuse', langfuse_mock)
+@patch('run_agent_background.logger', logger_mock)
+@patch('run_agent_background.redis', redis_mock)
+@patch('run_agent_background.db', db_mock) # Patch the global db instance used by the actor
+@patch('run_agent_background.langfuse', langfuse_mock)
 class TestRunAgentBackgroundCleanup(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
@@ -54,8 +54,8 @@ class TestRunAgentBackgroundCleanup(unittest.IsolatedAsyncioTestCase):
         self.mock_daytona_stop = AsyncMock()
 
         # Patch the specific functions/modules used by run_agent_background's finally block
-        self.patch_get_or_start_sandbox = patch('backend.sandbox.sandbox.get_or_start_sandbox', AsyncMock(return_value=self.mock_sandbox_instance))
-        self.patch_daytona = patch('backend.sandbox.sandbox.daytona', MagicMock(stop=self.mock_daytona_stop))
+        self.patch_get_or_start_sandbox = patch('sandbox.sandbox.get_or_start_sandbox', AsyncMock(return_value=self.mock_sandbox_instance))
+        self.patch_daytona = patch('sandbox.sandbox.daytona', MagicMock(stop=self.mock_daytona_stop))
         
         self.mock_get_or_start_sandbox = self.patch_get_or_start_sandbox.start()
         self.mock_daytona_client_for_stop = self.patch_daytona.start() # This mocks the 'daytona' object from sandbox.sandbox
@@ -76,7 +76,7 @@ class TestRunAgentBackgroundCleanup(unittest.IsolatedAsyncioTestCase):
 
     async def run_agent_to_finally(self, mock_run_agent_gen):
         """Helper to run the agent background task until the finally block is executed."""
-        with patch('backend.run_agent_background.run_agent', mock_run_agent_gen):
+        with patch('run_agent_background.run_agent', mock_run_agent_gen):
             await run_agent_background(
                 agent_run_id="test_agent_run_id",
                 thread_id="test_thread_id",

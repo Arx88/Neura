@@ -73,7 +73,7 @@ os.environ['ENV_MODE'] = 'local'
 
 
 # Now, these imports should succeed as Configuration() will find the env vars
-from backend.agent.tools.python_tool import PythonTool
+from agent.tools.python_tool import PythonTool
 from agentpress.tool import ToolResult
 
 

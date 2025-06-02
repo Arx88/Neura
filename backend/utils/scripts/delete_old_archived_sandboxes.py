@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone as dt_timezone # Renamed to a
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
 from dotenv import load_dotenv
-from backend.sandbox.sandbox import daytona # Assuming daytona client is initialized here
-from backend.utils.logger import logger
+from sandbox.sandbox import daytona # Assuming daytona client is initialized here
+from utils.logger import logger
 from daytona_api_client.models.workspace_state import WorkspaceState # For state comparison
 from daytona_sdk.sandbox import SandboxInfo # For type hinting if needed
 
