@@ -49,6 +49,7 @@ services:
       - REDIS_SSL=False
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
+      - PYTHONPATH=/app
     depends_on:
       redis:
         condition: service_healthy
