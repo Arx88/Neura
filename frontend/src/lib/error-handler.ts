@@ -14,6 +14,35 @@ export interface ErrorContext {
   silent?: boolean;
 }
 
+// Function to log errors to the backend server
+export async function logErrorToServer(errorData: {
+  message: string;
+  source?: string;
+  stack_trace?: string;
+  url?: string;
+  user_agent?: string;
+  context?: Record<string, any>;
+}) {
+  try {
+    const apiUrl = '/api/log_frontend_error'; // Assuming relative path works
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(errorData),
+    });
+
+    if (!response.ok) {
+      // Log to console.warn to avoid this logging causing more toast errors
+      console.warn('Failed to log error to server:', response.status, await response.text());
+    }
+  } catch (e) {
+    console.warn('Exception while logging error to server:', e);
+  }
+}
+
 const getStatusMessage = (status: number): string => {
   switch (status) {
     case 400:
@@ -120,6 +149,19 @@ const formatErrorMessage = (message: string, context?: ErrorContext): string => 
 
 export const handleApiError = (error: any, context?: ErrorContext): void => {
   console.error('API Error:', error, context);
+
+  // Log error to server
+  const message = extractErrorMessage(error);
+  const source = context?.resource ? `Resource: ${context.resource}` : (context?.operation ? `Operation: ${context.operation}` : 'handleApiError');
+
+  logErrorToServer({
+    message: message,
+    source: source,
+    stack_trace: error?.stack,
+    url: typeof window !== 'undefined' ? window.location.href : undefined,
+    user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+    context: { ...context, errorDetails: error?.details } // Pass original context and any specific error details
+  });
 
   if (!shouldShowError(error, context)) {
     return;

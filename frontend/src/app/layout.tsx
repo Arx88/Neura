@@ -9,6 +9,8 @@ import { Analytics } from '@vercel/analytics/react';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { SpeedInsights } from '@vercel/speed-insights/next';
 import Script from 'next/script';
+import { useEffect } from 'react'; // Ensure useEffect is imported
+import { logErrorToServer } from '@/lib/error-handler'; // Or correct path
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -112,6 +114,16 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  useEffect(() => {
+    // This will run once when the layout mounts on the client side
+    logErrorToServer({
+      message: "TEST_FRONTEND_ERROR_LOG: This is a test error from the frontend app load.",
+      source: "RootLayout.tsx",
+      url: typeof window !== 'undefined' ? window.location.href : 'N/A during SSR for test',
+      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'N/A during SSR for test'
+    });
+  }, []); // Empty dependency array ensures it runs once on mount
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>

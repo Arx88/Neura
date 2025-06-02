@@ -24,9 +24,9 @@ from utils.config import config, EnvMode
 # Assuming this script is in backend/utils/logger.py
 # PROJECT_ROOT should point to the directory containing 'backend', 'frontend', 'LOG'
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-GLOBAL_LOG_DIR_NAME = "LOG" # Name of the directory at project root
-GLOBAL_LOG_DIR_PATH = os.path.join(PROJECT_ROOT, GLOBAL_LOG_DIR_NAME)
-TEMP_LOG_FILENAME = "TEMP_LOG"
+GLOBAL_LOG_DIR_NAME = "TEMP_LOGS" # Name of the directory at project root
+GLOBAL_LOG_DIR_PATH = "/app/TEMP_LOGS"
+TEMP_LOG_FILENAME = "errors.log"
 TEMP_LOG_FILE_PATH = os.path.join(GLOBAL_LOG_DIR_PATH, TEMP_LOG_FILENAME)
 
 APP_SPECIFIC_LOG_DIR_NAME = "logs" # This is for the ./logs/agentpress_date.log
@@ -112,12 +112,21 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
 
         global _temp_log_truncated_this_session
         log_mode = 'a'  # Default to append mode
-        if name == 'BACKEND' and not _temp_log_truncated_this_session:
-            log_mode = 'w'  # Truncate if it's the BACKEND logger and not yet truncated this session
-            _temp_log_truncated_this_session = True
-            print(f"Truncating {TEMP_LOG_FILE_PATH} for new session by {name} logger.")
 
-        temp_log_handler = logging.FileHandler(TEMP_LOG_FILE_PATH, mode=log_mode, encoding='utf-8')
+        current_temp_log_file_path = ''
+        if name == 'FRONTEND':
+            current_temp_log_file_path = os.path.join(GLOBAL_LOG_DIR_PATH, "frontend_errors.log")
+            # Frontend logs will always append. If truncation is needed, it would be specific.
+            log_mode = 'a'
+        else: # BACKEND, WORKER, etc.
+            current_temp_log_file_path = TEMP_LOG_FILE_PATH # /app/TEMP_LOGS/errors.log
+            if name == 'BACKEND' and not _temp_log_truncated_this_session:
+                log_mode = 'w'  # Truncate if it's the BACKEND logger and not yet truncated
+                _temp_log_truncated_this_session = True
+                print(f"Truncating {current_temp_log_file_path} for new session by {name} logger.")
+
+        # Common handler setup
+        temp_log_handler = logging.FileHandler(current_temp_log_file_path, mode=log_mode, encoding='utf-8')
         temp_log_handler.setLevel(logging.ERROR) # Only ERROR level and above
         
         temp_log_formatter = logging.Formatter(
@@ -125,9 +134,9 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
         )
         temp_log_handler.setFormatter(temp_log_formatter)
         logger.addHandler(temp_log_handler)
-        print(f"Added TEMP_LOG file handler at: {TEMP_LOG_FILE_PATH}")
+        print(f"Added TEMP_LOG file handler for {name} at: {current_temp_log_file_path}")
     except Exception as e:
-        print(f"Error setting up TEMP_LOG handler: {e}", file=sys.stderr)
+        print(f"Error setting up TEMP_LOG handler for {name}: {e}", file=sys.stderr)
 
     # --- Console Handler (JSON Formatter) ---
     try:
