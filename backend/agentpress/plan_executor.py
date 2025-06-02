@@ -5,12 +5,18 @@ The PlanExecutor iterates through subtasks, respecting their dependencies,
 and uses an LLM to determine parameters for assigned tools, then executes them
 via the ToolOrchestrator.
 """
-from typing import Optional, List, Dict, Any, AsyncGenerator, Callable # Updated imports
+# Module-level constants
+PARAM_GENERATION_LLM_MODEL = "gpt-3.5-turbo-0125"
+MAX_PARAM_GENERATION_RETRIES = 2 # Max number of retries, so 3 attempts total
+SUMMARY_MAX_RESULT_LENGTH = 200
+
+
+from typing import Optional, List, Dict, Any, AsyncGenerator, Callable, Tuple # Updated imports
 import json
 import uuid
-import asyncio # Added import
+import asyncio
 
-from services import redis # Added import
+from services import redis
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_types import TaskState
@@ -122,7 +128,7 @@ class PlanExecutor:
         plan_failed = False
         agent_signaled_completion = False # Flag for SystemCompleteTask
         completion_summary_from_agent = "" # To store summary from SystemCompleteTask
-        MAX_PARAM_GENERATION_RETRIES = 2
+        # MAX_PARAM_GENERATION_RETRIES is now a module constant
         all_step_results = [] # New list to accumulate results
 
         while True: # Outer loop for dependency-aware execution
@@ -216,201 +222,55 @@ class PlanExecutor:
                         subtask_results.append({"error": f"Schema not found for tool: {tool_string}"})
                         subtask_failed_flag = True
                     else:
-                        params = {}
-                        llm_param_generation_attempts = 0
-                        raw_llm_output_for_error = "Not available"
-                        params_generated_successfully = False
+                        # Generate Parameters
+                        generated_params = await self._generate_tool_parameters(
+                            subtask,
+                            main_task.description if main_task else "No main task description available.",
+                            tool_string,
+                            schema_for_tool
+                        )
 
-                        base_param_prompt_messages = [
-                            {
-                                "role": "system",
-                                "content": f"""\
-You are a helpful AI assistant. Your task is to generate the JSON parameters required to execute a specific tool method based on a subtask description, the overall goal, and the tool's OpenAPI schema.
-
-Overall Goal: {main_task.description}
-Subtask Description: {subtask.description}
-Tool Information:
-  Name: {schema_for_tool.get('name')}
-  Description: {schema_for_tool.get('description')}
-  Schema (parameters): {json.dumps(schema_for_tool.get('parameters', {}))}
-
-Output only the JSON object containing the parameters. If the tool requires no parameters according to its schema (e.g., parameters is empty or not defined), output an empty JSON object {{}}.
-Ensure your output is ONLY the valid JSON object of parameters, with no other text before or after it.
-"""
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Please generate the JSON parameters for the tool '{schema_for_tool.get('name')}' to achieve the subtask: '{subtask.description}'."
-                            }
-                        ]
-
-                        while llm_param_generation_attempts <= MAX_PARAM_GENERATION_RETRIES:
-                            llm_param_generation_attempts += 1
-                            param_prompt_messages = list(base_param_prompt_messages) # Copy base prompt
-
-                            if llm_param_generation_attempts > 1: # Add retry guidance
-                                retry_message = {"role": "system", "content": "Your previous response for tool parameters was not a valid JSON object or did not parse correctly. Please ensure your output is ONLY a valid JSON object of parameters, with no other text before or after it. For example: {\"param_name\": \"value\"}. If the tool takes no parameters, output an empty JSON object: {}."}
-                                param_prompt_messages.insert(1, retry_message) # Insert after initial system prompt
-
-                            logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempting LLM call (Attempt {llm_param_generation_attempts}/{MAX_PARAM_GENERATION_RETRIES + 1}) to generate parameters for tool '{tool_string}'. Schema provided: {json.dumps(schema_for_tool.get('parameters', {}))}")
-
-                            try:
-                                llm_response_for_params = await make_llm_api_call(
-                                    messages=param_prompt_messages,
-                                    llm_model="gpt-3.5-turbo-0125", # Consider using a more capable model if issues persist
-                                    temperature=0.0, # Low temperature for deterministic JSON
-                                    json_mode=True
-                                )
-
-                                # Process response
-                                if isinstance(llm_response_for_params, dict):
-                                    params = llm_response_for_params
-                                    raw_llm_output_for_error = json.dumps(params) # For logging if subsequent validation fails
-                                elif isinstance(llm_response_for_params, str):
-                                    raw_llm_output_for_error = llm_response_for_params
-                                    try:
-                                        params = json.loads(llm_response_for_params)
-                                    except json.JSONDecodeError as e_json_load:
-                                        logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Failed to decode JSON parameters from LLM string response: {e_json_load}. Response: {raw_llm_output_for_error}")
-                                        if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                            subtask_results.append({"error": "LLM failed to generate valid JSON parameters after retries (JSONDecodeError)", "details": str(e_json_load), "raw_llm_output": raw_llm_output_for_error})
-                                            subtask_failed_flag = True
-                                        continue # Retry
-                                else: # Unexpected type from LLM
-                                    raw_llm_output_for_error = str(llm_response_for_params)
-                                    logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Unexpected parameter type from LLM: {type(llm_response_for_params)}. Content: {raw_llm_output_for_error}")
-                                    if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                        subtask_results.append({"error": "LLM returned unexpected data type for parameters after retries", "raw_llm_output": raw_llm_output_for_error})
-                                        subtask_failed_flag = True
-                                    continue # Retry
-
-                                # Validate if params is a dictionary
-                                if not isinstance(params, dict):
-                                    logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: LLM output for parameters is not a dictionary. Type: {type(params)}, Value: {params}")
-                                    raw_llm_output_for_error = str(params) # Update raw output to current params
-                                    if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                        subtask_results.append({"error": "LLM failed to generate a valid JSON object (dictionary) for parameters after retries", "raw_llm_output": raw_llm_output_for_error})
-                                        subtask_failed_flag = True
-                                    continue # Retry
-
-                                logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - LLM generated parameters for tool {tool_string}: {json.dumps(params, indent=2)}")
-                                params_generated_successfully = True
-                                break # Successfully generated and validated params
-
-                            except Exception as e_llm_call: # Catch errors during make_llm_api_call or unexpected issues
-                                logger.warning(f"PLAN_EXECUTOR: Subtask {subtask.id} - Attempt {llm_param_generation_attempts}: Error during LLM call or processing for parameters: {e_llm_call}", exc_info=True)
-                                raw_llm_output_for_error = f"Error during LLM call: {str(e_llm_call)}"
-                                if llm_param_generation_attempts > MAX_PARAM_GENERATION_RETRIES:
-                                    subtask_results.append({"error": "Error obtaining parameters from LLM after retries (call failed)", "details": str(e_llm_call)})
-                                    subtask_failed_flag = True
-                                # continue will be hit by the loop if not max retries
-
-                        if not params_generated_successfully and not subtask_failed_flag: # Ensure failure is marked if loop finishes without success
-                            logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Exhausted all {MAX_PARAM_GENERATION_RETRIES + 1} attempts to generate parameters for tool {tool_string}.")
-                            subtask_results.append({"error": f"Exhausted all attempts to generate parameters for tool {tool_string}", "raw_llm_output": raw_llm_output_for_error})
+                        if generated_params is None:
+                            logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Failed to generate parameters for tool {tool_string} after retries.")
+                            subtask_results.append({"error": f"Failed to generate parameters for tool {tool_string} after retries."})
                             subtask_failed_flag = True
+                        else:
+                            # Execute Tool
+                            tool_execution_result, agent_completion_signal, agent_summary = await self._execute_tool_for_subtask(
+                                subtask,
+                                tool_id,
+                                method_name,
+                                generated_params
+                            )
+                            subtask_results.append(tool_execution_result.to_dict() if hasattr(tool_execution_result, 'to_dict') else vars(tool_execution_result)) # type: ignore
 
-                        if not subtask_failed_flag: # This means params_generated_successfully is True
-                            try:
-                                logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Executing tool '{tool_id}__{method_name}' with generated parameters.")
-
-                                tool_name_for_event = f"{tool_id}__{method_name}"
-                                tool_call_id_for_event = str(uuid.uuid4())
-                                tool_started_event = {
-                                    "type": "status",
-                                    "content": {
-                                        "status_type": "tool_started",
-                                        "function_name": tool_name_for_event,
-                                        "tool_call_id": tool_call_id_for_event,
-                                        "message": f"Starting execution of tool {tool_name_for_event} for subtask '{subtask.name}'",
-                                        "tool_index": 0 # Placeholder, could be subtask index or tool index within subtask
-                                    },
-                                    "metadata": {"thread_run_id": main_task_id }
-                                }
-                                await self._send_user_message(tool_started_event) # self.main_task_id used here for channel
-
-                                tool_result: ToolResult = await self.tool_orchestrator.execute_tool(tool_id, method_name, params)
-
-                                tool_name_from_result = tool_result.tool_id # This is usually ToolID
-                                if "__" not in tool_name_from_result: # if it's just ToolID, append method_name
-                                     tool_name_from_result = f"{tool_result.tool_id}__{method_name}"
-
-
-                                tool_data_event = {
-                                    "type": "plan_tool_result_data",
-                                    "tool_name": tool_name_from_result,
-                                    "tool_call_id": tool_call_id_for_event,
-                                    "status": tool_result.status,
-                                    "result": tool_result.result,
-                                    "error": tool_result.error,
-                                    "metadata": {"thread_run_id": main_task_id }
-                                }
-                                await self._send_user_message(tool_data_event) # self.main_task_id used here for channel
-
-                                status_type = "tool_completed" if tool_result.status == "completed" else "tool_failed"
-                                outcome_message = f"Tool {tool_name_from_result} {tool_result.status}"
-                                if tool_result.error: outcome_message += f": {tool_result.error}"
-                                tool_outcome_event = {
-                                    "type": "status",
-                                    "content": {
-                                        "status_type": status_type,
-                                        "function_name": tool_name_from_result,
-                                        "tool_call_id": tool_call_id_for_event,
-                                        "message": outcome_message,
-                                    },
-                                    "metadata": {"thread_run_id": main_task_id }
-                                }
-                                await self._send_user_message(tool_outcome_event) # self.main_task_id used here for channel
-
-                                tool_result_dict = {}
-                                if hasattr(tool_result, 'to_dict') and callable(tool_result.to_dict):
-                                    tool_result_dict = tool_result.to_dict()
-                                else:
-                                    tool_result_dict = {
-                                        "tool_id": tool_result.tool_id, "execution_id": tool_result.execution_id,
-                                        "status": tool_result.status, "result": tool_result.result,
-                                        "error": tool_result.error, "start_time": str(tool_result.start_time),
-                                        "end_time": str(tool_result.end_time)
-                                    }
-                                subtask_results.append(tool_result_dict)
-                                logger.debug(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool '{tool_id}__{method_name}' execution result: {json.dumps(tool_result_dict, indent=2)}")
-
-                                if tool_result.status == "failed":
-                                    logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution failed for '{tool_id}__{method_name}'. Error: {tool_result.error}")
-                                    subtask_failed_flag = True
-                                else:
-                                    logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution successful for '{tool_id}__{method_name}'.")
-
-                                    # Accumulate successful result
-                                    if tool_result.result is not None: # Ensure there is a result to add
-                                        all_step_results.append({
-                                            "step_name": subtask.name,
-                                            "tool_used": f"{tool_id}__{method_name}",
-                                            "result": tool_result.result
-                                        })
-                                    else: # Handle cases where successful tools might return None result
-                                         all_step_results.append({
-                                            "step_name": subtask.name,
-                                            "tool_used": f"{tool_id}__{method_name}",
-                                            "result": "Tool executed successfully but returned no specific result content."
-                                        })
-
-                                    # Check for SystemCompleteTask (existing logic)
-                                    if tool_id == "SystemCompleteTask" and method_name == "task_complete":
-                                        logger.info(f"PLAN_EXECUTOR: Agent signaled task completion via SystemCompleteTask. Main task {main_task_id} will be marked as completed.")
-                                        completion_summary_from_agent = tool_result.result.get("summary", "Agent marked task as complete.")
-                                        agent_signaled_completion = True
-                                        break
-
-                            except Exception as e_exec:
-                                logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Exception during tool execution for '{tool_id}__{method_name}': {e_exec}", exc_info=True)
-                                tool_execution_error_details = {"error": f"Exception during tool execution: {tool_id}__{method_name}", "details": str(e_exec)}
-                                subtask_results.append(tool_execution_error_details)
+                            if tool_execution_result.status == "failed":
+                                logger.error(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution failed for '{tool_id}__{method_name}'. Error: {tool_execution_result.error}")
                                 subtask_failed_flag = True
+                            else:
+                                logger.info(f"PLAN_EXECUTOR: Subtask {subtask.id} - Tool execution successful for '{tool_id}__{method_name}'.")
+                                if tool_execution_result.result is not None:
+                                     all_step_results.append({
+                                        "step_name": subtask.name,
+                                        "tool_used": f"{tool_id}__{method_name}",
+                                        "result": tool_execution_result.result
+                                    })
+                                else:
+                                     all_step_results.append({
+                                        "step_name": subtask.name,
+                                        "tool_used": f"{tool_id}__{method_name}",
+                                        "result": "Tool executed successfully but returned no specific result content."
+                                    })
 
+                            if agent_completion_signal:
+                                agent_signaled_completion = True
+                                completion_summary_from_agent = agent_summary
+                                # No 'break' here, if SystemCompleteTask is used, the loop naturally ends after this subtask.
+                                # If it needs to break immediately, the 'break' should be here.
+                                # For now, let's assume it completes the current subtask's processing.
 
-                if subtask_failed_flag:
-                    output_data_fail = json.dumps(subtask_results)
+                if subtask_failed_flag: # This flag is set by either param gen or tool exec failure
+                    output_data_fail = json.dumps(subtask_results) # subtask_results contains errors
                     await self.task_manager.update_task(subtask.id, {"status": "failed", "output": output_data_fail})
                     logger.info(f"PLAN_EXECUTOR: Step {current_step_number}/{total_steps}, Subtask ID: {subtask.id} ('{subtask.name}') status updated to 'failed'.")
 
@@ -472,16 +332,17 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                             result_str = json.dumps(step_result['result'], indent=2, ensure_ascii=False)
                         else:
                             result_str = str(step_result['result'])
-                    except Exception:
-                        result_str = str(step_result['result'])
+                    except Exception: # Broad catch for string conversion issues
+                        result_str = str(step_result['result']) # Fallback
 
-                    max_result_len = 200
-                    if len(result_str) > max_result_len:
-                        result_str = result_str[:max_result_len] + "..."
+                    if len(result_str) > SUMMARY_MAX_RESULT_LENGTH:
+                        result_str = result_str[:SUMMARY_MAX_RESULT_LENGTH] + "..."
 
                     final_summary_parts.append(f"- Paso '{step_result['step_name']}' (Herramienta: {step_result['tool_used']}):\n  Resultado: {result_str}")
 
             final_main_task_message = "\n".join(final_summary_parts)
+            if not final_summary_parts: # Ensure message is not empty if no steps/summary
+                final_main_task_message = "El agente ha completado la tarea sin resumen detallado."
 
         elif plan_failed:
             final_main_task_status = "failed"
@@ -498,13 +359,15 @@ Ensure your output is ONLY the valid JSON object of parameters, with no other te
                             result_str = json.dumps(step_result['result'], indent=2, ensure_ascii=False)
                         else:
                             result_str = str(step_result['result'])
-                    except Exception:
-                        result_str = str(step_result['result'])
+                    except Exception:  # Broad catch for string conversion issues
+                        result_str = str(step_result['result']) # Fallback
 
-                    max_result_len = 200
-                    if len(result_str) > max_result_len:
-                        result_str = result_str[:max_result_len] + "..."
+                    if len(result_str) > SUMMARY_MAX_RESULT_LENGTH:
+                        result_str = result_str[:SUMMARY_MAX_RESULT_LENGTH] + "..."
                     final_main_task_message += f"\n- Paso '{step_result['step_name']}' (Herramienta: {step_result['tool_used']}):\n  Resultado: {result_str}"
+            elif not all_step_results and final_main_task_status == "completed": # No steps but completed
+                final_main_task_message = "El plan se completó sin ejecutar pasos específicos."
+
 
         logger.info(f"PLAN_EXECUTOR: Plan execution for main_task_id: {main_task_id} finished with status '{final_main_task_status}'. Summary: {final_main_task_message}")
 
