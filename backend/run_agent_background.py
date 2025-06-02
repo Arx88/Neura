@@ -672,34 +672,61 @@ async def update_agent_run_status(
 
     return False
 
-# Añadir este bloque al final de backend/run_agent_background.py
+# --- INICIO DEL BLOQUE DE DIAGNÓSTICO ---
+# (Asegúrate de que 'import dramatiq', 'import os' y una instancia de 'worker_logger' 
+# estén disponibles/importadas al principio del archivo backend/run_agent_background.py)
 
-# Primero, asegurar que 'dramatiq' y 'logger' están importados en el archivo
-# (ya deberían estarlo, pero es una verificación)
-# import dramatiq # Already imported
-# import os # Necesario para getenv - Added above
-# Asumiendo que 'logger' ya está configurado e importado en este archivo,
-# por ejemplo: from utils.logger import logger -> using worker_logger
-
-# Este bloque se ejecutará si el script es el punto de entrada y es un worker de Dramatiq
-if __name__ == "__main__" and os.getenv("DRAMATIQ_WORKER_PROCESS"):
+if __name__ == "__main__": # Condición simplificada para asegurar ejecución
     try:
-        worker_logger.info("DRAMATIQ_DIAG: Listing all registered Dramatiq actors and their queues at worker startup:")
-        current_broker = dramatiq.get_broker()
-        if hasattr(current_broker, 'actors') and current_broker.actors:
-            for actor_name_key, actor_instance_val in current_broker.actors.items():
-                worker_logger.info(f"  DRAMATIQ_DIAG_ACTOR: Name='{actor_name_key}', Queue='{actor_instance_val.queue_name}', Options='{actor_instance_val.options}'")
-        else:
-            worker_logger.info("  DRAMATIQ_DIAG_ACTOR: No actors found registered with the current broker via broker.actors.")
+        # Si 'worker_logger' no está definido globalmente en este archivo, intenta importarlo o definir uno básico.
+        # Ejemplo de importación (ajustar según la estructura de tu logger):
+        # from utils.logger import worker_logger
+        # Si no, un logger muy básico para este diagnóstico:
+        # import logging
+        # worker_logger = logging.getLogger("dramatiq_diag")
+        # logging.basicConfig(level=logging.INFO)
 
-        # Intento alternativo si lo anterior no muestra nada (depende de la versión de Dramatiq y cómo se registran)
-        # Esto es más genérico y podría ser ruidoso, pero puede ayudar.
-        worker_logger.info("DRAMATIQ_DIAG: Checking global Dramatiq registry (if accessible, might be empty if actors are broker-specific):")
-        if hasattr(dramatiq, '_REGISTRY') and hasattr(dramatiq._REGISTRY, 'get_actors'):
-             for act in dramatiq._REGISTRY.get_actors():
-                  worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY_ACTOR: Name='{act.actor_name}', Queue='{act.queue_name}', Options='{act.options}'")
+        worker_logger.info("DRAMATIQ_DIAG_START: Iniciando diagnóstico de Dramatiq en el worker.")
+
+        worker_logger.info("DRAMATIQ_DIAG_ENV: Listando variables de entorno relevantes:")
+        for key, value in os.environ.items():
+            if "DRAMATIQ" in key.upper() or "RABBITMQ" in key.upper() or "QUEUE" in key.upper() or key == "ENV_MODE":
+                worker_logger.info(f"  DRAMATIQ_DIAG_ENV_VAR: {key}={value}")
+
+        worker_logger.info("DRAMATIQ_DIAG_BROKER: Verificando broker actual...")
+        current_broker = dramatiq.get_broker()
+        worker_logger.info(f"  DRAMATIQ_DIAG_BROKER_INSTANCE: {current_broker}")
+        if hasattr(current_broker, 'options'):
+            worker_logger.info(f"  DRAMATIQ_DIAG_BROKER_OPTIONS: {current_broker.options}")
+
+        worker_logger.info("DRAMATIQ_DIAG_ACTORS: Listando actores registrados y sus colas (desde broker.actors):")
+        if hasattr(current_broker, 'actors') and current_broker.actors:
+            if current_broker.actors: # Ensure current_broker.actors is not empty
+                for actor_name_key, actor_instance_val in current_broker.actors.items():
+                    worker_logger.info(f"  DRAMATIQ_DIAG_ACTOR_DETAIL: Name='{actor_name_key}', Queue='{actor_instance_val.queue_name}', Options='{actor_instance_val.options}', Func='{actor_instance_val.fn.__module__}.{actor_instance_val.fn.__name__}'")
+            else:
+                worker_logger.info("  DRAMATIQ_DIAG_ACTOR_DETAIL: No actors found registered via current_broker.actors.")
         else:
-            worker_logger.info("  DRAMATIQ_DIAG_REGISTRY_ACTOR: Global Dramatiq registry not found or does not have get_actors method.")
+            worker_logger.info("  DRAMATIQ_DIAG_ACTOR_DETAIL: Atributo current_broker.actors no disponible o vacío.")
+
+        worker_logger.info("DRAMATIQ_DIAG_REGISTRY: Verificando registro global de Dramatiq (dramatiq._REGISTRY):")
+        if hasattr(dramatiq, '_REGISTRY') and hasattr(dramatiq._REGISTRY, 'get_actors'):
+            actors_in_registry = list(dramatiq._REGISTRY.get_actors())
+            if actors_in_registry:
+                worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY: Encontrados {len(actors_in_registry)} actores en el registro global:")
+                for act_instance in actors_in_registry:
+                    worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY_ACTOR_DETAIL: Name='{act_instance.actor_name}', Queue='{act_instance.queue_name}', Options='{act_instance.options}', Func='{act_instance.fn.__module__}.{act_instance.fn.__name__}'")
+            else:
+                worker_logger.info("  DRAMATIQ_DIAG_REGISTRY: Registro global de actores vacío.")
+        else:
+            worker_logger.info("  DRAMATIQ_DIAG_REGISTRY: No se pudo acceder al registro global de actores de Dramatiq (_REGISTRY o get_actors).")
+
+        worker_logger.info("DRAMATIQ_DIAG_END: Fin del diagnóstico de Dramatiq en el worker.")
 
     except Exception as e:
-        worker_logger.error(f"DRAMATIQ_DIAG: Could not introspect Dramatiq actors: {e}", exc_info=True)
+        # Usar print si el logger falla por alguna razón en este punto crítico
+        print(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {str(e)}")
+        # Solo usar worker_logger si está definido (debería estarlo)
+        if 'worker_logger' in locals() and worker_logger: 
+             worker_logger.error(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {e}", exc_info=True)
+# --- FIN DEL BLOQUE DE DIAGNÓSTICO ---
