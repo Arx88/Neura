@@ -51,7 +51,7 @@ EXPOSE 8000
 USER root
 
 # Gunicorn configuration
-CMD ["sh", "-c", "gunicorn backend.api:app \
+CMD ["sh", "-c", "gunicorn --pythonpath /app backend.api:app \
      --workers $WORKERS \
      --worker-class uvicorn.workers.UvicornWorker \
      --bind 0.0.0.0:8000 \
