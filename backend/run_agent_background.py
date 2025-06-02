@@ -50,7 +50,7 @@ async def initialize():
     worker_logger.info(f"Initialized agent API with instance ID: {instance_id}")
 
 
-@dramatiq.actor
+@dramatiq.actor(queue_name="default")
 async def run_agent_background(
     agent_run_id: str,
     thread_id: str,
