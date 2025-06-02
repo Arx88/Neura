@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 from backend.agent.prompt import get_system_prompt
 from backend.agentpress.task_state_manager import TaskStateManager
 from backend.agentpress.tool_orchestrator import ToolOrchestrator
-from backend.agentpress.task_types import TaskState # For type hinting
+from backend.agentpress.api_models_tasks import TaskState # For type hinting
 from backend.services.llm import make_llm_api_call # Assuming this is the correct way to call LLM
 from backend.utils.logger import logger
 

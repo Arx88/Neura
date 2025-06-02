@@ -19,7 +19,7 @@ import asyncio
 from ..services import redis
 from .task_state_manager import TaskStateManager
 from .tool_orchestrator import ToolOrchestrator
-from .task_types import TaskState
+from .api_models_tasks import TaskState
 from .tool import ToolResult
 from .utils.json_helpers import format_for_yield
 from ..services.llm import make_llm_api_call
