@@ -141,6 +141,46 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
     # After the try-except for app_specific_log_dir_path, add a log message indicating success or failure
     if app_log_file_setup_success:
         logger.info(f"Successfully set up app-specific file logging to: {app_log_file}")
+        # --- BEGIN NEW DIAGNOSTIC CODE ---
+        try:
+            logger.info(f"DIAGNOSTIC_TEST_MESSAGE: Attempting to write a test message to the configured app-specific log file: {app_log_file}")
+            # Ensure the logger instance 'name' (e.g. 'WORKER') actually uses the 'app_log_file'
+            # This test message will go through all handlers of the 'logger' instance.
+            # If file logging is working, it should appear in app_log_file.
+            target_logger = logging.getLogger(name) # Get the specific logger we are setting up
+            target_logger.info(f"TEST_MESSAGE_VIA_LOGGER: This is a direct test write to the app-specific log file {app_log_file} for logger '{name}'.")
+            
+            # Explicitly flush handlers for this logger
+            target_logger.info(f"DIAGNOSTIC_FLUSH: Attempting to flush handlers for logger '{name}'.")
+            for handler_idx, handler in enumerate(target_logger.handlers):
+                try:
+                    handler.flush()
+                    target_logger.info(f"DIAGNOSTIC_FLUSH: Flushed handler {handler_idx} ({type(handler).__name__}).")
+                except Exception as e_flush:
+                    target_logger.error(f"DIAGNOSTIC_FLUSH: FAILED to flush handler {handler_idx} ({type(handler).__name__}). Error: {e_flush}")
+
+            # Direct file I/O test in the target directory
+            # app_specific_log_dir_path should be "/app/runtime_logs/"
+            test_file_path = os.path.join(app_specific_log_dir_path, f"_TEST_WRITE_SUCCESSFUL_{name}.txt")
+            target_logger.info(f"DIAGNOSTIC_TEST_FILE: Attempting direct write to {test_file_path}")
+            try:
+                with open(test_file_path, "w") as f_test:
+                    f_test.write(f"Test write successful at {datetime.now(timezone.utc).isoformat()} for logger '{name}'.\n")
+                target_logger.info(f"DIAGNOSTIC_TEST_FILE: Successfully created and wrote to {test_file_path}")
+            except Exception as e_test_write:
+                target_logger.error(f"DIAGNOSTIC_TEST_FILE: FAILED to create/write to {test_file_path}. Error: {type(e_test_write).__name__} - {str(e_test_write)}", exc_info=True)
+
+            # List directory contents
+            target_logger.info(f"DIAGNOSTIC_DIR_LISTING: Attempting to list contents of '{app_specific_log_dir_path}'")
+            try:
+                dir_contents = os.listdir(app_specific_log_dir_path)
+                target_logger.info(f"DIAGNOSTIC_DIR_LISTING: Contents of '{app_specific_log_dir_path}': {dir_contents}")
+            except Exception as e_listdir:
+                target_logger.error(f"DIAGNOSTIC_DIR_LISTING: FAILED to list contents of '{app_specific_log_dir_path}'. Error: {type(e_listdir).__name__} - {str(e_listdir)}", exc_info=True)
+        except Exception as e_diag:
+            # Catch any unexpected errors in the diagnostic block itself
+            logger.error(f"DIAGNOSTIC_BLOCK_ERROR: Error during diagnostic operations. Error: {type(e_diag).__name__} - {str(e_diag)}", exc_info=True)
+        # --- END NEW DIAGNOSTIC CODE ---
     else:
         logger.warning(f"App-specific file logging setup FAILED for logger '{name}'. Check previous errors for details.")
 
