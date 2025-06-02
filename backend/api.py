@@ -19,7 +19,7 @@ import time
 from collections import OrderedDict
 
 # AgentPress specific imports
-from agentpress.task_types import TaskState # For direct use if needed
+from .agentpress.task_types import TaskState # For direct use if needed
 from agentpress.task_storage_supabase import SupabaseTaskStorage
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
