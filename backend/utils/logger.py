@@ -18,7 +18,7 @@ from functools import wraps
 import traceback
 from logging.handlers import RotatingFileHandler
 
-from utils.config import config, EnvMode
+from .config import config, EnvMode
 
 # --- Path Definitions ---
 # Assuming this script is in backend/utils/logger.py

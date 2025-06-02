@@ -16,14 +16,14 @@ import json
 import uuid
 import asyncio
 
-from services import redis
-from agentpress.task_state_manager import TaskStateManager
-from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState
-from agentpress.tool import ToolResult
-from agentpress.utils.json_helpers import format_for_yield
-from services.llm import make_llm_api_call
-from utils.logger import logger
+from ..services import redis
+from .task_state_manager import TaskStateManager
+from .tool_orchestrator import ToolOrchestrator
+from .task_types import TaskState
+from .tool import ToolResult
+from .utils.json_helpers import format_for_yield
+from ..services.llm import make_llm_api_call
+from ..utils.logger import logger
 
 class PlanExecutor:
     """

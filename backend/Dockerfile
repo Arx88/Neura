@@ -51,21 +51,22 @@ EXPOSE 8000
 USER root
 
 # Gunicorn configuration
-CMD ["sh", "-c", "gunicorn --pythonpath /app backend.api:app \
-     --workers $WORKERS \
-     --worker-class uvicorn.workers.UvicornWorker \
-     --bind 0.0.0.0:8000 \
-     --timeout 1800 \
-     --graceful-timeout 600 \
-     --keep-alive 1800 \
-     --max-requests 0 \
-     --max-requests-jitter 0 \
-     --forwarded-allow-ips '*' \
-     --worker-connections $WORKER_CONNECTIONS \
-     --worker-tmp-dir /dev/shm \
-     --log-level info \
-     --access-logfile - \
-     --error-logfile - \
-     --capture-output \
-     --enable-stdio-inheritance \
-     --threads $THREADS"]
+# CMD ["sh", "-c", "gunicorn --pythonpath /app backend.api:app \
+#      --workers $WORKERS \
+#      --worker-class uvicorn.workers.UvicornWorker \
+#      --bind 0.0.0.0:8000 \
+#      --timeout 1800 \
+#      --graceful-timeout 600 \
+#      --keep-alive 1800 \
+#      --max-requests 0 \
+#      --max-requests-jitter 0 \
+#      --forwarded-allow-ips '*' \
+#      --worker-connections $WORKER_CONNECTIONS \
+#      --worker-tmp-dir /dev/shm \
+#      --log-level info \
+#      --access-logfile - \
+#      --error-logfile - \
+#      --capture-output \
+#      --enable-stdio-inheritance \
+#      --threads $THREADS"]
+CMD ["sh", "-c", "gunicorn api:app --workers ${WORKERS:-4} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"]

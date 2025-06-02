@@ -1,8 +1,8 @@
 import docker
 import uuid
 import os
-from utils.logger import logger
-from utils.config import config
+from ..utils.logger import logger
+from ..utils.config import config
 
 class LocalSandbox:
     def __init__(self):
