@@ -82,10 +82,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Install Cloudflare Wrangler CLI globally
 RUN npm install -g wrangler
 
-# Install noVNC
-RUN git clone https://github.com/novnc/noVNC.git /opt/novnc \
-    && git clone https://github.com/novnc/websockify /opt/novnc/utils/websockify \
-    && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+RUN poetry --version
+RUN poetry config virtualenvs.create false
 
 # Set platform for ARM64 compatibility
 ARG TARGETPLATFORM=linux/amd64
@@ -93,24 +94,30 @@ ARG TARGETPLATFORM=linux/amd64
 # Set up working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy Poetry project files
+COPY pyproject.toml poetry.lock* /app/
 
-# Copy server script
+# Install Python dependencies using Poetry
+RUN poetry cache clear . --all -n
+RUN poetry install --no-root --no-dev --sync
+
+# Verification step for Dramatiq
+RUN poetry run python -c "print('--- Docker Build Dramatiq Check (Sandbox) ---'); import dramatiq; import dramatiq.middleware; print('Dramatiq version in Docker build (Sandbox):', dramatiq.__version__); print('Middleware path (Sandbox):', dramatiq.middleware.__file__); print('Middleware contents (Sandbox):', dir(dramatiq.middleware)); print('--- End Docker Build Dramatiq Check (Sandbox) ---')"
+
+# Copy the rest of the application code (includes server.py, browser_api.py etc.)
 COPY . /app
-COPY server.py /app/server.py
-COPY browser_api.py /app/browser_api.py
 
-# Install Playwright and browsers with system dependencies
+# Install Playwright browsers and OS dependencies (Playwright Python package itself is installed by Poetry)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# Install Playwright package first
-RUN pip install playwright
-# Then install dependencies and browsers
 RUN playwright install-deps
 RUN playwright install chromium
-# Verify installation
+# Verify Playwright installation
 RUN python -c "from playwright.sync_api import sync_playwright; print('Playwright installation verified')"
+
+# Install noVNC
+RUN git clone https://github.com/novnc/noVNC.git /opt/novnc \
+    && git clone https://github.com/novnc/websockify /opt/novnc/utils/websockify \
+    && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

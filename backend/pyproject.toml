@@ -49,7 +49,7 @@ vncdotool = "^1.2.0"
 tavily-python = "^0.5.4"
 pytesseract = "^0.3.13"
 stripe = "^12.0.1"
-dramatiq = {extras = ["redis"], version = "^1.17.1"}
+dramatiq = {extras = ["redis", "rabbitmq", "prometheus", "watch", "msgpack", "results"], version = "^1.17.1"}
 pika = "^1.3.2"
 prometheus-client = "^0.21.1"
 langfuse = "^2.60.5"

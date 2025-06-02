@@ -6,51 +6,59 @@ import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-# --- INICIO DEL BLOQUE DE DIAGNÓSTICO PYTHON ---
+# --- INICIO DEL BLOQUE DE DIAGNÓSTICO PYTHON (VERSIÓN MEJORADA) ---
+# Colocar esto al principio de backend/run_agent_background.py
+
+print("PYTHON_DIAG_LOAD: Script run_agent_background.py está siendo cargado.", flush=True)
 import sys
 import os
-import dramatiq # Asegúrate de que dramatiq se importe antes de intentar acceder a __version__
-import inspect  # Para obtener rutas de archivos de módulos
+import inspect # Para obtener rutas de archivos de módulos
 
-def ejecutar_diagnostico_entorno_dramatiq():
-    print("PYTHON_DIAG: --- Iniciando Diagnóstico de Entorno Python y Dramatiq ---", flush=True)
+def ejecutar_diagnostico_entorno_dramatiq_profundo():
+    print("PYTHON_DIAG: --- Iniciando Diagnóstico Profundo de Entorno Python y Dramatiq ---", flush=True)
     print(f"PYTHON_DIAG: Versión de Python: {sys.version}", flush=True)
+    print(f"PYTHON_DIAG: sys.executable: {sys.executable}", flush=True)
+    print(f"PYTHON_DIAG: sys.prefix: {sys.prefix}", flush=True)
     print(f"PYTHON_DIAG: sys.path: {sys.path}", flush=True)
 
+    # Intentar importar Dramatiq y obtener su información
     try:
+        import dramatiq
         print(f"PYTHON_DIAG: Versión de Dramatiq detectada: {dramatiq.__version__}", flush=True)
         print(f"PYTHON_DIAG: Ubicación del módulo Dramatiq principal: {inspect.getfile(dramatiq)}", flush=True)
-    except Exception as e_dramatiq_version:
-        print(f"PYTHON_DIAG: No se pudo obtener la versión o ubicación de Dramatiq: {e_dramatiq_version}", flush=True)
 
-    try:
-        import dramatiq.middleware
-        print(f"PYTHON_DIAG: Módulo dramatiq.middleware encontrado en: {inspect.getfile(dramatiq.middleware)}", flush=True)
+        # Intentar importar y detallar dramatiq.middleware
+        try:
+            import dramatiq.middleware
+            print(f"PYTHON_DIAG: Módulo dramatiq.middleware encontrado en: {inspect.getfile(dramatiq.middleware)}", flush=True)
 
-        # Listar contenido de dramatiq.middleware
-        middleware_contents = dir(dramatiq.middleware)
-        print(f"PYTHON_DIAG: Contenido de dramatiq.middleware (dir()): {middleware_contents}", flush=True)
+            middleware_contents = dir(dramatiq.middleware)
+            print(f"PYTHON_DIAG: Contenido de dramatiq.middleware (dir()): {middleware_contents}", flush=True)
 
-        # Verificar específicamente la presencia de 'Results'
-        if 'Results' in middleware_contents:
-            print("PYTHON_DIAG: El atributo 'Results' SÍ ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
-            results_attr = getattr(dramatiq.middleware, 'Results')
-            print(f"PYTHON_DIAG: Tipo de dramatiq.middleware.Results: {type(results_attr)}", flush=True)
-            try:
-                print(f"PYTHON_DIAG: 'Results' se define en el archivo: {inspect.getfile(results_attr)}", flush=True)
-            except TypeError:
-                print("PYTHON_DIAG: No se pudo determinar el archivo para 'Results' (podría ser un atributo no modular/clase).", flush=True)
-        else:
-            print("PYTHON_DIAG: El atributo 'Results' NO ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
+            if 'Results' in middleware_contents:
+                print("PYTHON_DIAG: El atributo 'Results' SÍ ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
+                results_attr = getattr(dramatiq.middleware, 'Results')
+                print(f"PYTHON_DIAG: Tipo de dramatiq.middleware.Results: {type(results_attr)}", flush=True)
+                try:
+                    print(f"PYTHON_DIAG: 'Results' se define en el archivo: {inspect.getfile(results_attr)}", flush=True)
+                except TypeError:
+                    print("PYTHON_DIAG: No se pudo determinar el archivo para 'Results'.", flush=True)
+            else:
+                print("PYTHON_DIAG: El atributo 'Results' NO ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
 
-    except ImportError as e_import_middleware:
-        print(f"PYTHON_DIAG: ImportError al intentar importar o inspeccionar dramatiq.middleware: {e_import_middleware}", flush=True)
+        except ImportError as e_import_middleware:
+            print(f"PYTHON_DIAG: ImportError al intentar importar dramatiq.middleware: {e_import_middleware}", flush=True)
+        except Exception as e_inspect_middleware:
+            print(f"PYTHON_DIAG: Error al inspeccionar dramatiq.middleware: {e_inspect_middleware}", flush=True)
+
+    except ImportError as e_import_dramatiq:
+        print(f"PYTHON_DIAG: FATAL: No se pudo importar el paquete 'dramatiq': {e_import_dramatiq}", flush=True)
     except Exception as e_general_diag:
-        print(f"PYTHON_DIAG: Error general durante el diagnóstico de dramatiq.middleware: {e_general_diag}", flush=True)
+        print(f"PYTHON_DIAG: Error general durante el diagnóstico: {e_general_diag}", flush=True)
 
-    print("PYTHON_DIAG: --- Fin del Diagnóstico de Entorno Python y Dramatiq ---", flush=True)
+    print("PYTHON_DIAG: --- Fin del Diagnóstico Profundo ---", flush=True)
 
-ejecutar_diagnostico_entorno_dramatiq()
+ejecutar_diagnostico_entorno_dramatiq_profundo()
 # --- FIN DEL BLOQUE DE DIAGNÓSTICO PYTHON ---
 
 from services import redis
