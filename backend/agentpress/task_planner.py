@@ -1,8 +1,9 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any # Removed BaseModel, Field, ValidationError here, will add them with Pydantic models
 import json
-from pydantic import BaseModel, Field, ValidationError # Added imports
+# Pydantic models will be defined below
+from pydantic import BaseModel, Field, ValidationError
 
-from agent.prompt import get_system_prompt # Added import
+from agent.prompt import get_system_prompt
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_types import TaskState # For type hinting
@@ -34,45 +35,44 @@ class TaskPlanner:
     ) -> List[Dict[str, Any]]: # Return type is a list of dicts for subtasks
         logger.debug(f"TASK_PLANNER: Decomposing task: {task_description}")
 
-        # Opción 2: Definir directamente para asegurar (RECOMENDADO PARA PRUEBAS):
-        tool_names_json = "[]"
+        available_tools_str = "[]"
         try:
-            tool_names_json = json.dumps(self.tool_orchestrator.get_tool_names())
+            tool_schemas = self.tool_orchestrator.get_tool_schemas_for_llm()
+            tool_identifiers = [schema['name'] for schema in tool_schemas if 'name' in schema]
+            if not tool_identifiers:
+                logger.warning("TASK_PLANNER: No tool identifiers found from get_tool_schemas_for_llm(). LLM will not be shown available tools.")
+                available_tools_str = "No tools available. Use 'SystemCompleteTask' for simple tasks."
+            else:
+                available_tools_str = json.dumps(tool_identifiers)
         except Exception as e_tools:
-            logger.warning(f"Could not get tool names for system prompt: {e_tools}")
+            logger.warning(f"Could not get tool schemas for system prompt: {e_tools}")
+            available_tools_str = "Error retrieving tools. Use 'SystemCompleteTask' for simple tasks."
 
         SYSTEM_PROMPT = f"""
         Eres un planificador de tareas experto. Tu objetivo es descomponer una tarea principal en una secuencia de subtareas ejecutables por un agente de IA.
         Debes devolver SIEMPRE un objeto JSON válido con una única clave "plan", que contiene una lista de subtareas.
-        Cada subtarea en la lista debe ser un objeto con las siguientes claves: "tool_code" (string), "thought" (string) y "parameters" (object).
+        Cada subtarea en la lista debe ser un objeto con las siguientes claves: "tool_identifier" (string, en formato ToolID__methodName) y "thought" (string, una descripción de la subtarea).
 
         Ejemplo de salida esperada:
         {{
         "plan": [
         {{
-        "tool_code": "web_search",
-        "thought": "Buscar en internet los mejores hoteles en Valencia.",
-        "parameters": {{
-        "query": "mejores lugares para hospedarse en Valencia"
-        }}
+        "tool_identifier": "WebSearchTool__search_web",
+        "thought": "Buscar en internet los mejores hoteles en Valencia."
         }},
         {{
-        "tool_code": "web_search",
-        "thought": "Buscar en internet los mejores restaurantes en Valencia.",
-        "parameters": {{
-        "query": "mejores restaurantes en Valencia"
-        }}
+        "tool_identifier": "DatabaseTool__query_data",
+        "thought": "Consultar la base de datos de clientes para obtener información sobre Valencia."
         }}
         ]
         }}
 
         No incluyas absolutamente ningún texto fuera del objeto JSON. La respuesta debe ser solo el JSON.
-        Las herramientas disponibles son: {tool_names_json}.
-        Considera usar 'SystemCompleteTask' si la tarea principal parece simple y no necesita múltiples pasos o herramientas específicas.
-        Si la tarea es muy simple y puede ser respondida directamente sin herramientas (ej. "hola"), puedes devolver un plan con una única tarea usando la herramienta "SystemCompleteTask" y el "thought" conteniendo la respuesta.
+        Las herramientas disponibles (tool_identifier) son: {available_tools_str}.
+        Si la tarea es muy simple y puede ser respondida directamente sin herramientas (ej. "hola"), o si ninguna herramienta parece adecuada, puedes devolver un plan con una única tarea usando la herramienta "SystemCompleteTask__task_complete" y el "thought" conteniendo la respuesta o resumen.
+        Asegúrate que el "tool_identifier" que elijas exista EXACTAMENTE en la lista de herramientas disponibles.
         """
 
-        # The user message is now simpler as the SYSTEM_PROMPT handles the main instruction
         user_message_content = f"Task Description: {task_description}"
         if context:
             user_message_content += f"\nContext: {json.dumps(context)}"
@@ -91,9 +91,8 @@ class TaskPlanner:
             if attempts > 0:
                 retry_guidance = {
                     "role": "system",
-                    "content": "Your previous response had a formatting or validation error. Please strictly adhere to the output format: A valid JSON object with a single key 'plan', which is a list of objects. Each object in the 'plan' list must have 'tool_code' (string), 'thought' (string), and 'parameters' (object). Do not include any text outside the JSON object itself."
+                    "content": "Your previous response had a formatting or Pydantic validation error. Please strictly adhere to the output format: A valid JSON object with a single key 'plan', which is a list of objects. Each object in the 'plan' list must have 'tool_identifier' (string, format: ToolID__methodName) and 'thought' (string). Do not include any text outside the JSON object itself."
                 }
-                # Insert retry guidance after the main system prompt
                 current_prompt_messages.insert(1, retry_guidance)
 
             logger.info(f"TASK_PLANNER: Attempt {attempts + 1}/{max_retries + 1} to generate plan for: {task_description}")
@@ -164,51 +163,62 @@ class TaskPlanner:
                         return []
                     continue
 
-                # Validate the structure {"plan": [...]}
-                if not isinstance(parsed_json_response, dict) or "plan" not in parsed_json_response or not isinstance(parsed_json_response.get("plan"), list):
-                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: LLM response is not a dict with a 'plan' list. Got: {type(parsed_json_response)}. Data: '{parsed_json_response}'")
+                validated_plan: PlanResponse
+                try:
+                    validated_plan = PlanResponse.parse_obj(parsed_json_response)
+                except ValidationError as e_val:
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed: {e_val}. Response: '{parsed_json_response}'")
                     attempts += 1
                     if attempts > max_retries:
-                        logger.error("TASK_PLANNER: Max retries reached. LLM response not a dict with 'plan' list.")
+                        logger.error(f"TASK_PLANNER: Max retries reached. Pydantic validation failed. Last error: {e_val}")
                         return []
                     continue
 
-                plan_steps_data = parsed_json_response["plan"]
+                plan_steps_data = validated_plan.plan # Now a list of SubtaskDefinition objects
 
                 subtasks_for_creation = []
-                for i, step in enumerate(plan_steps_data):
-                    if not isinstance(step, dict) or not all(k in step for k in ["tool_code", "thought", "parameters"]):
-                        logger.warning(f"TASK_PLANNER: Invalid step structure in plan (Attempt {attempts + 1}): {step}")
-                        continue # Skip this invalid step
+                if not plan_steps_data: # Handle empty plan list from LLM
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts+1}: LLM returned an empty 'plan' list.")
+                    # It might be valid for an LLM to return an empty plan if the task is unplannable
+                    # or requires no action. For now, we treat this as success with zero tasks.
+                    # If this should be an error, then set attempts and continue.
+                    # For now, let's assume SystemCompleteTask should be used by LLM in such cases.
+                    # If the prompt guides it to use SystemCompleteTask for very simple tasks,
+                    # an empty plan might indicate an LLM failure to follow instructions.
+                    # Let's retry if plan is empty.
+                    attempts +=1
+                    if attempts > max_retries:
+                        logger.error("TASK_PLANNER: Max retries reached. LLM returned empty plan.")
+                        return []
+                    continue
 
-                    mapped_name = step.get("tool_code", f"Step {i+1}")
-                    if step.get("thought"):
-                        mapped_name += f": {step['thought'][:30]}" + ("..." if len(step['thought']) > 30 else "")
 
-                    # Populate description only with thought or a default
-                    mapped_description = step.get("thought")
-                    if not mapped_description: # Handles None or empty string
-                        mapped_description = "No specific thought provided."
-
-                    # Get raw parameters for llm_parameters
-                    llm_params = step.get("parameters")
+                for i, step_model in enumerate(plan_steps_data): # step_model is SubtaskDefinition
+                    # Truncate name for display, ensuring it's not too long
+                    base_name = step_model.thought
+                    max_name_len = 100 # Define a reasonable max length for task names
+                    if len(base_name) > max_name_len:
+                        mapped_name = base_name[:max_name_len-3] + "..."
+                    else:
+                        mapped_name = base_name
 
                     subtask_dict = {
                         "name": mapped_name,
-                        "description": mapped_description,
-                        "dependencies": [], # New prompt does not ask for 0-indexed dependencies.
-                                           # Actual dependencies will be handled by PlanExecutor or similar.
-                        "assigned_tools": [step.get("tool_code")] if step.get("tool_code") else [],
-                        "llm_parameters": llm_params # Add raw parameters here
+                        "description": step_model.thought, # Full thought for description
+                        "dependencies": [],
+                        "assigned_tools": [step_model.tool_identifier] if step_model.tool_identifier else [],
+                        # No llm_parameters or tool_input in metadata from planner anymore
                     }
-
-                    # No Pydantic validation here anymore
                     subtasks_for_creation.append(subtask_dict)
-                    # except ValidationError as e_val_item: # Removed Pydantic validation
-                    #     logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: Pydantic validation failed for mapped step: {e_val_item}. Original step: '{step}', Mapped: '{subtask_dict}'")
 
-                if not subtasks_for_creation and plan_steps_data: # This check might need adjustment if we no longer validate individual items with Pydantic before appending
-                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: No subtasks were added to creation list, though plan data existed. Original plan had {len(plan_steps_data)} steps.")
+                if not subtasks_for_creation and plan_steps_data:
+                    # This case should ideally be caught by Pydantic validation if individual steps are malformed
+                    # or if the plan list itself is present but items are invalid.
+                    # Given Pydantic validation passes for PlanResponse, this means plan_steps_data was a list of valid SubtaskDefinition.
+                    # So, if subtasks_for_creation is empty, it means plan_steps_data was empty.
+                    # This is handled by the check above `if not plan_steps_data:`.
+                    # This block might be redundant or indicate a logic flaw if reached.
+                    logger.warning(f"TASK_PLANNER: Attempt {attempts + 1}: No subtasks were mapped, though validated plan data existed. Original plan had {len(plan_steps_data)} steps.")
                     attempts += 1
                     if attempts > max_retries:
                         logger.error("TASK_PLANNER: Max retries reached. All plan steps failed validation.")
@@ -282,28 +292,32 @@ class TaskPlanner:
                 current_dependencies = [] # Defaulting to no dependencies as per current mapping logic.
                 assigned_tools_names = subtask_data["assigned_tools"]
 
-                # Retrieve llm_parameters and construct metadata
-                llm_params = subtask_data.get("llm_parameters")
-                current_metadata = {"tool_input": llm_params}
+                # Parameters are no longer generated by the planner.
+                # Metadata will be empty unless other contextual info needs to be added here.
+                current_metadata = {}
 
                 subtask = await self.task_manager.create_task(
                     name=sub_name,
                     description=sub_description,
                     parentId=main_task.id,
-                    dependencies=current_dependencies, # Using the potentially linear dependency
+                    dependencies=current_dependencies,
                     assignedTools=assigned_tools_names,
                     status="pending",
-                    metadata=current_metadata # Pass metadata here
+                    metadata=current_metadata # Empty or context-specific, no llm_parameters
                 )
                 if subtask:
                     # created_subtask_ids_in_order.append(subtask.id) # For linear dependency if implemented above
                     logger.debug(f"Created subtask '{sub_name}' (ID: {subtask.id}) for main task {main_task.id}")
                 else:
-                    logger.error(f"Failed to create subtask '{sub_name}' for main task {main_task.id}")
-                    # Decide on error handling: stop planning, or continue?
-                    # For now, continue creating other subtasks.
+                    logger.error(f"Failed to create subtask '{sub_name}' for main task {main_task.id}. Halting planning.")
+                    # Update the main task to reflect planning failure due to subtask creation issue
+                    await self.task_manager.update_task(
+                        main_task.id,
+                        {"status": "planning_failed", "error": f"Failed to create necessary subtask: {sub_name}"}
+                    )
+                    return main_task # Return the main task, now marked as failed
 
-            # Update main task status after planning
+            # Update main task status after planning if all subtasks were created successfully
             # The main_task.subtasks list is updated by create_task within TaskStateManager when parentId is set.
             # We might need to refresh main_task from task_manager to get the most up-to-date subtasks list.
             refreshed_main_task = await self.task_manager.get_task(main_task.id)

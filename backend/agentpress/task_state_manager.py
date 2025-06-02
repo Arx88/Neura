@@ -3,6 +3,7 @@ from collections import defaultdict
 import uuid
 import time
 import asyncio
+import copy # Added for deepcopy
 
 from agentpress.task_types import TaskState, TaskStorage
 from utils.logger import logger # Changed import
@@ -160,6 +161,21 @@ class TaskStateManager:
                 logger.warning(f"Task {task_id} not found for update.")
                 return None
 
+            # Store original values for potential rollback
+            original_task_data = {}
+            for key in updates.keys():
+                if hasattr(task, key):
+                    original_task_data[key] = copy.deepcopy(getattr(task, key))
+                elif key in task.metadata:
+                    # For metadata, we need to be careful. If a subkey is updated,
+                    # we should ideally deepcopy the whole metadata dict or handle subkeys.
+                    # For simplicity, let's deepcopy the whole metadata if any metadata key is in updates.
+                    if 'metadata' not in original_task_data: # only copy once
+                         original_task_data['metadata'] = copy.deepcopy(task.metadata)
+                # No need to store original for new keys being added to metadata
+
+            original_endTime = task.endTime # Specifically track endTime
+
             # Apply updates to the in-memory task object
             changed_fields = False
             for key, value in updates.items():
@@ -168,13 +184,13 @@ class TaskStateManager:
                         setattr(task, key, value)
                         changed_fields = True
                 elif key in task.metadata: # Allow updating metadata sub-keys directly
-                    if task.metadata[key] != value:
+                    if task.metadata.get(key) != value: # Use .get for safety
                          task.metadata[key] = value
                          changed_fields = True
-                else: # New key, add to metadata by default or log warning
+                else: # New key, add to metadata by default
                     logger.debug(f"Adding new key '{key}' to metadata for task {task_id}")
                     task.metadata[key] = value
-                    changed_fields = True
+                    changed_fields = True # Adding a key is a change
 
             if updates.get("status") in ["completed", "failed", "cancelled"] and not task.endTime:
                 task.endTime = updates.get("endTime", time.time()) # Set endTime if task is finishing
@@ -182,71 +198,104 @@ class TaskStateManager:
 
             if not changed_fields:
                 logger.debug(f"No actual changes for task {task_id}, update skipped.")
-                # Still notify, as an "update" call was made, could be a refresh signal
                 await self._notify_listeners(task_id, task)
                 return task
 
             try:
-                # Use the storage's update_task method for potentially atomic DB updates
                 updated_task_from_storage = await self.storage.update_task(task_id, updates)
                 if updated_task_from_storage:
-                    # Replace in-memory task with the one returned from storage to ensure consistency
-                    self._tasks[task_id] = updated_task_from_storage
+                    self._tasks[task_id] = updated_task_from_storage # Consistent state
                     logger.info(f"Task {task_id} updated successfully in storage and memory.")
                     await self._notify_listeners(task_id, updated_task_from_storage)
                     return updated_task_from_storage
                 else:
-                    # This case should ideally not happen if task was found in memory,
-                    # unless DB update failed in a way that update_task returned None without error.
-                    logger.error(f"Task {task_id} found in memory but failed to update in storage (no data returned).")
-                    # Potentially revert in-memory changes or mark task as desynced.
-                    # For now, we keep the in-memory change and log error.
+                    # This means storage.update_task returned None without an exception.
+                    logger.critical(f"CRITICAL: Task {task_id} updated in memory, but storage update returned None. In-memory state might be inconsistent with storage.")
+                    # For now, the in-memory change is kept, and we rely on logging.
+                    # A more robust system might try to re-fetch or have a reconciliation process.
+                    await self._notify_listeners(task_id, task) # Notify with current in-memory state
                     return task # Return the in-memory (potentially inconsistent) task
             except Exception as e:
-                logger.error(f"Failed to update task {task_id} in storage: {e}", exc_info=True)
-                # Here, task object in memory was modified. Consider reverting if storage fails.
-                # For simplicity, current state is that memory might be ahead if storage fails.
-                raise
+                logger.error(f"Failed to update task {task_id} in storage: {e}. Reverting in-memory changes.", exc_info=True)
+                # Revert changes
+                for key, original_value in original_task_data.items():
+                    if key == 'metadata':
+                        task.metadata = original_value # Restore whole metadata
+                    else:
+                        setattr(task, key, original_value)
+                task.endTime = original_endTime # Restore endTime specifically
+                # After reverting, the task object in self._tasks[task_id] is now back to its original state before this update attempt.
+                logger.info(f"In-memory changes for task {task_id} reverted due to storage update failure.")
+                raise # Re-raise the exception so the caller knows the update failed
 
 
     async def delete_task(self, task_id: str) -> None:
-        """Deletes a task from memory and storage."""
+        """
+        Deletes a task from memory and storage.
+        Note: This method currently does not handle tasks that depend on the deleted task;
+        they will not be automatically updated or deleted.
+        """
         async with self._lock:
             task_to_delete = self._tasks.get(task_id)
             if not task_to_delete:
                 logger.warning(f"Task {task_id} not found for deletion.")
                 return
 
+            original_parent_subtasks = None
+            parent_task_instance = None
+
             # Handle parent's subtask list
             if task_to_delete.parentId:
-                parent_task = self._tasks.get(task_to_delete.parentId)
-                if parent_task and task_id in parent_task.subtasks:
-                    parent_task.subtasks.remove(task_id)
+                parent_task_instance = self._tasks.get(task_to_delete.parentId)
+                if parent_task_instance and task_id in parent_task_instance.subtasks:
+                    original_parent_subtasks = list(parent_task_instance.subtasks) # Make a copy
+                    parent_task_instance.subtasks.remove(task_id)
                     try:
                         # Update parent in storage
-                        await self.storage.update_task(parent_task.id, {"subtasks": parent_task.subtasks})
-                        logger.info(f"Removed subtask {task_id} from parent {parent_task.id}.")
-                        await self._notify_listeners(parent_task.id, parent_task)
+                        await self.storage.update_task(parent_task_instance.id, {"subtasks": parent_task_instance.subtasks})
+                        logger.info(f"Removed subtask {task_id} from parent {parent_task_instance.id} in storage.")
+                        await self._notify_listeners(parent_task_instance.id, parent_task_instance)
                     except Exception as e:
-                        logger.error(f"Failed to update parent task {parent_task.id} after removing subtask {task_id}: {e}", exc_info=True)
-                        # Continue with deleting the task, but parent might be inconsistent in storage.
+                        logger.critical(f"CRITICAL: Failed to update parent task {parent_task_instance.id} in storage after removing subtask {task_id} from its list: {e}. Reverting parent's subtask list in memory and aborting deletion of subtask {task_id}.", exc_info=True)
+                        # Revert in-memory change to parent
+                        if parent_task_instance and original_parent_subtasks is not None:
+                            parent_task_instance.subtasks = original_parent_subtasks
+                        # Do not proceed with deleting the subtask to maintain consistency, as parent update failed.
+                        raise # Re-raise the exception to signal failure of delete_task
+                elif parent_task_instance:
+                     logger.warning(f"Subtask {task_id} not found in parent {parent_task_instance.id}'s subtask list, though parentId is set.")
+                else:
+                    logger.warning(f"Parent task {task_to_delete.parentId} not found in memory for subtask {task_id}.")
 
-            # TODO: Handle dependencies: what happens to tasks that depend on this one?
-            # This might involve setting them to a "blocked" or "failed" state, or re-evaluating.
-            # For now, just deleting the task.
 
+            # If we've reached here, either there was no parent, parent was not found,
+            # or parent was updated successfully.
             try:
                 await self.storage.delete_task(task_id)
+                # If storage deletion is successful, then remove from memory
                 del self._tasks[task_id]
                 if task_id in self._listeners: # Clean up listeners for deleted task
                     del self._listeners[task_id]
+
                 logger.info(f"Task {task_id} deleted successfully from storage and memory.")
-                # Notify with a "deleted" state or special marker? For now, no notification on delete.
-                # Or notify with the task object just before deletion.
+                logger.warning(f"Task {task_id} deleted. Note: Dependent tasks are not automatically handled or notified.")
+
             except Exception as e:
                 logger.error(f"Failed to delete task {task_id} from storage: {e}", exc_info=True)
-                # Task remains in memory if storage deletion fails. Consider consistency strategy.
-                raise
+                # If storage deletion fails, the task remains in memory.
+                # If parent update was successful but this storage deletion fails, we have an inconsistency.
+                # The parent task in memory and storage no longer lists this subtask, but the subtask still exists.
+                # This is complex to fully resolve without distributed transactions or more sophisticated sagas.
+                # For now, we log the error and the task remains.
+                # Revert parent's subtask list in memory if it was changed and subtask deletion failed
+                if parent_task_instance and original_parent_subtasks is not None and task_id not in parent_task_instance.subtasks:
+                    # This implies parent update in storage was successful, but subtask deletion from storage failed.
+                    # To keep memory consistent with the idea that deletion failed, add subtask back to parent's list in memory.
+                    # This is a tricky state: parent in DB has subtask removed, subtask in DB still exists.
+                    logger.warning(f"Attempting to restore subtask {task_id} to parent {parent_task_instance.id}'s in-memory list due to subtask storage deletion failure.")
+                    parent_task_instance.subtasks = original_parent_subtasks # Restore original list
+                    # No notification for parent here as this is a rollback of a partial failure state.
+                raise # Re-raise the storage error
 
     async def add_subtask(self, parent_id: str, subtask_creation_data: Dict[str, Any]) -> Optional[TaskState]:
         """
