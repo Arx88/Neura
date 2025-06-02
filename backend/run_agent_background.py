@@ -12,8 +12,11 @@ import dramatiq
 import uuid
 from agentpress.thread_manager import ThreadManager
 from services.supabase import DBConnection
-from services import redis
+from services import redis # This is the async redis used by the app
+import redis as redis_sync # Synchronous redis for Dramatiq results backend
 from dramatiq.brokers.rabbitmq import RabbitmqBroker
+from dramatiq.middleware import Results
+from dramatiq_redis import RedisBackend
 from utils.config import config # Added import
 from services.langfuse import langfuse
 from agentpress.tool_orchestrator import ToolOrchestrator
@@ -25,8 +28,35 @@ from sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modifie
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest # Added for workspace cleanup
 
+# Setup for Dramatiq Results Backend
+# Assuming config has REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_SSL
+# Fallback to typical defaults if specific config values are not found.
+redis_host = getattr(config, 'REDIS_HOST', 'redis')
+redis_port = int(getattr(config, 'REDIS_PORT', 6379))
+redis_password = getattr(config, 'REDIS_PASSWORD', None)
+redis_ssl_str = str(getattr(config, 'REDIS_SSL', 'False')).lower()
+redis_ssl = redis_ssl_str == 'true'
 
-rabbitmq_broker = RabbitmqBroker(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT, middleware=[dramatiq.middleware.AsyncIO()]) # Use config
+sync_redis_client = redis_sync.Redis(
+    host=redis_host,
+    port=redis_port,
+    password=redis_password,
+    ssl=redis_ssl,
+    decode_responses=True # Important for Dramatiq results
+)
+
+results_backend = RedisBackend(client=sync_redis_client)
+results_middleware = Results(backend=results_backend)
+
+# Configure RabbitMQ broker with AsyncIO and Results middleware
+current_middlewares = [dramatiq.middleware.AsyncIO()]
+all_middlewares = current_middlewares + [results_middleware]
+
+rabbitmq_broker = RabbitmqBroker(
+    host=config.RABBITMQ_HOST,
+    port=config.RABBITMQ_PORT,
+    middleware=all_middlewares
+)
 dramatiq.set_broker(rabbitmq_broker)
 
 # En backend/run_agent_background.py
