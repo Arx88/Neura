@@ -686,47 +686,47 @@ if __name__ == "__main__": # Condición simplificada para asegurar ejecución
         # worker_logger = logging.getLogger("dramatiq_diag")
         # logging.basicConfig(level=logging.INFO)
 
-        worker_logger.info("DRAMATIQ_DIAG_START: Iniciando diagnóstico de Dramatiq en el worker.")
+        print("DRAMATIQ_DIAG_START: Iniciando diagnóstico de Dramatiq en el worker.", flush=True)
 
-        worker_logger.info("DRAMATIQ_DIAG_ENV: Listando variables de entorno relevantes:")
+        print("DRAMATIQ_DIAG_ENV: Listando variables de entorno relevantes:", flush=True)
         for key, value in os.environ.items():
             if "DRAMATIQ" in key.upper() or "RABBITMQ" in key.upper() or "QUEUE" in key.upper() or key == "ENV_MODE":
-                worker_logger.info(f"  DRAMATIQ_DIAG_ENV_VAR: {key}={value}")
+                print(f"  DRAMATIQ_DIAG_ENV_VAR: {key}={value}", flush=True)
 
-        worker_logger.info("DRAMATIQ_DIAG_BROKER: Verificando broker actual...")
+        print("DRAMATIQ_DIAG_BROKER: Verificando broker actual...", flush=True)
         current_broker = dramatiq.get_broker()
-        worker_logger.info(f"  DRAMATIQ_DIAG_BROKER_INSTANCE: {current_broker}")
+        print(f"  DRAMATIQ_DIAG_BROKER_INSTANCE: {current_broker}", flush=True)
         if hasattr(current_broker, 'options'):
-            worker_logger.info(f"  DRAMATIQ_DIAG_BROKER_OPTIONS: {current_broker.options}")
+            print(f"  DRAMATIQ_DIAG_BROKER_OPTIONS: {current_broker.options}", flush=True)
 
-        worker_logger.info("DRAMATIQ_DIAG_ACTORS: Listando actores registrados y sus colas (desde broker.actors):")
+        print("DRAMATIQ_DIAG_ACTORS: Listando actores registrados y sus colas (desde broker.actors):", flush=True)
         if hasattr(current_broker, 'actors') and current_broker.actors:
             if current_broker.actors: # Ensure current_broker.actors is not empty
                 for actor_name_key, actor_instance_val in current_broker.actors.items():
-                    worker_logger.info(f"  DRAMATIQ_DIAG_ACTOR_DETAIL: Name='{actor_name_key}', Queue='{actor_instance_val.queue_name}', Options='{actor_instance_val.options}', Func='{actor_instance_val.fn.__module__}.{actor_instance_val.fn.__name__}'")
+                    print(f"  DRAMATIQ_DIAG_ACTOR_DETAIL: Name='{actor_name_key}', Queue='{actor_instance_val.queue_name}', Options='{actor_instance_val.options}', Func='{actor_instance_val.fn.__module__}.{actor_instance_val.fn.__name__}'", flush=True)
             else:
-                worker_logger.info("  DRAMATIQ_DIAG_ACTOR_DETAIL: No actors found registered via current_broker.actors.")
+                print("  DRAMATIQ_DIAG_ACTOR_DETAIL: No actors found registered via current_broker.actors.", flush=True)
         else:
-            worker_logger.info("  DRAMATIQ_DIAG_ACTOR_DETAIL: Atributo current_broker.actors no disponible o vacío.")
+            print("  DRAMATIQ_DIAG_ACTOR_DETAIL: Atributo current_broker.actors no disponible o vacío.", flush=True)
 
-        worker_logger.info("DRAMATIQ_DIAG_REGISTRY: Verificando registro global de Dramatiq (dramatiq._REGISTRY):")
+        print("DRAMATIQ_DIAG_REGISTRY: Verificando registro global de Dramatiq (dramatiq._REGISTRY):", flush=True)
         if hasattr(dramatiq, '_REGISTRY') and hasattr(dramatiq._REGISTRY, 'get_actors'):
             actors_in_registry = list(dramatiq._REGISTRY.get_actors())
             if actors_in_registry:
-                worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY: Encontrados {len(actors_in_registry)} actores en el registro global:")
+                print(f"  DRAMATIQ_DIAG_REGISTRY: Encontrados {len(actors_in_registry)} actores en el registro global:", flush=True)
                 for act_instance in actors_in_registry:
-                    worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY_ACTOR_DETAIL: Name='{act_instance.actor_name}', Queue='{act_instance.queue_name}', Options='{act_instance.options}', Func='{act_instance.fn.__module__}.{act_instance.fn.__name__}'")
+                    print(f"  DRAMATIQ_DIAG_REGISTRY_ACTOR_DETAIL: Name='{act_instance.actor_name}', Queue='{act_instance.queue_name}', Options='{act_instance.options}', Func='{act_instance.fn.__module__}.{act_instance.fn.__name__}'", flush=True)
             else:
-                worker_logger.info("  DRAMATIQ_DIAG_REGISTRY: Registro global de actores vacío.")
+                print("  DRAMATIQ_DIAG_REGISTRY: Registro global de actores vacío.", flush=True)
         else:
-            worker_logger.info("  DRAMATIQ_DIAG_REGISTRY: No se pudo acceder al registro global de actores de Dramatiq (_REGISTRY o get_actors).")
+            print("  DRAMATIQ_DIAG_REGISTRY: No se pudo acceder al registro global de actores de Dramatiq (_REGISTRY o get_actors).", flush=True)
 
-        worker_logger.info("DRAMATIQ_DIAG_END: Fin del diagnóstico de Dramatiq en el worker.")
+        print("DRAMATIQ_DIAG_END: Fin del diagnóstico de Dramatiq en el worker.", flush=True)
 
     except Exception as e:
         # Usar print si el logger falla por alguna razón en este punto crítico
-        print(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {str(e)}")
+        print(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {str(e)}", flush=True)
         # Solo usar worker_logger si está definido (debería estarlo)
-        if 'worker_logger' in locals() and worker_logger: 
-             worker_logger.error(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {e}", exc_info=True)
+        # if 'worker_logger' in locals() and worker_logger: 
+        #      worker_logger.error(f"DRAMATIQ_DIAG_ERROR: No se pudo completar el diagnóstico de Dramatiq: {e}", exc_info=True)
 # --- FIN DEL BLOQUE DE DIAGNÓSTICO ---
