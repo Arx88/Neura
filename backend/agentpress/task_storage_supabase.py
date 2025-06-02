@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone # Added
 # Removed APIError import
 from services.supabase import DBConnection
-from agentpress.task_types import TaskState, TaskStorage
+from agentpress.api_models_tasks import TaskState, TaskStorage
 from utils.logger import logger
 
 class SupabaseTaskStorage(TaskStorage):
