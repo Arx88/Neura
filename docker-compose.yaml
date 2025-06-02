@@ -39,6 +39,7 @@ services:
       - ./backend/.env:/app/.env:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ./LOGS/backend:/app/logs
+      - ./LOG:/app/LOG
     env_file:
       - ./backend/.env
     environment:
@@ -65,6 +66,7 @@ services:
       - ./backend/.env:/app/.env:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ./LOGS/worker:/app/logs
+      - ./LOG:/app/LOG
     env_file:
       - ./backend/.env
     environment:
@@ -89,6 +91,7 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend/.env.local:/app/.env.local:ro
+      - ./LOG:/app/LOG
     environment:
       - NODE_ENV=production
     command: ["npm", "run", "start"]
