@@ -18,8 +18,17 @@ import uuid
 import time
 from collections import OrderedDict
 
+import sys
+import os
+# Ensure the script's directory (e.g., /app/) is in sys.path
+# to allow finding subpackages like 'agentpress'.
+# This is particularly for cases where api.py is run as a top-level script.
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 # AgentPress specific imports
-from .agentpress.task_types import TaskState # For direct use if needed
+from agentpress.task_types import TaskState # For direct use if needed
 from agentpress.task_storage_supabase import SupabaseTaskStorage
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
