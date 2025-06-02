@@ -27,7 +27,7 @@ from typing import List, Dict, Any, Set
 from services.supabase import DBConnection
 from sandbox.sandbox import daytona
 from utils.logger import logger
-from ..config import config # Added import
+from utils.config import config # Added import
 
 # Global DB connection to reuse
 db_connection = None

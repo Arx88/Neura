@@ -8,7 +8,7 @@ import datetime # For TaskState.created_at if needed for sorting
 from agentpress.plan_executor import PlanExecutor
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState
+from agentpress.api_models_tasks import TaskState
 from agentpress.tool import ToolResult # For mocking return values
 
 # Fixtures
