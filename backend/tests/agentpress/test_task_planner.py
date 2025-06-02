@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from agentpress.task_planner import TaskPlanner, SubtaskDecompositionItem
 from agentpress.task_state_manager import TaskStateManager
 from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState # Assuming TaskState can be instantiated for mocking
+from agentpress.api_models_tasks import TaskState # Assuming TaskState can be instantiated for mocking
 
 # Fixtures
 @pytest.fixture

@@ -4,7 +4,7 @@ import time
 from typing import List, Optional, Dict, Any, Set, Callable, Coroutine
 import uuid
 
-from agentpress.task_types import TaskState, TaskStorage
+from agentpress.api_models_tasks import TaskState, TaskStorage
 from agentpress.task_state_manager import TaskStateManager
 
 # --- Mock TaskStorage Implementation ---
