@@ -85,14 +85,14 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
     
     # --- App-specific Rotating File Handler (e.g., ./logs/BACKEND_20231026.log) ---
     try:
-        app_specific_log_dir_path = os.path.join(os.getcwd(), APP_SPECIFIC_LOG_DIR_NAME)
+        app_specific_log_dir_path = "/app/runtime_logs/"
         os.makedirs(app_specific_log_dir_path, exist_ok=True)
 
-        app_log_file = os.path.join(app_specific_log_dir_path, f'{name}_{datetime.now().strftime("%Y%m%d")}.log')
+        app_log_file = os.path.join(app_specific_log_dir_path, f'{name}_{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}.log')
         rotating_file_handler = RotatingFileHandler(
             app_log_file,
             maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
+            backupCount=0,
             encoding='utf-8'
         )
         rotating_file_handler.setLevel(logging.DEBUG)
