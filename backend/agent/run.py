@@ -126,194 +126,178 @@ async def run_agent(
     # final_main_task_id will store the ID of the main task created by TaskPlanner.
     final_main_task_id: Optional[str] = None
 
-    try:
-        logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id={trace.id if trace else 'N/A'}, model_name={model_name}, stream_param_ignored={stream}")
-        if not trace:
-            trace = langfuse.trace(name="run_agent_orchestration", session_id=thread_id, metadata={"project_id": project_id})
+    try: # Level 1
+        logger.info(f"Entering run_agent function: thread_id={thread_id}, project_id={project_id}, agent_run_id={trace.id if trace else 'N/A'}, model_name={model_name}, stream_param_ignored={stream}") # Level 2
+        if not trace: # Level 2
+            trace = langfuse.trace(name="run_agent_orchestration", session_id=thread_id, metadata={"project_id": project_id}) # Level 3
 
-        if not thread_manager:
-            thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace)
-        client = await thread_manager.db.client
+        if not thread_manager: # Level 2
+            thread_manager = ThreadManager(tool_orchestrator=tool_orchestrator, trace=trace) # Level 3
+        client = await thread_manager.db.client # Level 2
 
-        account_id = await get_account_id_from_thread(client, thread_id)
-        if not account_id:
-            logger.error(f"Could not determine account ID for thread_id: {thread_id}")
-            try:
+        account_id = await get_account_id_from_thread(client, thread_id) # Level 2
+        if not account_id: # Level 2
+            logger.error(f"Could not determine account ID for thread_id: {thread_id}") # Level 3
+            try: # Level 3
                 # Use _add_task_log_message for logging failure to task if possible, then fail_task
                 # However, fail_task is more direct if the task might not exist or be in a state to log to.
-                await task_state_manager.fail_task(task_id=thread_id, error=f"Could not determine account ID for thread {thread_id}")
-            except Exception:
-                logger.warning(f"Could not fail task with thread_id {thread_id} as it might not be a valid task ID for logging/failing.")
-            raise ValueError(f"Could not determine account ID for thread {thread_id}")
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Could not determine account ID for thread {thread_id}") # Level 4
+            except Exception: # Level 3
+                logger.warning(f"Could not fail task with thread_id {thread_id} as it might not be a valid task ID for logging/failing.") # Level 4
+            raise ValueError(f"Could not determine account ID for thread {thread_id}") # Level 3
 
-        project_result = await client.table('projects').select('*').eq('project_id', project_id).execute()
-        if not project_result.data or len(project_result.data) == 0:
-            logger.error(f"Project {project_id} not found.")
-            try:
-                await task_state_manager.fail_task(task_id=thread_id, error=f"Project {project_id} not found")
-            except Exception:
-                 logger.warning(f"Could not fail task with thread_id {thread_id} for missing project {project_id}.")
-            raise ValueError(f"Project {project_id} not found")
+        project_result = await client.table('projects').select('*').eq('project_id', project_id).execute() # Level 2
+        if not project_result.data or len(project_result.data) == 0: # Level 2
+            logger.error(f"Project {project_id} not found.") # Level 3
+            try: # Level 3
+                await task_state_manager.fail_task(task_id=thread_id, error=f"Project {project_id} not found") # Level 4
+            except Exception: # Level 3
+                 logger.warning(f"Could not fail task with thread_id {thread_id} for missing project {project_id}.") # Level 4
+            raise ValueError(f"Project {project_id} not found") # Level 3
 
         # Tool initialization ( 그대로 유지 )
-        shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(shell_tool)
-        files_tool = SandboxFilesTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(files_tool)
-        browser_tool = SandboxBrowserTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-        thread_manager.add_tool(browser_tool)
-        deploy_tool = SandboxDeployTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(deploy_tool)
-        expose_tool = SandboxExposeTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(expose_tool)
-        message_tool = MessageTool()
-        thread_manager.add_tool(message_tool)
-        web_search_tool = SandboxWebSearchTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(web_search_tool)
-        vision_tool = SandboxVisionTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager)
-        thread_manager.add_tool(vision_tool)
-        python_tool = PythonTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(python_tool)
-        visualization_tool = DataVisualizationTool(project_id=project_id, thread_manager=thread_manager)
-        thread_manager.add_tool(visualization_tool)
-        if config.RAPID_API_KEY:
-            data_providers_tool = DataProvidersTool()
-            thread_manager.add_tool(data_providers_tool)
-        logger.debug("Tools initialized for ToolOrchestrator.")
+        shell_tool = SandboxShellTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(shell_tool) # Level 2
+        files_tool = SandboxFilesTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(files_tool) # Level 2
+        browser_tool = SandboxBrowserTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(browser_tool) # Level 2
+        deploy_tool = SandboxDeployTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(deploy_tool) # Level 2
+        expose_tool = SandboxExposeTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(expose_tool) # Level 2
+        message_tool = MessageTool() # Level 2
+        thread_manager.add_tool(message_tool) # Level 2
+        web_search_tool = SandboxWebSearchTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(web_search_tool) # Level 2
+        vision_tool = SandboxVisionTool(project_id=project_id, thread_id=thread_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(vision_tool) # Level 2
+        python_tool = PythonTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(python_tool) # Level 2
+        visualization_tool = DataVisualizationTool(project_id=project_id, thread_manager=thread_manager) # Level 2
+        thread_manager.add_tool(visualization_tool) # Level 2
+        if config.RAPID_API_KEY: # Level 2
+            data_providers_tool = DataProvidersTool() # Level 3
+            thread_manager.add_tool(data_providers_tool) # Level 3
+        logger.debug("Tools initialized for ToolOrchestrator.") # Level 2
 
-        initial_prompt_text = None
-        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=False).limit(1).execute()
+        initial_prompt_text = None # Level 2
+        first_user_message_query = await client.table('messages').select('content').eq('thread_id', thread_id).eq('type', 'user').order('created_at', desc=False).limit(1).execute() # Level 2
         
-        if first_user_message_query.data:
-            try:
-                content_json_str = first_user_message_query.data[0]['content']
-                content_data = json.loads(content_json_str)
-                initial_prompt_text = content_data.get('content', '')
-                if not initial_prompt_text: logger.warning(f"First user message for thread {thread_id} has empty content.")
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse first user message content JSON for thread {thread_id}: {first_user_message_query.data[0]['content']}", exc_info=True)
-                initial_prompt_text = "" # Set to empty string to avoid NoneType error later, handled by checks below
-            except Exception as e: # Catch any other error during extraction
-                logger.error(f"Error extracting prompt from first user message for thread {thread_id}: {e}", exc_info=True)
-                initial_prompt_text = "" # Set to empty string
-        else: # No data from query
-            logger.warning(f"No first user message found for thread {thread_id}.")
-            initial_prompt_text = None # Explicitly set to None
+        if first_user_message_query.data: # Level 2
+            try: # Level 3
+                content_json_str = first_user_message_query.data[0]['content'] # Level 4
+                content_data = json.loads(content_json_str) # Level 4
+                initial_prompt_text = content_data.get('content', '') # Level 4
+                if not initial_prompt_text: logger.warning(f"First user message for thread {thread_id} has empty content.") # Level 4
+            except json.JSONDecodeError: # Level 3
+                logger.error(f"Failed to parse first user message content JSON for thread {thread_id}: {first_user_message_query.data[0]['content']}", exc_info=True) # Level 4
+                initial_prompt_text = "" # Level 4
+            except Exception as e: # Level 3
+                logger.error(f"Error extracting prompt from first user message for thread {thread_id}: {e}", exc_info=True) # Level 4
+                initial_prompt_text = "" # Level 4
+        else: # Level 2
+            logger.warning(f"No first user message found for thread {thread_id}.") # Level 3
+            initial_prompt_text = None # Level 3
 
         # Check for initial_prompt_text being None (no message object) or empty string (parsing failed or content empty)
-        if initial_prompt_text is None:
-            logger.error(f"No initial user message object found for thread {thread_id}. Cannot proceed.")
-            # Try to log to thread_id as a task if it might exist, or just use general logging
-            # Not using _add_task_log_message here as task for thread_id might not be set up for logs
-            await task_state_manager.fail_task(task_id=thread_id, error="No initial user message object found.")
-            return
-        if not initial_prompt_text.strip(): # Check if it's an empty string or whitespace
-            logger.error(f"Initial user message content is empty for thread {thread_id}. Cannot proceed with planning.")
-            await task_state_manager.fail_task(task_id=thread_id, error="Initial user message content is empty.")
-            return
+        if initial_prompt_text is None: # Level 2
+            logger.error(f"No initial user message object found for thread {thread_id}. Cannot proceed.") # Level 3
+            await task_state_manager.fail_task(task_id=thread_id, error="No initial user message object found.") # Level 3
+            return # Level 3
+        if not initial_prompt_text.strip(): # Level 2
+            logger.error(f"Initial user message content is empty for thread {thread_id}. Cannot proceed with planning.") # Level 3
+            await task_state_manager.fail_task(task_id=thread_id, error="Initial user message content is empty.") # Level 3
+            return # Level 3
 
         # ---> This is after initial_prompt_text is validated and confirmed not empty <---
 
-        # Initial Log using thread_id as task_id_to_update
-        await _add_task_log_message(task_state_manager, thread_id, "Starting task...", log_type="info")
+        await _add_task_log_message(task_state_manager, thread_id, "Starting task...", log_type="info") # Level 2
 
-        # Instanciar TaskPlanner correctamente
-        task_planner = TaskPlanner(
-            task_manager=task_state_manager, # El parámetro se llama task_manager en TaskPlanner
+        task_planner = TaskPlanner( # Level 2
+            task_manager=task_state_manager,
             tool_orchestrator=tool_orchestrator
         )
 
-        logger.info(f"Initiating planning with TaskPlanner for prompt: '{initial_prompt_text[:100]}...'")
-        # task_planner.plan_task se encarga de crear la tarea principal de planificación y las subtareas.
-        planned_main_task = await task_planner.plan_task(
+        logger.info(f"Initiating planning with TaskPlanner for prompt: '{initial_prompt_text[:100]}...'") # Level 2
+        planned_main_task = await task_planner.plan_task( # Level 2
             task_description=initial_prompt_text,
-            context={"original_thread_id": thread_id, "project_id": project_id} # Ejemplo de contexto
+            context={"original_thread_id": thread_id, "project_id": project_id}
         )
 
-        if not planned_main_task or planned_main_task.status == "planning_failed":
-            error_msg = "Planning failed."
-            # Ensure metadata check is safe:
-            if planned_main_task and planned_main_task.metadata and planned_main_task.metadata.get("error"):
-                error_msg = planned_main_task.metadata.get("error")
+        if not planned_main_task or planned_main_task.status == "planning_failed": # Level 2
+            error_msg = "Planning failed." # Level 3
+            if planned_main_task and planned_main_task.metadata and planned_main_task.metadata.get("error"): # Level 3
+                error_msg = planned_main_task.metadata.get("error") # Level 4
 
-            logger.error(f"{error_msg} For prompt: '{initial_prompt_text[:100]}...' Thread ID: {thread_id}")
-            # Determine task ID for logging the failure, could be planned_main_task.id if available, else thread_id
-            task_id_for_planning_failure_log = planned_main_task.id if planned_main_task and hasattr(planned_main_task, 'id') else thread_id
-            # Log the error to the task if possible
-            if await task_state_manager.get_task(task_id_for_planning_failure_log):
-                 await _add_task_log_message(task_state_manager, task_id_for_planning_failure_log, f"ERROR: Planning phase failed: {error_msg}", log_type="error")
-            # As per instruction, plan_task should handle failing the task.
-            # If planned_main_task is None, it means plan_task failed before creating/updating the task.
-            return # Terminar si la planificación falló
+            logger.error(f"{error_msg} For prompt: '{initial_prompt_text[:100]}...' Thread ID: {thread_id}") # Level 3
+            task_id_for_planning_failure_log = planned_main_task.id if planned_main_task and hasattr(planned_main_task, 'id') else thread_id # Level 3
+            if await task_state_manager.get_task(task_id_for_planning_failure_log): # Level 3
+                 await _add_task_log_message(task_state_manager, task_id_for_planning_failure_log, f"ERROR: Planning phase failed: {error_msg}", log_type="error") # Level 4
+            return # Level 3
 
-        final_main_task_id = planned_main_task.id # Usar el ID de la tarea devuelta por plan_task
+        final_main_task_id = planned_main_task.id # Level 2
 
-        # Ahora puedes loguear que la planificación se completó (usando _add_task_log_message)
-        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 1 (Planning) completed by TaskPlanner. Main plan task ID: {final_main_task_id}")
+        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 1 (Planning) completed by TaskPlanner. Main plan task ID: {final_main_task_id}") # Level 2
 
-        # Continuar con la Fase de Ejecución usando final_main_task_id
-        logger.info(f"Phase 2 (Execution) starting for main task ID: {final_main_task_id}")
-        await _add_task_log_message(task_state_manager, final_main_task_id, "Phase 2: Execution starting.")
-        await task_state_manager.update_task(final_main_task_id, {"status": "executing_plan", "progress": 0.2}) # o el estado que corresponda
+        logger.info(f"Phase 2 (Execution) starting for main task ID: {final_main_task_id}") # Level 2
+        await _add_task_log_message(task_state_manager, final_main_task_id, "Phase 2: Execution starting.") # Level 2
+        await task_state_manager.update_task(final_main_task_id, {"status": "executing_plan", "progress": 0.2}) # Level 2
 
-        plan_executor = PlanExecutor(
+        plan_executor = PlanExecutor( # Level 2
             tool_orchestrator=tool_orchestrator,
             task_state_manager=task_state_manager,
             main_task_id=final_main_task_id
         )
 
-        await plan_executor.execute_plan_for_task(final_main_task_id)
+        await plan_executor.execute_plan_for_task(final_main_task_id) # Level 2
 
-        logger.info(f"Plan execution process completed for task {final_main_task_id}")
+        logger.info(f"Plan execution process completed for task {final_main_task_id}") # Level 2
 
-        # This is the new block that was provided in the issue description.
-        # It seems the existing code after this point is already consistent with it.
-        # So, the diff will only show changes up to this point for this specific subtask.
-        final_task_status_obj = await task_state_manager.get_task(final_main_task_id)
+        final_task_status_obj = await task_state_manager.get_task(final_main_task_id) # Level 2
 
-        current_status_for_log = "unknown"
-        if final_task_status_obj:
-                current_status_for_log = final_task_status_obj.status
-                if final_task_status_obj.status not in ["failed", "completed"]:
-                    logger.warning(f"Main plan task {final_main_task_id} ended in status '{final_task_status_obj.status}' after PlanExecutor. Marking as completed.")
-                    await task_state_manager.complete_task(
-                        task_id=final_main_task_id,
-                        result={"summary": "Task execution phase concluded by run_agent wrapper and marked as completed."},
-                        progress=1.0
-                    )
-                    current_status_for_log = "completed"
+        current_status_for_log = "unknown" # Level 2
+        if final_task_status_obj: # Level 2
+            current_status_for_log = final_task_status_obj.status # Level 3
+            if final_task_status_obj.status not in ["failed", "completed"]: # Level 3
+                logger.warning(f"Main plan task {final_main_task_id} ended in status '{final_task_status_obj.status}' after PlanExecutor. Marking as completed.") # Level 4
+                await task_state_manager.complete_task( # Level 4
+                    task_id=final_main_task_id,
+                    result={"summary": "Task execution phase concluded by run_agent wrapper and marked as completed."},
+                    progress=1.0
+                )
+                current_status_for_log = "completed" # Level 4
 
-        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 2 (Execution) concluded, status: {current_status_for_log}.")
+        await _add_task_log_message(task_state_manager, final_main_task_id, f"Phase 2 (Execution) concluded, status: {current_status_for_log}.") # Level 2
 
-        langfuse.flush()
-        return
+        langfuse.flush() # Level 2
+        return # Level 2
 
-    except Exception as e:
-        logger.error(f"Error in run_agent orchestration for thread_id {thread_id}: {e}", exc_info=True)
-        error_summary = f"An orchestration error occurred: {str(e)}"
+    except Exception as e: # Level 1
+        logger.error(f"Error in run_agent orchestration for thread_id {thread_id}: {e}", exc_info=True) # Level 2
+        error_summary = f"An orchestration error occurred: {str(e)}" # Level 2
 
-        task_id_for_failure = final_main_task_id if 'final_main_task_id' in locals() and final_main_task_id else thread_id
+        task_id_for_failure = final_main_task_id if 'final_main_task_id' in locals() and final_main_task_id else thread_id # Level 2
 
-        if task_state_manager:
-            try:
-                # Check if task exists before trying to add log
-                if await task_state_manager.get_task(task_id_for_failure):
-                    await _add_task_log_message(
+        if task_state_manager: # Level 2
+            try: # Level 3 (inner try)
+                if await task_state_manager.get_task(task_id_for_failure): # Level 4
+                    await _add_task_log_message( # Level 5
                         task_state_manager,
                         task_id_for_failure,
                         f"CRITICAL ORCHESTRATION ERROR: {error_summary}",
                         log_type="error"
                     )
-                await task_state_manager.fail_task(task_id=task_id_for_failure, error=error_summary)
-            except Exception as tse:
-                logger.error(f"Further error when trying to mark task {task_id_for_failure} as failed: {tse}", exc_info=True)
-        else: # Should not happen if task_state_manager is a required parameter
-            logger.error(f"Orchestration error for thread_id {thread_id}, but TaskStateManager is unavailable. Prompt: {initial_prompt_text[:70] if 'initial_prompt_text' in locals() and initial_prompt_text else 'N/A'} Error: {error_summary}")
+                await task_state_manager.fail_task(task_id=task_id_for_failure, error=error_summary) # Level 4
+            except Exception as tse: # Level 3 (inner except)
+                logger.error(f"Further error when trying to mark task {task_id_for_failure} as failed: {tse}", exc_info=True) # Level 4
+        else: # Level 2
+            logger.error(f"Orchestration error for thread_id {thread_id}, but TaskStateManager is unavailable. Prompt: {initial_prompt_text[:70] if 'initial_prompt_text' in locals() and initial_prompt_text else 'N/A'} Error: {error_summary}") # Level 3
 
-        raise
-    finally:
-        if langfuse and hasattr(langfuse, 'flush'):
-             langfuse.flush()
+        raise # Level 2
+    finally: # Level 1
+        if langfuse and hasattr(langfuse, 'flush'): # Level 2
+             langfuse.flush() # Level 3
 
 
 # # TESTING

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 import json
 import asyncio
-from typing import List, Dict, Any, AsyncGenerator
+from typing import List, Dict, Any, AsyncGenerator, Optional
 import uuid # For mocking plan_execution_run_id if needed
 
 from agentpress.response_processor import ResponseProcessor, ProcessorConfig, ToolExecutionContext

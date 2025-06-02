@@ -55,12 +55,13 @@ prometheus-client = "^0.21.1"
 langfuse = "^2.60.5"
 Pillow = "^10.0.0"
 sentry-sdk = {extras = ["fastapi"], version = "^2.29.1"}
+docker = "^7.0.0"
 
 [tool.poetry.scripts]
 agentpress = "agentpress.cli:main"
 
 [[tool.poetry.packages]]
-include = "agentpress"
+include = "backend"
 
 [tool.poetry.group.dev.dependencies]
 daytona-sdk = "^0.14.0"
