@@ -87,7 +87,7 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
     app_specific_log_dir_path = "/app/runtime_logs/" # Explicit absolute path
     app_log_file_setup_success = False
     try:
-        os.makedirs(app_specific_log_dir_path, exist_ok=True)
+        os.makedirs(app_specific_log_dir_path, mode=0o777, exist_ok=True)
         # Check if directory is writable
         if not os.access(app_specific_log_dir_path, os.W_OK):
             # If not writable, raise an error to be caught by the except block
