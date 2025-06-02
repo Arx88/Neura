@@ -7,8 +7,8 @@ import logging
 from typing import Optional, Dict
 import os
 
-from backend.agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
-from backend.sandbox.tool_base import SandboxToolsBase, Sandbox
+from agentpress.tool import Tool, ToolResult, openapi_schema, xml_schema
+from sandbox.tool_base import SandboxToolsBase, Sandbox
 
 KEYBOARD_KEYS = [
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',

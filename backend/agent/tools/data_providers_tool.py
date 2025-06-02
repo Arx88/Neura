@@ -1,13 +1,13 @@
 import json
 from typing import Dict, Any, List # For type hinting
 
-from backend.agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
-from backend.agent.tools.data_providers.LinkedinProvider import LinkedinProvider
-from backend.agent.tools.data_providers.YahooFinanceProvider import YahooFinanceProvider
-from backend.agent.tools.data_providers.AmazonProvider import AmazonProvider
+from agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
+from agent.tools.data_providers.LinkedinProvider import LinkedinProvider
+from agent.tools.data_providers.YahooFinanceProvider import YahooFinanceProvider
+from agent.tools.data_providers.AmazonProvider import AmazonProvider
 import logging # Added for logging
-from backend.agent.tools.data_providers.ZillowProvider import ZillowProvider
-from backend.agent.tools.data_providers.TwitterProvider import TwitterProvider
+from agent.tools.data_providers.ZillowProvider import ZillowProvider
+from agent.tools.data_providers.TwitterProvider import TwitterProvider
 
 # Custom Exceptions
 class DataProvidersToolError(Exception):

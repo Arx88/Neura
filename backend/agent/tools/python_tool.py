@@ -1,6 +1,6 @@
-from backend.agentpress.tool import openapi_schema, xml_schema
-from backend.sandbox.tool_base import SandboxToolsBase
-from backend.agentpress.thread_manager import ThreadManager
+from agentpress.tool import openapi_schema, xml_schema
+from sandbox.tool_base import SandboxToolsBase
+from agentpress.thread_manager import ThreadManager
 from uuid import uuid4
 import logging # Added for logging
 
@@ -82,7 +82,7 @@ class PythonTool(SandboxToolsBase):
             # but for now, it ensures output is not held back.
             python_command = f"python -u -c \"{escaped_code}\""
 
-            from backend.sandbox.sandbox import SessionExecuteRequest # Keep import local
+            from sandbox.sandbox import SessionExecuteRequest # Keep import local
             req = SessionExecuteRequest(
                 command=python_command,
                 var_async=False,

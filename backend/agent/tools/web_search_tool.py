@@ -4,10 +4,10 @@ from dotenv import load_dotenv
 # ToolResult is not directly used by the methods anymore, but openapi_schema and xml_schema might be.
 # If they are only for ToolResult, they might not be needed either.
 # For now, keep openapi_schema and xml_schema if they are used by the class decorators.
-from backend.agentpress.tool import openapi_schema, xml_schema
-from backend.utils.config import config
-from backend.sandbox.tool_base import SandboxToolsBase
-from backend.agentpress.thread_manager import ThreadManager
+from agentpress.tool import openapi_schema, xml_schema
+from utils.config import config
+from sandbox.tool_base import SandboxToolsBase
+from agentpress.thread_manager import ThreadManager
 import json
 import os
 import datetime

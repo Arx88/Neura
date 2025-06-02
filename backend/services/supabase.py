@@ -4,8 +4,8 @@ Centralized database connection management for AgentPress using Supabase.
 
 from typing import Optional
 from supabase import create_async_client, AsyncClient
-from backend.utils.logger import logger
-from backend.utils.config import config
+from utils.logger import logger
+from utils.config import config
 import base64
 import uuid
 from datetime import datetime

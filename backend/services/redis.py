@@ -2,7 +2,7 @@ import redis.asyncio as redis
 import os
 from dotenv import load_dotenv
 import asyncio
-from backend.utils.logger import logger
+from utils.logger import logger
 from typing import List, Any
 
 # Redis client
