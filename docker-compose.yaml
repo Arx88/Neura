@@ -33,6 +33,16 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    working_dir: /app
+    command: >
+      sh -c "
+        echo '--- Listing files in /app ---' &&
+        ls -lR /app &&
+        echo '--- PYTHONPATH value ---' &&
+        echo $PYTHONPATH &&
+        echo '--- Starting Gunicorn ---' &&
+        gunicorn api:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+      "
     ports:
       - "8000:8000"
     volumes:
