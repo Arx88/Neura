@@ -1,11 +1,11 @@
 from typing import Optional
 
-from backend.agentpress.thread_manager import ThreadManager
-from backend.agentpress.tool import Tool
+from agentpress.thread_manager import ThreadManager
+from agentpress.tool import Tool
 from daytona_sdk import Sandbox
-from backend.sandbox.sandbox import get_or_start_sandbox
-from backend.utils.logger import logger
-from backend.utils.files_utils import clean_path
+from sandbox.sandbox import get_or_start_sandbox
+from utils.logger import logger
+from utils.files_utils import clean_path
 import json # Added for JSON parsing
 import asyncio # Added for asyncio.to_thread
 from typing import Dict, Any, Optional # Added for type hints

@@ -1,9 +1,9 @@
 import os
 from dotenv import load_dotenv
-from backend.agentpress.tool import openapi_schema, xml_schema # ToolResult removed
-from backend.sandbox.tool_base import SandboxToolsBase
-from backend.utils.files_utils import clean_path
-from backend.agentpress.thread_manager import ThreadManager
+from agentpress.tool import openapi_schema, xml_schema # ToolResult removed
+from sandbox.tool_base import SandboxToolsBase
+from utils.files_utils import clean_path
+from agentpress.thread_manager import ThreadManager
 
 # Load environment variables
 load_dotenv()

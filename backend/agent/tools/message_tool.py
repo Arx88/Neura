@@ -1,5 +1,5 @@
 from typing import List, Optional, Union, Dict, Any
-from backend.agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
+from agentpress.tool import Tool, openapi_schema, xml_schema # ToolResult removed
 import logging # Added for logging
 
 # Custom Exceptions
