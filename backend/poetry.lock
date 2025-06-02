@@ -580,6 +580,7 @@ files = [
 
 [package.dependencies]
 prometheus-client = ">=0.2"
+redis = {version = ">=2.0,<6.0", optional = true, markers = "extra == \"redis\""}
 
 [package.extras]
 all = ["gevent (>=1.1)", "pika (>=1.0,<2.0)", "pylibmc (>=1.5,<2.0)", "redis (>=2.0,<6.0)", "watchdog (>=4.0)", "watchdog-gevent (>=0.2)"]
@@ -3684,4 +3685,4 @@ testing = ["coverage[toml]", "zope.event", "zope.testing"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "433a579a8258aafb6f751deb92d86ff2168d4933ab412d65503f671daec0a63a"
+content-hash = "04405a801283e4e99ff3dfdd76ecf4c6f1241b7187b66b893c44595fae7f4dd5"
