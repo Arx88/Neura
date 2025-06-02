@@ -1,3 +1,14 @@
+from enum import Enum
+
+# Pega el código aquí
+class TaskState(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
+
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
