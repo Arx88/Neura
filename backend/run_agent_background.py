@@ -18,6 +18,7 @@ from services.langfuse import langfuse
 from agentpress.tool_orchestrator import ToolOrchestrator
 from agentpress.task_storage_supabase import SupabaseTaskStorage # Added import
 from agentpress.task_state_manager import TaskStateManager # Added import
+import os # Necesario para getenv
 # Imports for sandbox stopping
 from sandbox.sandbox import get_or_start_sandbox, daytona, use_daytona # Modified import
 from daytona_api_client.models.workspace_state import WorkspaceState
@@ -670,3 +671,35 @@ async def update_agent_run_status(
         return False
 
     return False
+
+# Añadir este bloque al final de backend/run_agent_background.py
+
+# Primero, asegurar que 'dramatiq' y 'logger' están importados en el archivo
+# (ya deberían estarlo, pero es una verificación)
+# import dramatiq # Already imported
+# import os # Necesario para getenv - Added above
+# Asumiendo que 'logger' ya está configurado e importado en este archivo,
+# por ejemplo: from utils.logger import logger -> using worker_logger
+
+# Este bloque se ejecutará si el script es el punto de entrada y es un worker de Dramatiq
+if __name__ == "__main__" and os.getenv("DRAMATIQ_WORKER_PROCESS"):
+    try:
+        worker_logger.info("DRAMATIQ_DIAG: Listing all registered Dramatiq actors and their queues at worker startup:")
+        current_broker = dramatiq.get_broker()
+        if hasattr(current_broker, 'actors') and current_broker.actors:
+            for actor_name_key, actor_instance_val in current_broker.actors.items():
+                worker_logger.info(f"  DRAMATIQ_DIAG_ACTOR: Name='{actor_name_key}', Queue='{actor_instance_val.queue_name}', Options='{actor_instance_val.options}'")
+        else:
+            worker_logger.info("  DRAMATIQ_DIAG_ACTOR: No actors found registered with the current broker via broker.actors.")
+
+        # Intento alternativo si lo anterior no muestra nada (depende de la versión de Dramatiq y cómo se registran)
+        # Esto es más genérico y podría ser ruidoso, pero puede ayudar.
+        worker_logger.info("DRAMATIQ_DIAG: Checking global Dramatiq registry (if accessible, might be empty if actors are broker-specific):")
+        if hasattr(dramatiq, '_REGISTRY') and hasattr(dramatiq._REGISTRY, 'get_actors'):
+             for act in dramatiq._REGISTRY.get_actors():
+                  worker_logger.info(f"  DRAMATIQ_DIAG_REGISTRY_ACTOR: Name='{act.actor_name}', Queue='{act.queue_name}', Options='{act.options}'")
+        else:
+            worker_logger.info("  DRAMATIQ_DIAG_REGISTRY_ACTOR: Global Dramatiq registry not found or does not have get_actors method.")
+
+    except Exception as e:
+        worker_logger.error(f"DRAMATIQ_DIAG: Could not introspect Dramatiq actors: {e}", exc_info=True)
