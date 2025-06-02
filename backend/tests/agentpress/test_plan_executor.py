@@ -5,11 +5,11 @@ from typing import List, Optional, Dict, Any
 import datetime # For TaskState.created_at if needed for sorting
 
 # Imports from the application
-from backend.agentpress.plan_executor import PlanExecutor
-from backend.agentpress.task_state_manager import TaskStateManager
-from backend.agentpress.tool_orchestrator import ToolOrchestrator
-from backend.agentpress.task_types import TaskState
-from backend.agentpress.tool import ToolResult # For mocking return values
+from agentpress.plan_executor import PlanExecutor
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.task_types import TaskState
+from agentpress.tool import ToolResult # For mocking return values
 
 # Fixtures
 @pytest.fixture
@@ -77,7 +77,7 @@ async def test_execute_plan_successful_simple(plan_executor, mock_task_manager, 
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask1]
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call:
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call:
         mock_tool_orchestrator.execute_tool.return_value = ToolResult(tool_id="ToolA", execution_id="eid1", status="completed", result={"data": "success"}, error=None, start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
 
         await plan_executor.execute_plan()
@@ -101,8 +101,8 @@ async def test_execute_plan_tool_execution_fails(plan_executor, mock_task_manage
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask1]
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call, \
-         patch('backend.agentpress.plan_executor.logger.error') as mock_logger_error:
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call, \
+         patch('agentpress.plan_executor.logger.error') as mock_logger_error:
 
         failed_tool_result_dict = {"tool_id": "ToolA", "execution_id": "eid_fail", "status": "failed", "result": None, "error": "Tool error details", "start_time": datetime.datetime.now().isoformat(), "end_time": datetime.datetime.now().isoformat()}
         mock_tool_orchestrator.execute_tool.return_value = ToolResult(tool_id="ToolA", execution_id="eid_fail", status="failed", result=None, error="Tool error details", start_time=datetime.datetime.fromisoformat(failed_tool_result_dict["start_time"]), end_time=datetime.datetime.fromisoformat(failed_tool_result_dict["end_time"]))
@@ -122,8 +122,8 @@ async def test_execute_plan_llm_param_generation_fails(plan_executor, mock_task_
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask1]
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(side_effect=json.JSONDecodeError("Simulated LLM Error", "doc", 0))) as mock_llm_call, \
-         patch('backend.agentpress.plan_executor.logger.error') as mock_logger_error:
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(side_effect=json.JSONDecodeError("Simulated LLM Error", "doc", 0))) as mock_llm_call, \
+         patch('agentpress.plan_executor.logger.error') as mock_logger_error:
 
         await plan_executor.execute_plan()
 
@@ -150,7 +150,7 @@ async def test_execute_plan_with_dependencies(plan_executor, mock_task_manager, 
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask1, subtask2] # Sorted by creation time
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call:
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))) as mock_llm_call:
         mock_tool_orchestrator.execute_tool.side_effect = [
             ToolResult(tool_id="ToolA", execution_id="eid_dep1", status="completed", result={"data": "s1"}, error=None, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()),
             ToolResult(tool_id="ToolB", execution_id="eid_dep2", status="completed", result={"data": "s2"}, error=None, start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
@@ -176,7 +176,7 @@ async def test_execute_plan_dependency_fails(plan_executor, mock_task_manager, m
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask1, subtask2]
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))):
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps({"param": "value"}))):
         failed_tool_result = ToolResult(tool_id="ToolA", execution_id="eid_dep_fail1", status="failed", result=None, error="Failure in Dep1", start_time=datetime.datetime.now(), end_time=datetime.datetime.now())
         mock_tool_orchestrator.execute_tool.return_value = failed_tool_result # Subtask1 tool fails
 
@@ -199,7 +199,7 @@ async def test_execute_plan_no_tools_assigned_to_subtask(plan_executor, mock_tas
     mock_task_manager.get_task.return_value = main_task
     mock_task_manager.get_subtasks.return_value = [subtask_no_tool]
 
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', new_callable=AsyncMock) as mock_llm_call:
+    with patch('agentpress.plan_executor.make_llm_api_call', new_callable=AsyncMock) as mock_llm_call:
         await plan_executor.execute_plan()
 
         expected_output = {"message": "No tools assigned, subtask auto-completed."}
@@ -234,8 +234,8 @@ async def test_execute_plan_agent_signals_completion_with_systemcompletetask(pla
     complete_tool_params = {"summary": completion_summary}
 
     # Mock LLM call for SystemCompleteTask parameters
-    with patch('backend.agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps(complete_tool_params))) as mock_llm_call, \
-         patch('backend.agentpress.plan_executor.logger.info') as mock_logger_info:
+    with patch('agentpress.plan_executor.make_llm_api_call', AsyncMock(return_value=json.dumps(complete_tool_params))) as mock_llm_call, \
+         patch('agentpress.plan_executor.logger.info') as mock_logger_info:
 
         # Mock execute_tool for SystemCompleteTask
         complete_tool_result_data = {"status": "success", "message": "Task marked as complete by agent.", "summary": completion_summary}

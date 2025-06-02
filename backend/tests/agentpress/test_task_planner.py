@@ -2,10 +2,10 @@ import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-from backend.agentpress.task_planner import TaskPlanner, SubtaskDecompositionItem
-from backend.agentpress.task_state_manager import TaskStateManager
-from backend.agentpress.tool_orchestrator import ToolOrchestrator
-from backend.agentpress.task_types import TaskState # Assuming TaskState can be instantiated for mocking
+from agentpress.task_planner import TaskPlanner, SubtaskDecompositionItem
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.task_types import TaskState # Assuming TaskState can be instantiated for mocking
 
 # Fixtures
 @pytest.fixture
@@ -55,7 +55,7 @@ async def test_plan_task_successful_decomposition(planner, mock_task_manager, mo
         {"name": "Sub2", "description": "D2", "dependencies": [0], "assigned_tools": ["T2"]}
     ]
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(llm_response_json))) as mock_llm_call:
+    with patch('agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(llm_response_json))) as mock_llm_call:
         result_main_task = await planner.plan_task("Test task")
 
         mock_llm_call.assert_called_once()
@@ -97,8 +97,8 @@ async def test_plan_task_llm_fails_json_parsing_after_retries(planner, mock_task
     mock_main_task = TaskState(id=main_task_id, name="Main task", description="Test", status="pending_planning", subtasks=[])
     mock_task_manager.create_task.return_value = mock_main_task
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', AsyncMock(return_value="invalid json string")) as mock_llm_call, \
-         patch('backend.agentpress.task_planner.logger.error') as mock_logger_error:
+    with patch('agentpress.task_planner.make_llm_api_call', AsyncMock(return_value="invalid json string")) as mock_llm_call, \
+         patch('agentpress.task_planner.logger.error') as mock_logger_error:
 
         result = await planner.plan_task("Test task json fail")
 
@@ -120,8 +120,8 @@ async def test_plan_task_llm_fails_pydantic_validation_after_retries(planner, mo
 
     invalid_pydantic_data = [{"description": "Missing name field"}] # name is required
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(invalid_pydantic_data))) as mock_llm_call, \
-         patch('backend.agentpress.task_planner.logger.error') as mock_logger_error:
+    with patch('agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(invalid_pydantic_data))) as mock_llm_call, \
+         patch('agentpress.task_planner.logger.error') as mock_logger_error:
 
         result = await planner.plan_task("Test task pydantic fail")
 
@@ -142,8 +142,8 @@ async def test_plan_task_llm_returns_empty_list(planner, mock_task_manager):
     mock_main_task = TaskState(id=main_task_id, name="Main task", description="Test", status="pending_planning", subtasks=[])
     mock_task_manager.create_task.return_value = mock_main_task
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps([]))) as mock_llm_call, \
-         patch('backend.agentpress.task_planner.logger.warning') as mock_logger_warning:
+    with patch('agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps([]))) as mock_llm_call, \
+         patch('agentpress.task_planner.logger.warning') as mock_logger_warning:
 
         result = await planner.plan_task("Test task empty list")
 
@@ -161,7 +161,7 @@ async def test_plan_task_llm_returns_empty_list(planner, mock_task_manager):
 async def test_plan_task_main_task_creation_fails(planner, mock_task_manager):
     mock_task_manager.create_task.return_value = None # Simulate main task creation failure
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', new_callable=AsyncMock) as mock_llm_call:
+    with patch('agentpress.task_planner.make_llm_api_call', new_callable=AsyncMock) as mock_llm_call:
         result = await planner.plan_task("Test task main fail")
 
         assert result is None
@@ -194,8 +194,8 @@ async def test_plan_task_subtask_creation_fails_partially(planner, mock_task_man
         {"name": "Sub2_fails", "description": "D2_fails", "dependencies": [0], "assigned_tools": ["T2"]}
     ]
 
-    with patch('backend.agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(llm_response_json))) as mock_llm_call, \
-         patch('backend.agentpress.task_planner.logger.error') as mock_logger_error:
+    with patch('agentpress.task_planner.make_llm_api_call', AsyncMock(return_value=json.dumps(llm_response_json))) as mock_llm_call, \
+         patch('agentpress.task_planner.logger.error') as mock_logger_error:
 
         result_main_task = await planner.plan_task("Test partial")
 

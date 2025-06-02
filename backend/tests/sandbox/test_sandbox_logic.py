@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock, ANY, call, AsyncMock
 import asyncio
 
 # Import the items to be tested
-from backend.sandbox.sandbox import use_daytona, get_or_start_sandbox, create_sandbox
+from sandbox.sandbox import use_daytona, get_or_start_sandbox, create_sandbox
 
 # Attempt to import WorkspaceState for Daytona tests
 try:
@@ -20,28 +20,28 @@ except ImportError:
 class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
 
     # --- Tests for use_daytona ---
-    @patch('backend.sandbox.sandbox.config')
+    @patch('sandbox.sandbox.config')
     def test_use_daytona_true_when_all_set(self, mock_config):
         mock_config.DAYTONA_API_KEY = "test_key"
         mock_config.DAYTONA_SERVER_URL = "http://test.server"
         mock_config.DAYTONA_TARGET = "test_target"
         self.assertTrue(use_daytona())
 
-    @patch('backend.sandbox.sandbox.config')
+    @patch('sandbox.sandbox.config')
     def test_use_daytona_false_if_api_key_missing(self, mock_config):
         mock_config.DAYTONA_API_KEY = None
         mock_config.DAYTONA_SERVER_URL = "http://test.server"
         mock_config.DAYTONA_TARGET = "test_target"
         self.assertFalse(use_daytona())
 
-    @patch('backend.sandbox.sandbox.config')
+    @patch('sandbox.sandbox.config')
     def test_use_daytona_false_if_server_url_missing(self, mock_config):
         mock_config.DAYTONA_API_KEY = "test_key"
         mock_config.DAYTONA_SERVER_URL = "" # Empty string
         mock_config.DAYTONA_TARGET = "test_target"
         self.assertFalse(use_daytona())
 
-    @patch('backend.sandbox.sandbox.config')
+    @patch('sandbox.sandbox.config')
     def test_use_daytona_false_if_target_missing(self, mock_config):
         mock_config.DAYTONA_API_KEY = "test_key"
         mock_config.DAYTONA_SERVER_URL = "http://test.server"
@@ -50,10 +50,10 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
 
     # --- Tests for get_or_start_sandbox ---
 
-    @patch('backend.sandbox.sandbox.start_supervisord_session') # Mock helper
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.daytona') # Mock daytona client instance
-    @patch('backend.sandbox.sandbox.use_daytona') # Mock the function itself
+    @patch('sandbox.sandbox.start_supervisord_session') # Mock helper
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.daytona') # Mock daytona client instance
+    @patch('sandbox.sandbox.use_daytona') # Mock the function itself
     async def test_get_or_start_sandbox_daytona_running(self, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord):
         mock_use_daytona_func.return_value = True
 
@@ -71,10 +71,10 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         mock_logger.info.assert_any_call(f"Getting or starting sandbox with ID: {sandbox_id}")
         mock_logger.info.assert_any_call("Using Daytona for sandbox operations")
 
-    @patch('backend.sandbox.sandbox.start_supervisord_session')
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.daytona')
-    @patch('backend.sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.start_supervisord_session')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.daytona')
+    @patch('sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_daytona_stopped_starts_it(self, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord):
         mock_use_daytona_func.return_value = True
 
@@ -96,9 +96,9 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         mock_start_supervisord.assert_called_once_with(started_mock_sandbox)
         self.assertEqual(result, started_mock_sandbox)
 
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.local_sandbox') # Mock local_sandbox object
-    @patch('backend.sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.local_sandbox') # Mock local_sandbox object
+    @patch('sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_local_exists_running(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False # Use local sandbox
 
@@ -118,9 +118,9 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, mock_local_sandbox_instance)
         mock_logger.info.assert_any_call("Using local sandbox for operations")
 
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.local_sandbox')
-    @patch('backend.sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.local_sandbox')
+    @patch('sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_local_exists_exited_starts_it(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False
 
@@ -142,9 +142,9 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         mock_ls_object.start.assert_called_once_with(initial_local_sandbox)
         self.assertEqual(result, started_local_sandbox)
 
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.local_sandbox')
-    @patch('backend.sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.local_sandbox')
+    @patch('sandbox.sandbox.use_daytona')
     async def test_get_or_start_sandbox_local_not_found_creates_new(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False
         # Simulate local_sandbox.get_current_sandbox raising an error (e.g., docker.errors.NotFound)
@@ -167,12 +167,12 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
 
     # --- Tests for create_sandbox ---
 
-    @patch('backend.sandbox.sandbox.setup_visualization_environment')
-    @patch('backend.sandbox.sandbox.start_supervisord_session')
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.daytona')
-    @patch('backend.sandbox.sandbox.use_daytona')
-    @patch('backend.sandbox.sandbox.Configuration') # For Configuration.SANDBOX_IMAGE_NAME
+    @patch('sandbox.sandbox.setup_visualization_environment')
+    @patch('sandbox.sandbox.start_supervisord_session')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.daytona')
+    @patch('sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.Configuration') # For Configuration.SANDBOX_IMAGE_NAME
     async def test_create_sandbox_daytona_path(self, mock_configuration, mock_use_daytona_func, mock_daytona_client, mock_logger, mock_start_supervisord, mock_setup_viz):
         mock_use_daytona_func.return_value = True
         mock_configuration.SANDBOX_IMAGE_NAME = "daytona/image:latest"
@@ -198,9 +198,9 @@ class TestSandboxLogic(unittest.IsolatedAsyncioTestCase):
         mock_start_supervisord.assert_called_once_with(mock_created_daytona_sandbox)
         self.assertEqual(result, mock_created_daytona_sandbox)
 
-    @patch('backend.sandbox.sandbox.logger')
-    @patch('backend.sandbox.sandbox.local_sandbox')
-    @patch('backend.sandbox.sandbox.use_daytona')
+    @patch('sandbox.sandbox.logger')
+    @patch('sandbox.sandbox.local_sandbox')
+    @patch('sandbox.sandbox.use_daytona')
     async def test_create_sandbox_local_path(self, mock_use_daytona_func, mock_ls_object, mock_logger):
         mock_use_daytona_func.return_value = False
 

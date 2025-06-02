@@ -10,7 +10,7 @@ import os
 # This assumes the test runner is initiated from the project root.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
-from backend.utils.scripts.delete_old_archived_sandboxes import main as delete_script_main
+from utils.scripts.delete_old_archived_sandboxes import main as delete_script_main
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk.sandbox import SandboxInfo, Sandbox # For creating mock objects
 
@@ -20,8 +20,8 @@ mock_logger = MagicMock()
 # This needs to target where 'logger' is *used*, not where it's defined, if they differ.
 # Assuming 'backend.utils.logger.logger' is the path if the script does 'from backend.utils.logger import logger'
 # Or if the script does 'from utils.logger import logger' and utils is in sys.path
-# The script uses 'from backend.utils.logger import logger'
-logger_patch_path = 'backend.utils.scripts.delete_old_archived_sandboxes.logger'
+# The script uses 'from utils.logger import logger'
+logger_patch_path = 'utils.scripts.delete_old_archived_sandboxes.logger'
 
 @patch(logger_patch_path, mock_logger) # Patch logger for all tests in this class
 class TestDeleteOldArchivedSandboxes(unittest.IsolatedAsyncioTestCase):
@@ -31,11 +31,11 @@ class TestDeleteOldArchivedSandboxes(unittest.IsolatedAsyncioTestCase):
         mock_logger.reset_mock()
 
         self.mock_daytona_client = AsyncMock()
-        self.patch_daytona_client = patch('backend.utils.scripts.delete_old_archived_sandboxes.daytona', self.mock_daytona_client)
+        self.patch_daytona_client = patch('utils.scripts.delete_old_archived_sandboxes.daytona', self.mock_daytona_client)
         self.patch_daytona_client.start() # Start patcher
 
         self.fixed_now = datetime(2023, 10, 31, 12, 0, 0, tzinfo=dt_timezone.utc)
-        self.patch_datetime_now = patch('backend.utils.scripts.delete_old_archived_sandboxes.datetime')
+        self.patch_datetime_now = patch('utils.scripts.delete_old_archived_sandboxes.datetime')
         self.mock_datetime = self.patch_datetime_now.start()
         self.mock_datetime.now.return_value = self.fixed_now
         self.mock_datetime.fromisoformat.side_effect = datetime.fromisoformat # Use real fromisoformat

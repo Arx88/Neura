@@ -18,20 +18,20 @@ except ImportError:
 # through its imports, so we patch at 'backend.sandbox.local_sandbox.logger' etc.
 
 # The class to test
-from backend.sandbox.local_sandbox import LocalSandbox
+from sandbox.local_sandbox import LocalSandbox
 
 class TestLocalSandbox(unittest.TestCase):
 
-    @patch('backend.sandbox.local_sandbox.config')
-    @patch('backend.sandbox.local_sandbox.logger')
-    @patch('backend.sandbox.local_sandbox.docker')
+    @patch('sandbox.local_sandbox.config')
+    @patch('sandbox.local_sandbox.logger')
+    @patch('sandbox.local_sandbox.docker')
     def setUp(self, mock_docker_module, mock_logger_module, mock_config_module):
         # Mock the Docker client returned by docker.from_env()
         self.mock_docker_client = MagicMock()
         mock_docker_module.from_env.return_value = self.mock_docker_client
 
         # Set up default mock config values (as accessed by LocalSandbox)
-        # The LocalSandbox class imports 'config' directly, so we patch 'backend.sandbox.local_sandbox.config'
+        # The LocalSandbox class imports 'config' directly, so we patch 'sandbox.local_sandbox.config'
         mock_config_module.SANDBOX_IMAGE_NAME = "test/image:latest"
 
         # Instantiate the LocalSandbox
@@ -47,19 +47,19 @@ class TestLocalSandbox(unittest.TestCase):
         """Test that docker.from_env() is called upon instantiation."""
         # setUp already creates an instance, so we just need to assert
         # that docker.from_env was called during its __init__.
-        # The patch for docker is on 'backend.sandbox.local_sandbox.docker'
+        # The patch for docker is on 'sandbox.local_sandbox.docker'
         # So, we access its from_env attribute.
         # We need to ensure the patch is active when LocalSandbox is instantiated.
         # This is implicitly handled by setUp running before each test.
 
         # To explicitly test __init__ behavior if it were more complex:
-        with patch('backend.sandbox.local_sandbox.docker') as new_mock_docker:
+        with patch('sandbox.local_sandbox.docker') as new_mock_docker:
             new_client = MagicMock()
             new_mock_docker.from_env.return_value = new_client
             LocalSandbox()
             new_mock_docker.from_env.assert_called_once()
 
-    @patch('backend.sandbox.local_sandbox.uuid.uuid4')
+    @patch('sandbox.local_sandbox.uuid.uuid4')
     def test_create_sandbox_default_id_and_password(self, mock_uuid_module):
         mock_uuid_module.return_value = "test-uuid"
 
@@ -118,7 +118,7 @@ class TestLocalSandbox(unittest.TestCase):
         mock_exec_output = (0, b"command output")
         mock_container_instance.exec_run.return_value = mock_exec_output
 
-        with patch('backend.sandbox.local_sandbox.uuid.uuid4') as mock_cmd_uuid:
+        with patch('sandbox.local_sandbox.uuid.uuid4') as mock_cmd_uuid:
             mock_cmd_uuid.return_value = "cmd-uuid"
             exec_result = sandbox['process']['execute_session_command']("session1", "echo hello")
             self.assertEqual(exec_result['cmd_id'], "cmd-uuid")
@@ -128,7 +128,7 @@ class TestLocalSandbox(unittest.TestCase):
                 cmd="cd /workspace && echo hello", stdout=True, stderr=True
             )
 
-    @patch('backend.sandbox.local_sandbox.uuid.uuid4')
+    @patch('sandbox.local_sandbox.uuid.uuid4')
     def test_create_sandbox_with_project_id_and_password(self, mock_uuid_module):
         # This ensures that uuid.uuid4 is not called if project_id is provided
         # mock_uuid_module should not be called.
@@ -195,7 +195,8 @@ class TestLocalSandbox(unittest.TestCase):
         self.mock_logger.info.assert_any_call("Sandbox local test-id iniciado")
 
 
-    def test_stop_sandbox(self):
+    @patch('backend.sandbox.local_sandbox.logger') # Add patch for logger inside stop
+    def test_stop_sandbox(self, mock_stop_logger): # Add mock_stop_logger to args
         mock_container_instance = MagicMock()
         sandbox_dict = {
             'id': 'test-id',
@@ -203,9 +204,9 @@ class TestLocalSandbox(unittest.TestCase):
         }
         self.sandbox_manager.stop(sandbox_dict)
         mock_container_instance.stop.assert_called_once()
-        self.mock_logger.info.assert_called_once_with("Sandbox local test-id detenido")
+        mock_stop_logger.info.assert_called_once_with("Sandbox local test-id detenido")
 
-    @patch('backend.sandbox.local_sandbox.uuid.uuid4')
+    @patch('sandbox.local_sandbox.uuid.uuid4')
     def test_execute_command_as_string(self, mock_cmd_uuid):
         mock_cmd_uuid.return_value = "cmd-test-uuid"
         mock_container_instance = MagicMock()
@@ -222,7 +223,7 @@ class TestLocalSandbox(unittest.TestCase):
         self.assertEqual(result['exit_code'], 0)
         self.assertEqual(result['output'], "output string")
 
-    @patch('backend.sandbox.local_sandbox.uuid.uuid4')
+    @patch('sandbox.local_sandbox.uuid.uuid4')
     def test_execute_command_as_object(self, mock_cmd_uuid):
         mock_cmd_uuid.return_value = "cmd-obj-uuid"
         mock_container_instance = MagicMock()
