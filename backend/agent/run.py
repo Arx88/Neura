@@ -233,7 +233,7 @@ async def run_agent(
             logger.error(f"{error_msg} For prompt: '{initial_prompt_text[:100]}...' Thread ID: {thread_id}") # Level 3
             task_id_for_planning_failure_log = planned_main_task.id if planned_main_task and hasattr(planned_main_task, 'id') else thread_id # Level 3
             if await task_state_manager.get_task(task_id_for_planning_failure_log): # Level 3
-                 await _add_task_log_message(task_state_manager, task_id_for_planning_failure_log, f"ERROR: Planning phase failed: {error_msg}", log_type="error") # Level 4
+                await _add_task_log_message(task_state_manager, task_id_for_planning_failure_log, f"ERROR: Planning phase failed: {error_msg}", log_type="error") # Level 4
             return # Level 3
 
         final_main_task_id = planned_main_task.id # Level 2
