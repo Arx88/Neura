@@ -1,9 +1,9 @@
 
-from agentpress.tool import ToolResult, openapi_schema, xml_schema
-from sandbox.tool_base import SandboxToolsBase    
-from utils.files_utils import should_exclude_file, clean_path
-from agentpress.thread_manager import ThreadManager
-from utils.logger import logger
+from ...agentpress.tool import ToolResult, openapi_schema, xml_schema
+from ...sandbox.tool_base import SandboxToolsBase
+from ...utils.files_utils import should_exclude_file, clean_path
+from ...agentpress.thread_manager import ThreadManager
+from ...utils.logger import logger
 import os
 import logging # Added for logging
 

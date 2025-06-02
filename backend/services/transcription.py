@@ -4,8 +4,8 @@ import tempfile
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from utils.logger import logger
-from utils.auth_utils import get_current_user_id_from_jwt
+from ..utils.logger import logger
+from ..utils.auth_utils import get_current_user_id_from_jwt
 
 router = APIRouter(tags=["transcription"])
 

@@ -5,8 +5,8 @@ import os # Added
 import importlib.util # Added
 import inspect # Added
 from typing import Dict, Any, Optional, List, Type # Added List, Type
-from agentpress.tool import Tool, ToolResult, openapi_schema # Added openapi_schema for dummy tool
-from utils.logger import logger # Changed import
+from .tool import Tool, ToolResult, openapi_schema # Added openapi_schema for dummy tool
+from ..utils.logger import logger # Changed import
 
 # Define a default plugin directory at the module level or pass to orchestrator
 DEFAULT_PLUGINS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "plugins"))

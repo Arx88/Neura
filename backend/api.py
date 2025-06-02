@@ -6,36 +6,26 @@ import sentry
 from contextlib import asynccontextmanager
 # Remove ThreadManager if not directly used by these new endpoints
 # from agentpress.thread_manager import ThreadManager
-from backend.services.supabase import DBConnection
+from services.supabase import DBConnection
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any # Added for type hinting
 from pydantic import BaseModel, Field # Added for FrontendErrorPayload
-from backend.utils.config import config, EnvMode
+from utils.config import config, EnvMode
 import asyncio
 import json # Added import for json.dumps
-from backend.utils.logger import logger, setup_logger as get_logger # Added get_logger
+from utils.logger import logger, setup_logger as get_logger # Added get_logger
 import uuid
 import time
 from collections import OrderedDict
 
-import sys
-import os
-# Add the parent directory of this script's location (project root) to sys.path.
-# Assumes this script is in a subdirectory (e.g., 'backend') of the project root.
-# This allows imports like 'from backend.agentpress...'
-script_dir = os.path.dirname(os.path.abspath(__file__)) # e.g., /app (if script is /app/api.py)
-project_root = os.path.dirname(script_dir) # e.g., parent of /app
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 # AgentPress specific imports
-from backend.agentpress.task_types import TaskState # For direct use if needed
-from backend.agentpress.task_storage_supabase import SupabaseTaskStorage
-from backend.agentpress.task_state_manager import TaskStateManager
-from backend.agentpress.tool_orchestrator import ToolOrchestrator
-from backend.agentpress.task_planner import TaskPlanner
-from backend.agentpress.plan_executor import PlanExecutor # Added import
-from backend.agentpress.api_models_tasks import (
+from agentpress.task_types import TaskState # For direct use if needed
+from agentpress.task_storage_supabase import SupabaseTaskStorage
+from agentpress.task_state_manager import TaskStateManager
+from agentpress.tool_orchestrator import ToolOrchestrator
+from agentpress.task_planner import TaskPlanner
+from agentpress.plan_executor import PlanExecutor # Added import
+from agentpress.api_models_tasks import (
     CreateTaskPayload,
     UpdateTaskPayload,
     PlanTaskPayload,
@@ -46,10 +36,10 @@ from backend.agentpress.api_models_tasks import (
 
 
 # Import other API modules
-from backend.agent import api as agent_api
-from backend.sandbox import api as sandbox_api
-from backend.services import billing as billing_api
-from backend.services import transcription as transcription_api
+from agent import api as agent_api
+from sandbox import api as sandbox_api
+from services import billing as billing_api
+from services import transcription as transcription_api
 
 # Global instances for AgentPress services
 # These will be initialized in the lifespan manager
@@ -102,7 +92,7 @@ async def lifespan(app: FastAPI):
         sandbox_api.initialize(db_connection)
         
         # Initialize Redis connection
-        from backend.services import redis
+        from services import redis
         try:
             await redis.initialize_async()
             logger.info("Redis connection initialized successfully")
@@ -190,7 +180,7 @@ async def plan_new_task(
 
             try:
                 # Import redis here if not globally available or prefer scoped import
-                from backend.services import redis
+                from services import redis
                 await asyncio.gather(
                     redis.rpush(response_list_key, message_json_str),
                     redis.publish(response_channel, "new")

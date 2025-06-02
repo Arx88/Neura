@@ -1,11 +1,11 @@
 import traceback
 import json
 
-from agentpress.tool import openapi_schema, xml_schema # ToolResult removed
-from agentpress.thread_manager import ThreadManager
-from sandbox.tool_base import SandboxToolsBase
-from utils.logger import logger
-from utils.s3_upload_utils import upload_base64_image
+from ...agentpress.tool import openapi_schema, xml_schema # ToolResult removed
+from ...agentpress.thread_manager import ThreadManager
+from ...sandbox.tool_base import SandboxToolsBase
+from ...utils.logger import logger
+from ...utils.s3_upload_utils import upload_base64_image
 
 # Custom Exceptions
 class BrowserToolError(Exception):

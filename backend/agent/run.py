@@ -6,30 +6,30 @@ from uuid import uuid4
 from typing import Optional, Any, Dict, AsyncGenerator # Added AsyncGenerator
 
 # from agent.tools.message_tool import MessageTool
-from agent.tools.message_tool import MessageTool
-from agent.tools.sb_deploy_tool import SandboxDeployTool
-from agent.tools.sb_expose_tool import SandboxExposeTool
-from agent.tools.web_search_tool import SandboxWebSearchTool
+from .tools.message_tool import MessageTool
+from .tools.sb_deploy_tool import SandboxDeployTool
+from .tools.sb_expose_tool import SandboxExposeTool
+from .tools.web_search_tool import SandboxWebSearchTool
 from dotenv import load_dotenv
 from utils.config import config
 
 from agentpress.thread_manager import ThreadManager
 from agentpress.response_processor import ProcessorConfig
-from agent.tools.sb_shell_tool import SandboxShellTool
-from agent.tools.sb_files_tool import SandboxFilesTool
-from agent.tools.sb_browser_tool import SandboxBrowserTool
-from agent.tools.python_tool import PythonTool # Import PythonTool
-from agent.tools.data_providers_tool import DataProvidersTool
-from agent.tools.visualization_tool import DataVisualizationTool # Import DataVisualizationTool
-from agent.prompt import get_system_prompt
+from .tools.sb_shell_tool import SandboxShellTool
+from .tools.sb_files_tool import SandboxFilesTool
+from .tools.sb_browser_tool import SandboxBrowserTool
+from .tools.python_tool import PythonTool # Import PythonTool
+from .tools.data_providers_tool import DataProvidersTool
+from .tools.visualization_tool import DataVisualizationTool # Import DataVisualizationTool
+from .prompt import get_system_prompt
 from utils.logger import logger
 from utils.auth_utils import get_account_id_from_thread
 from services.billing import check_billing_status
-from agent.tools.sb_vision_tool import SandboxVisionTool
+from .tools.sb_vision_tool import SandboxVisionTool
 from services.langfuse import langfuse
 from langfuse.client import StatefulTraceClient
 from services.langfuse import langfuse
-from agent.gemini_prompt import get_gemini_system_prompt
+from .gemini_prompt import get_gemini_system_prompt
 
 # Imports for TaskPlanner
 from agentpress.plan_executor import PlanExecutor

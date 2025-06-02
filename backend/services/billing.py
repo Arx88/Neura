@@ -8,12 +8,12 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import Optional, Dict, Tuple
 import stripe
 from datetime import datetime, timezone
-from utils.logger import logger
-from utils.config import config, EnvMode
-from services.supabase import DBConnection
-from utils.auth_utils import get_current_user_id_from_jwt
+from ..utils.logger import logger
+from ..utils.config import config, EnvMode
+from .supabase import DBConnection
+from ..utils.auth_utils import get_current_user_id_from_jwt
 from pydantic import BaseModel
-from utils.constants import MODEL_ACCESS_TIERS, MODEL_NAME_ALIASES
+from ..utils.constants import MODEL_ACCESS_TIERS, MODEL_NAME_ALIASES
 # Initialize Stripe
 stripe.api_key = config.STRIPE_SECRET_KEY
 

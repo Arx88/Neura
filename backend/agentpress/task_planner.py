@@ -3,12 +3,12 @@ import json
 # Pydantic models will be defined below
 from pydantic import BaseModel, Field, ValidationError
 
-from agent.prompt import get_system_prompt
-from agentpress.task_state_manager import TaskStateManager
-from agentpress.tool_orchestrator import ToolOrchestrator
-from agentpress.task_types import TaskState # For type hinting
-from services.llm import make_llm_api_call # Assuming this is the correct way to call LLM
-from utils.logger import logger
+from ..agent.prompt import get_system_prompt
+from .task_state_manager import TaskStateManager
+from .tool_orchestrator import ToolOrchestrator
+from .task_types import TaskState # For type hinting
+from ..services.llm import make_llm_api_call # Assuming this is the correct way to call LLM
+from ..utils.logger import logger
 
 class TaskPlanner:
     """

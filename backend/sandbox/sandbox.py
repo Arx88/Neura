@@ -1,9 +1,9 @@
 from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxParams, Sandbox, SessionExecuteRequest
 from daytona_api_client.models.workspace_state import WorkspaceState
 from dotenv import load_dotenv
-from utils.logger import logger
-from utils.config import config
-from utils.config import Configuration
+from ..utils.logger import logger
+from ..utils.config import config
+from ..utils.config import Configuration
 from .local_sandbox import local_sandbox
 
 load_dotenv()

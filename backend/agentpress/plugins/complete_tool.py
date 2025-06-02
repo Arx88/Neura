@@ -1,4 +1,4 @@
-from agentpress.tool import Tool, ToolResult, openapi_schema
+from ...agentpress.tool import Tool, ToolResult, openapi_schema
 from typing import Dict, Any
 import logging
 
