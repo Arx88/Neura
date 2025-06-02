@@ -8,11 +8,12 @@ from contextlib import asynccontextmanager
 # from agentpress.thread_manager import ThreadManager
 from services.supabase import DBConnection
 from datetime import datetime, timezone
-from typing import List, Optional # Added for type hinting
+from typing import List, Optional, Dict, Any # Added for type hinting
+from pydantic import BaseModel, Field # Added for FrontendErrorPayload
 from utils.config import config, EnvMode
 import asyncio
 import json # Added import for json.dumps
-from utils.logger import logger
+from utils.logger import logger, setup_logger as get_logger # Added get_logger
 import uuid
 import time
 from collections import OrderedDict
@@ -344,6 +345,51 @@ app.include_router(transcription_api.router, prefix="/api")
 
 # Include the new task router
 app.include_router(task_router, prefix="/api") # All task routes will be under /api/tasks
+
+# --- Frontend Error Logging ---
+class FrontendErrorPayload(BaseModel):
+    message: str
+    source: Optional[str] = None # e.g., component name, file name
+    stack_trace: Optional[str] = None
+    url: Optional[str] = None # The URL where the error occurred
+    user_agent: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None # For any other contextual data
+
+frontend_error_logger = get_logger('FRONTEND')
+log_router = APIRouter(prefix="/api", tags=["Logging"])
+
+@log_router.post("/log_frontend_error")
+async def log_frontend_error_endpoint(payload: FrontendErrorPayload, request: Request): # Renamed function
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+
+        log_message = (
+            f"Frontend Error from {client_ip} at {payload.url or 'unknown URL'}: "
+            f"{payload.message}"
+        )
+
+        extra_info = {
+            "source": payload.source,
+            "stack_trace": payload.stack_trace,
+            "user_agent": payload.user_agent,
+            "additional_context": payload.context,
+            "client_ip": client_ip # Also adding client_ip to extra
+        }
+
+        extra_info_filtered = {k: v for k, v in extra_info.items() if v is not None}
+
+        frontend_error_logger.error(log_message, extra=extra_info_filtered)
+
+        return {"status": "logged"}
+    except Exception as e:
+        # Use the main backend logger to log issues with the logging endpoint itself
+        main_logger = get_logger('BACKEND') # Or the default 'logger' instance
+        main_logger.error(f"Error in /log_frontend_error endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to log frontend error.")
+
+app.include_router(log_router, prefix="") # Add the new router, prefix is already in APIRouter
+
+# --- End Frontend Error Logging ---
 
 
 @app.get("/api/health")
