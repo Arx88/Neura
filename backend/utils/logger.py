@@ -83,16 +83,22 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)  # Set lowest level for logger, handlers control their own levels
     
-    # --- App-specific Rotating File Handler (e.g., ./logs/BACKEND_20231026.log) ---
+    # --- App-specific Rotating File Handler ---
+    app_specific_log_dir_path = "/app/runtime_logs/" # Explicit absolute path
+    app_log_file_setup_success = False
     try:
-        app_specific_log_dir_path = "/app/runtime_logs/"
         os.makedirs(app_specific_log_dir_path, exist_ok=True)
+        # Check if directory is writable
+        if not os.access(app_specific_log_dir_path, os.W_OK):
+            # If not writable, raise an error to be caught by the except block
+            raise PermissionError(f"Directory {app_specific_log_dir_path} exists but is not writable by the application.")
 
         app_log_file = os.path.join(app_specific_log_dir_path, f'{name}_{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}.log')
+        
         rotating_file_handler = RotatingFileHandler(
             app_log_file,
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=0,
+            maxBytes=10*1024*1024,
+            backupCount=0, 
             encoding='utf-8'
         )
         rotating_file_handler.setLevel(logging.DEBUG)
@@ -102,9 +108,41 @@ def setup_logger(name: str = 'BACKEND') -> logging.Logger:
         )
         rotating_file_handler.setFormatter(file_formatter)
         logger.addHandler(rotating_file_handler)
-        print(f"Added app-specific rotating file handler for: {app_log_file}")
+        # This print is useful for seeing if setup was attempted. Keep it.
+        print(f"Attempted to add app-specific rotating file handler for: {app_log_file}")
+        app_log_file_setup_success = True # Mark as success
     except Exception as e:
-        print(f"Error setting up app-specific rotating file handler: {e}", file=sys.stderr)
+        # IMPORTANT: Log this error using the logger itself, so it appears in the JSON console output if possible.
+        # This assumes the console handler might already be added or will be added.
+        # As a fallback, the print to stderr is kept.
+        error_message = f"CRITICAL_ERROR_LOGGER_SETUP: Failed to set up app-specific file handler for {name} at {app_specific_log_dir_path}. Error: {type(e).__name__} - {str(e)}"
+        # Check if logger has handlers, particularly the console one we expect for JSON output
+        if logger.hasHandlers(): # Check if any handlers exist
+            # Attempt to find a console handler, or just log if any handler exists
+            console_handler_exists = any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
+            if console_handler_exists :
+                 logger.error(error_message, exc_info=False) # Set exc_info=False to avoid huge traceback in this specific log, stderr has it.
+            else:
+                # If no console handler yet, print to stdout as a structured-like message
+                print(json.dumps({
+                    'timestamp': datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                    'level': 'ERROR',
+                    'message': error_message,
+                    'module': __name__, # or record.module if available
+                    'function': 'setup_logger_app_specific_handler_exception',
+                    'type': str(type(e).__name__),
+                    'detail': str(e)
+                }))
+        else:
+            # Fallback if logger has no handlers at all yet (e.g. console handler failed too)
+             print(f"Fallback print: {error_message}", file=sys.stderr)
+        print(f"Original stderr print: Error setting up app-specific rotating file handler: {e}", file=sys.stderr) # Keep original stderr print
+
+    # After the try-except for app_specific_log_dir_path, add a log message indicating success or failure
+    if app_log_file_setup_success:
+        logger.info(f"Successfully set up app-specific file logging to: {app_log_file}")
+    else:
+        logger.warning(f"App-specific file logging setup FAILED for logger '{name}'. Check previous errors for details.")
 
     # --- Global TEMP_LOG File Handler (PROJECT_ROOT/LOG/TEMP_LOG) ---
     try:
