@@ -14,24 +14,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user and set up directories
+# Install Poetry & configure
+RUN pip install poetry
+RUN poetry --version
+RUN poetry config virtualenvs.create false
+
+# Copy Poetry project files
+COPY pyproject.toml poetry.lock* /app/
+
+# Install dependencies using Poetry
+RUN poetry cache clear . --all -n
+RUN poetry install --no-root --no-dev --sync
+
+# Run Dramatiq check using poetry run
+RUN poetry run python -c "print('--- Docker Build Dramatiq Check ---'); import dramatiq; import dramatiq.middleware; print('Dramatiq version in Docker build:', dramatiq.__version__); print('Middleware path:', dramatiq.middleware.__file__); print('Middleware contents:', dir(dramatiq.middleware)); print('--- End Docker Build Dramatiq Check ---')"
+
+# Copy application code the rest of the application code
+COPY . .
+
+# Create non-root user and set up directories and permissions
 RUN useradd -m -u 1000 appuser && \
     mkdir -p /app/logs && \
     chown -R appuser:appuser /app
 
-# Install Python dependencies
-COPY --chown=appuser:appuser requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt gunicorn
-
-# Add appuser to docker group to allow Docker socket access
+# Add appuser to docker group (from original, if needed for Docker socket access)
 RUN groupadd -r docker || true && \
     usermod -aG docker appuser
 
-# Switch to non-root user
+# Switch to non-root user for runtime and subsequent commands
 USER appuser
-
-# Copy application code
-COPY --chown=appuser:appuser . .
 
 # Remove any potentially stale .pyc files or __pycache__ directories
 RUN find /app -type f -name "*.pyc" -delete -o -type d -name "__pycache__" -exec rm -rf {} +
@@ -39,34 +50,5 @@ RUN find /app -type f -name "*.pyc" -delete -o -type d -name "__pycache__" -exec
 # Expose the port the app runs on
 EXPOSE 8000
 
-# Calculate optimal worker count based on 16 vCPUs
-# Using (2*CPU)+1 formula for CPU-bound applications
-ENV WORKERS=33
-ENV THREADS=2
-ENV WORKER_CONNECTIONS=2000
-
-EXPOSE 8000
-
-# Switch to root user for the worker process
-USER root
-
-# Gunicorn configuration
-# CMD ["sh", "-c", "gunicorn --pythonpath /app backend.api:app \
-#      --workers $WORKERS \
-#      --worker-class uvicorn.workers.UvicornWorker \
-#      --bind 0.0.0.0:8000 \
-#      --timeout 1800 \
-#      --graceful-timeout 600 \
-#      --keep-alive 1800 \
-#      --max-requests 0 \
-#      --max-requests-jitter 0 \
-#      --forwarded-allow-ips '*' \
-#      --worker-connections $WORKER_CONNECTIONS \
-#      --worker-tmp-dir /dev/shm \
-#      --log-level info \
-#      --access-logfile - \
-#      --error-logfile - \
-#      --capture-output \
-#      --enable-stdio-inheritance \
-#      --threads $THREADS"]
+# CMD (ensure this is the active one from your original file)
 CMD ["sh", "-c", "gunicorn api:app --workers ${WORKERS:-4} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"]
