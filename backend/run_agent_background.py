@@ -5,6 +5,54 @@ import logging
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
+
+# --- INICIO DEL BLOQUE DE DIAGNÓSTICO PYTHON ---
+import sys
+import os
+import dramatiq # Asegúrate de que dramatiq se importe antes de intentar acceder a __version__
+import inspect  # Para obtener rutas de archivos de módulos
+
+def ejecutar_diagnostico_entorno_dramatiq():
+    print("PYTHON_DIAG: --- Iniciando Diagnóstico de Entorno Python y Dramatiq ---", flush=True)
+    print(f"PYTHON_DIAG: Versión de Python: {sys.version}", flush=True)
+    print(f"PYTHON_DIAG: sys.path: {sys.path}", flush=True)
+
+    try:
+        print(f"PYTHON_DIAG: Versión de Dramatiq detectada: {dramatiq.__version__}", flush=True)
+        print(f"PYTHON_DIAG: Ubicación del módulo Dramatiq principal: {inspect.getfile(dramatiq)}", flush=True)
+    except Exception as e_dramatiq_version:
+        print(f"PYTHON_DIAG: No se pudo obtener la versión o ubicación de Dramatiq: {e_dramatiq_version}", flush=True)
+
+    try:
+        import dramatiq.middleware
+        print(f"PYTHON_DIAG: Módulo dramatiq.middleware encontrado en: {inspect.getfile(dramatiq.middleware)}", flush=True)
+
+        # Listar contenido de dramatiq.middleware
+        middleware_contents = dir(dramatiq.middleware)
+        print(f"PYTHON_DIAG: Contenido de dramatiq.middleware (dir()): {middleware_contents}", flush=True)
+
+        # Verificar específicamente la presencia de 'Results'
+        if 'Results' in middleware_contents:
+            print("PYTHON_DIAG: El atributo 'Results' SÍ ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
+            results_attr = getattr(dramatiq.middleware, 'Results')
+            print(f"PYTHON_DIAG: Tipo de dramatiq.middleware.Results: {type(results_attr)}", flush=True)
+            try:
+                print(f"PYTHON_DIAG: 'Results' se define en el archivo: {inspect.getfile(results_attr)}", flush=True)
+            except TypeError:
+                print("PYTHON_DIAG: No se pudo determinar el archivo para 'Results' (podría ser un atributo no modular/clase).", flush=True)
+        else:
+            print("PYTHON_DIAG: El atributo 'Results' NO ESTÁ PRESENTE en dramatiq.middleware.", flush=True)
+
+    except ImportError as e_import_middleware:
+        print(f"PYTHON_DIAG: ImportError al intentar importar o inspeccionar dramatiq.middleware: {e_import_middleware}", flush=True)
+    except Exception as e_general_diag:
+        print(f"PYTHON_DIAG: Error general durante el diagnóstico de dramatiq.middleware: {e_general_diag}", flush=True)
+
+    print("PYTHON_DIAG: --- Fin del Diagnóstico de Entorno Python y Dramatiq ---", flush=True)
+
+ejecutar_diagnostico_entorno_dramatiq()
+# --- FIN DEL BLOQUE DE DIAGNÓSTICO PYTHON ---
+
 from services import redis
 from agent.run import run_agent
 from utils.logger import setup_logger
