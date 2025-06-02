@@ -4,11 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 import uuid
 import json
 
-# Adjust path for imports from the backend
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
 from backend.run_agent_background import run_agent_background, _cleanup_redis_instance_key, _cleanup_redis_response_list, update_agent_run_status # Import the target function
 from daytona_api_client.models.workspace_state import WorkspaceState
 from daytona_sdk import SessionExecuteRequest

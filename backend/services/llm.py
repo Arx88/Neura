@@ -40,11 +40,14 @@ def setup_api_keys() -> None:
     """Set up API keys from environment variables."""
     providers = ['OPENAI', 'ANTHROPIC', 'GROQ', 'OPENROUTER', 'OLLAMA']
     for provider in providers:
-        key = getattr(config, f'{provider}_API_KEY')
+        key = getattr(config, f'{provider}_API_KEY', None) # Added default None for safety
         if key:
             logger.debug(f"API key found in config for provider: {provider}")
         else:
-            logger.warning(f"No API key found in config for provider: {provider}")
+            if provider == 'OLLAMA':
+                logger.info(f"No API key found in config for provider: {provider}. This is often expected for Ollama.")
+            else:
+                logger.warning(f"No API key found in config for provider: {provider}")
 
     api_key_providers = {
         "OPENAI": "OPENAI_API_KEY",
