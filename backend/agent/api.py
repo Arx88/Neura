@@ -21,7 +21,7 @@ from services.billing import check_billing_status, can_use_model
 from utils.config import config
 from sandbox.sandbox import create_sandbox, get_or_start_sandbox
 from services.llm import make_llm_api_call
-from run_agent_background import run_agent_background, _cleanup_redis_response_list, update_agent_run_status
+from run_agent_background import execute_run_agent_task, _cleanup_redis_response_list, update_agent_run_status
 from utils.constants import MODEL_NAME_ALIASES
 from agentpress.tool_orchestrator import ToolOrchestrator # Added import
 from utils.logger import logger # Ensure logger is imported if not already
@@ -458,14 +458,22 @@ async def start_agent(
         except Exception as e_redis:
             logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e_redis)}")
 
-        run_agent_background.send(
-            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+        execute_run_agent_task.send(
+            thread_id=thread_id,
             project_id=project_id,
+            stream=body.stream,
+            initial_prompt_text=prompt_text, # Added: Fetched from latest user message
             model_name=model_name,
-            enable_thinking=body.enable_thinking, reasoning_effort=body.reasoning_effort,
-            stream=body.stream, enable_context_manager=body.enable_context_manager
+            enable_thinking=body.enable_thinking,
+            reasoning_effort=body.reasoning_effort,
+            enable_context_manager=body.enable_context_manager
+            # native_max_auto_continues and max_iterations will use defaults
+            # agent_run_id and instance_id are not direct params for the new actor
         )
-        return {"agent_run_id": agent_run_id, "status": "running"}
+        # The return here might need adjustment if the new actor's result handling is different.
+        # For now, it assumes the caller of execute_run_agent_task will handle result retrieval if needed.
+        # The original run_agent_background was for background processing without direct return to this HTTP request.
+        return {"agent_run_id": agent_run_id, "status": "submitted_to_worker"} # Status changed to reflect it's a task submission
 
     except Exception as e:
         logger.error(f"Error in start_agent for thread {thread_id}: {str(e)}", exc_info=True)
@@ -1088,14 +1096,21 @@ async def initiate_agent_with_files(
         except Exception as e:
             logger.warning(f"Failed to register agent run in Redis ({instance_key_normal}): {str(e)}")
 
-        run_agent_background.send(
-            agent_run_id=agent_run_id, thread_id=thread_id, instance_id=instance_id,
+        execute_run_agent_task.send(
+            thread_id=thread_id,
             project_id=project_id,
+            stream=stream,
+            initial_prompt_text=message_content, # Added: This is the prompt including file references
             model_name=model_name,
-            enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-            stream=stream, enable_context_manager=enable_context_manager
+            enable_thinking=enable_thinking,
+            reasoning_effort=reasoning_effort,
+            enable_context_manager=enable_context_manager
+            # native_max_auto_continues and max_iterations will use defaults
+            # agent_run_id and instance_id are not direct params for the new actor
         )
-        return {"thread_id": thread_id, "agent_run_id": agent_run_id}
+        # The return here might need adjustment. The original run_agent_background was for background processing.
+        # execute_run_agent_task with store_results=True implies results are fetched differently.
+        return {"thread_id": thread_id, "agent_run_id": agent_run_id, "status": "submitted_to_worker"} # Status changed
 
     except Exception as e:
         logger.error(f"Error in agent initiation: {str(e)}\n{traceback.format_exc()}")
