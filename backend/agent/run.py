@@ -229,7 +229,6 @@ async def run_agent(
             error_msg = "Planning failed." # Level 3
             if planned_main_task and planned_main_task.metadata and planned_main_task.metadata.get("error"): # Level 3
                 error_msg = planned_main_task.metadata.get("error") # Level 4
-
             logger.error(f"{error_msg} For prompt: '{initial_prompt_text[:100]}...' Thread ID: {thread_id}") # Level 3
             task_id_for_planning_failure_log = planned_main_task.id if planned_main_task and hasattr(planned_main_task, 'id') else thread_id # Level 3
             if await task_state_manager.get_task(task_id_for_planning_failure_log): # Level 3
