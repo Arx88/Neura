@@ -5,8 +5,8 @@ import time
 import asyncio
 import copy # Added for deepcopy
 
-from .task_types import TaskState, TaskStorage
-from ..utils.logger import logger # Changed import
+from backend.agentpress.task_types import TaskState, TaskStorage
+from backend.utils.logger import logger # Changed import
 
 # For Partial[TaskState] equivalent if needed for subtask_data without Pydantic/TypedDict features
 # from typing import TypedDict

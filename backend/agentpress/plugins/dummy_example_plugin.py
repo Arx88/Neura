@@ -1,5 +1,5 @@
-from ...agentpress.tool import Tool, openapi_schema
-from ...utils.logger import logger
+from backend.agentpress.tool import Tool, openapi_schema
+from backend.utils.logger import logger
 import os
 
 class TestPluginTool(Tool):

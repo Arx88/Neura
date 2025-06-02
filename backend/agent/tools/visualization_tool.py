@@ -1,8 +1,8 @@
-from ...agentpress.tool import openapi_schema # ToolResult removed
-from ...sandbox.tool_base import SandboxToolsBase
-from ...agentpress.thread_manager import ThreadManager
+from backend.agentpress.tool import openapi_schema # ToolResult removed
+from backend.sandbox.tool_base import SandboxToolsBase
+from backend.agentpress.thread_manager import ThreadManager
 from uuid import uuid4
-from ...sandbox.sandbox import SessionExecuteRequest
+from backend.sandbox.sandbox import SessionExecuteRequest
 import logging # Added for logging
 
 # Custom Exceptions

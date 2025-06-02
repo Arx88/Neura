@@ -5,9 +5,9 @@ from typing import Optional, Tuple
 from io import BytesIO
 from PIL import Image
 
-from ...agentpress.tool import openapi_schema, xml_schema # ToolResult removed
-from ...sandbox.tool_base import SandboxToolsBase
-from ...agentpress.thread_manager import ThreadManager
+from backend.agentpress.tool import openapi_schema, xml_schema # ToolResult removed
+from backend.sandbox.tool_base import SandboxToolsBase
+from backend.agentpress.thread_manager import ThreadManager
 # import json # Not used directly in this file after refactor
 import logging # Added for logging
 

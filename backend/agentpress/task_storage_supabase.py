@@ -2,9 +2,9 @@ from typing import List, Optional, Dict, Any
 import json
 from datetime import datetime, timezone # Added
 # Removed APIError import
-from ..services.supabase import DBConnection
-from .task_types import TaskState, TaskStorage
-from ..utils.logger import logger
+from backend.services.supabase import DBConnection
+from backend.agentpress.task_types import TaskState, TaskStorage
+from backend.utils.logger import logger
 
 class SupabaseTaskStorage(TaskStorage):
     """

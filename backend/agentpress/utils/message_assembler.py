@@ -3,7 +3,7 @@ import time
 
 # Try to import the project's logger, fall back to a basic one if not found during subtask execution.
 try:
-    from ...utils.logger import logger
+    from backend.utils.logger import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
