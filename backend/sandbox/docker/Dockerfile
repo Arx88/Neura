@@ -99,6 +99,7 @@ COPY pyproject.toml poetry.lock* /app/
 
 # Install Python dependencies using Poetry
 RUN poetry cache clear . --all -n
+RUN echo "BUILD_INFO --- Branch: $(git rev-parse --abbrev-ref HEAD) --- Commit: $(git rev-parse HEAD) --- Timestamp: $(date)" || echo "BUILD_INFO --- Git info not available --- Timestamp: $(date)"
 RUN poetry install --no-root --without dev --sync -vvv
 
 # Verification step for Dramatiq
