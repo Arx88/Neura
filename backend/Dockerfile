@@ -4,15 +4,33 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENV_MODE="production" \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    # Rust environment variables
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:$PATH
 
 WORKDIR /app
 
 # Install system dependencies
+# Added: libffi-dev, libssl-dev, libjpeg-dev, libpng-dev, zlib1g-dev, libxml2-dev, libxslt1-dev, pkg-config
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    libffi-dev \
+    libssl-dev \
+    libjpeg-dev \
+    libpng-dev \
+    zlib1g-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 
 # Install Poetry & configure
 RUN pip install poetry
@@ -20,7 +38,7 @@ RUN poetry --version
 RUN poetry config virtualenvs.create false
 
 # Copy Poetry project files
-COPY pyproject.toml poetry.lock* /app/
+COPY pyproject.toml poetry.lock /app/
 
 # Install dependencies using Poetry
 RUN poetry cache clear . --all -n
