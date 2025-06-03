@@ -13,7 +13,6 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install system dependencies
-# Added: libffi-dev, libssl-dev, libjpeg-dev, libpng-dev, zlib1g-dev, libxml2-dev, libxslt1-dev, pkg-config
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -37,10 +36,14 @@ RUN pip install poetry
 RUN poetry --version
 RUN poetry config virtualenvs.create false
 
-# Copy Poetry project files
-COPY pyproject.toml poetry.lock /app/
+# Copy only pyproject.toml first
+COPY pyproject.toml /app/
 
-# Install dependencies using Poetry
+# Generate lock file inside the container for consistency
+# This ensures the lock file is created based on the Docker environment's Python version and available libraries.
+RUN poetry lock --no-interaction
+
+# Install dependencies using Poetry (will use the generated poetry.lock)
 RUN poetry cache clear . --all -n
 RUN echo "BUILD_INFO --- Branch: $(git rev-parse --abbrev-ref HEAD) --- Commit: $(git rev-parse HEAD) --- Timestamp: $(date)" || echo "BUILD_INFO --- Git info not available (backend/Dockerfile) --- Timestamp: $(date)"
 RUN poetry install --no-root --without dev --sync -vvv
