@@ -24,7 +24,7 @@ COPY pyproject.toml poetry.lock* /app/
 
 # Install dependencies using Poetry
 RUN poetry cache clear . --all -n
-RUN poetry install --no-root --no-dev --sync
+RUN poetry install --no-root --without dev --sync
 
 # Run Dramatiq check using poetry run
 RUN poetry run python -c "print('--- Docker Build Dramatiq Check ---'); import dramatiq; import dramatiq.middleware; print('Dramatiq version in Docker build:', dramatiq.__version__); print('Middleware path:', dramatiq.middleware.__file__); print('Middleware contents:', dir(dramatiq.middleware)); print('--- End Docker Build Dramatiq Check ---')"
