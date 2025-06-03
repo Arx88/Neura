@@ -94,6 +94,12 @@ ARG TARGETPLATFORM=linux/amd64
 # Set up working directory
 WORKDIR /app
 
+# Print Dockerfile content for debugging
+RUN echo "DEBUG_INFO --- Attempting to print Dockerfile content ---" && \
+    cat Dockerfile && \
+    echo "DEBUG_INFO --- End of Dockerfile content print attempt ---" || \
+    echo "DEBUG_INFO --- Failed to cat Dockerfile, or Dockerfile not found at context root ---"
+
 # Copy Poetry project files
 COPY pyproject.toml poetry.lock* /app/
 
