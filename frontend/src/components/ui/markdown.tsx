@@ -1,9 +1,10 @@
 import { cn } from '@/lib/utils';
-import { marked } from 'marked';
+// import { marked } from 'marked'; // No longer needed for parseMarkdownIntoBlocks
 import { memo, useId, useMemo } from 'react';
 import ReactMarkdown, { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CodeBlock, CodeBlockCode } from '@/components/ui/code-block';
+import { Reasoning } from '@/components/home/ui/reasoning'; // Import Reasoning component
 
 export type MarkdownProps = {
   children: string;
@@ -12,9 +13,47 @@ export type MarkdownProps = {
   components?: Partial<Components>;
 };
 
-function parseMarkdownIntoBlocks(markdown: string): string[] {
-  const tokens = marked.lexer(markdown);
-  return tokens.map((token: any) => token.raw);
+// New function to process <think> tags
+interface ProcessedBlock {
+  type: 'markdown' | 'think';
+  content: string;
+  id: string; // Unique ID for React key
+}
+
+function processThinkTags(markdown: string, baseId: string): ProcessedBlock[] {
+  const blocks: ProcessedBlock[] = [];
+  let lastIndex = 0;
+  let keyIndex = 0;
+  const thinkTagRegex = /<think>(.*?)<\/think>/gs; // Non-greedy match for content
+
+  let match;
+  while ((match = thinkTagRegex.exec(markdown)) !== null) {
+    // Add preceding markdown block
+    if (match.index > lastIndex) {
+      blocks.push({
+        type: 'markdown',
+        content: markdown.substring(lastIndex, match.index),
+        id: `${baseId}-md-${keyIndex++}`,
+      });
+    }
+    // Add think block
+    blocks.push({
+      type: 'think',
+      content: match[1], // Content within <think>...</think>
+      id: `${baseId}-think-${keyIndex++}`,
+    });
+    lastIndex = thinkTagRegex.lastIndex;
+  }
+
+  // Add any remaining markdown block
+  if (lastIndex < markdown.length) {
+    blocks.push({
+      type: 'markdown',
+      content: markdown.substring(lastIndex),
+      id: `${baseId}-md-${keyIndex++}`,
+    });
+  }
+  return blocks.filter(block => block.content.trim() !== ''); // Remove empty blocks
 }
 
 function extractLanguage(className?: string): string {
@@ -181,7 +220,10 @@ function MarkdownComponent({
 }: MarkdownProps) {
   const generatedId = useId();
   const blockId = id ?? generatedId;
-  const blocks = useMemo(() => parseMarkdownIntoBlocks(children), [children]);
+  const processedBlocks = useMemo(
+    () => processThinkTags(children, blockId),
+    [children, blockId],
+  );
 
   return (
     <div
@@ -190,13 +232,26 @@ function MarkdownComponent({
         className,
       )}
     >
-      {blocks.map((block, index) => (
-        <MemoizedMarkdownBlock
-          key={`${blockId}-block-${index}`}
-          content={block}
-          components={components}
-        />
-      ))}
+      {processedBlocks.map(block => {
+        if (block.type === 'think') {
+          return (
+            <Reasoning
+              key={block.id}
+              text={block.content}
+              open={true} // Default to open, or make it configurable
+            />
+            // ReasoningResponse is handled internally by Reasoning if text prop is provided
+          );
+        }
+        // block.type === 'markdown'
+        return (
+          <MemoizedMarkdownBlock
+            key={block.id}
+            content={block.content}
+            components={components} // Pass original components for nested markdown
+          />
+        );
+      })}
     </div>
   );
 }
