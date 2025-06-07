@@ -93,7 +93,7 @@ export function renderMarkdownContent(
 
     // If no XML tags found, just return the full content as markdown
     if (!content.match(xmlRegex)) {
-        return <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words">{content}</Markdown>;
+        return <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words leading-relaxed">{content}</Markdown>;
     }
 
     while ((match = xmlRegex.exec(content)) !== null) {
@@ -101,7 +101,7 @@ export function renderMarkdownContent(
         if (match.index > lastIndex) {
             const textBeforeTag = content.substring(lastIndex, match.index);
             contentParts.push(
-                <Markdown key={`md-${lastIndex}`} className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none inline-block mr-1 break-words">{textBeforeTag}</Markdown>
+                <Markdown key={`md-${lastIndex}`} className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none inline-block mr-1 break-words leading-relaxed">{textBeforeTag}</Markdown>
             );
         }
 
@@ -123,7 +123,7 @@ export function renderMarkdownContent(
             // Render <ask> tag content with attachment UI (using the helper)
             contentParts.push(
                 <div key={`ask-${match.index}`} className="space-y-3">
-                    <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words [&>:first-child]:mt-0 prose-headings:mt-3">{askContent}</Markdown>
+                    <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words [&>:first-child]:mt-0 prose-headings:mt-3 leading-relaxed">{askContent}</Markdown>
                     {renderAttachments(attachments, fileViewerHandler, sandboxId, project)}
                 </div>
             );
@@ -152,7 +152,7 @@ export function renderMarkdownContent(
     // Add text after the last tag
     if (lastIndex < content.length) {
         contentParts.push(
-            <Markdown key={`md-${lastIndex}`} className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words">{content.substring(lastIndex)}</Markdown>
+            <Markdown key={`md-${lastIndex}`} className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none break-words leading-relaxed">{content.substring(lastIndex)}</Markdown>
         );
     }
 
@@ -401,11 +401,11 @@ export const ThreadContent: React.FC<ThreadContentProps> = ({
                                         const cleanContent = messageContent.replace(/\[Uploaded File: .*?\]/g, '').trim();
 
                                         return (
-                                            <div key={group.key} className="flex justify-end">
-                                                <div className="inline-flex max-w-[85%] rounded-xl bg-primary/10 px-4 py-3">
+                                            <div key={group.key} className="flex justify-end animate-scaleIn" style={{ animationName: 'scaleIn', animationDuration: '200ms' }}>
+                                                <div className="inline-flex max-w-[85%] rounded-xl bg-primary/10 px-4 py-3 chat-bubble-gradient">
                                                     <div className="space-y-3">
                                                         {cleanContent && (
-                                                            <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">{cleanContent}</Markdown>
+                                                            <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3 leading-relaxed">{cleanContent}</Markdown>
                                                         )}
 
                                                         {/* Use the helper function to render user attachments */}
@@ -416,13 +416,13 @@ export const ThreadContent: React.FC<ThreadContentProps> = ({
                                         );
                                     } else if (group.type === 'assistant_group') {
                                         return (
-                                            <div key={group.key} ref={groupIndex === groupedMessages.length - 1 ? latestMessageRef : null}>
+                                            <div key={group.key} ref={groupIndex === groupedMessages.length - 1 ? latestMessageRef : null} className="animate-scaleIn" style={{ animationName: 'scaleIn', animationDuration: '200ms' }}>
                                                 <div className="flex items-start gap-3">
                                                     <div className="flex-shrink-0 w-5 h-5 mt-2 rounded-md flex items-center justify-center ml-auto mr-2">
                                                         <KortixLogo />
                                                     </div>
                                                     <div className="flex-1">
-                                                        <div className="inline-flex max-w-[90%] rounded-lg px-4 text-sm">
+                                                        <div className="inline-flex max-w-[90%] rounded-lg px-4 text-sm chat-bubble-gradient">
                                                             <div className="space-y-2">
                                                                 {(() => {
                                                                     // In debug mode, just show raw messages content
@@ -487,7 +487,7 @@ export const ThreadContent: React.FC<ThreadContentProps> = ({
 
                                                                             elements.push(
                                                                                 <div key={msgKey} className={assistantMessageCount > 0 ? "mt-2" : ""}>
-                                                                                    <div className="prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">
+                                                                                    <div className="prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3 leading-relaxed">
                                                                                         {renderedContent}
                                                                                     </div>
                                                                                 </div>
@@ -534,7 +534,7 @@ export const ThreadContent: React.FC<ThreadContentProps> = ({
                                                                             return (
                                                                                 <>
                                                                                     {textBeforeTag && (
-                                                                                        <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">{textBeforeTag}</Markdown>
+                                                                                        <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3 leading-relaxed">{textBeforeTag}</Markdown>
                                                                                     )}
                                                                                     {showCursor && (
                                                                                         <span className="inline-block h-4 w-0.5 bg-primary ml-0.5 -mb-1 animate-pulse" />
@@ -611,7 +611,7 @@ export const ThreadContent: React.FC<ThreadContentProps> = ({
                                                                                     ) : (
                                                                                         <>
                                                                                             {textBeforeTag && (
-                                                                                                <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3">{textBeforeTag}</Markdown>
+                                                                                                <Markdown className="text-sm prose prose-sm dark:prose-invert chat-markdown max-w-none [&>:first-child]:mt-0 prose-headings:mt-3 leading-relaxed">{textBeforeTag}</Markdown>
                                                                                             )}
                                                                                             {showCursor && (
                                                                                                 <span className="inline-block h-4 w-0.5 bg-primary ml-0.5 -mb-1 animate-pulse" />

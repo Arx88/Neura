@@ -6,7 +6,7 @@ import React from 'react';
 import { Slider } from '@/components/ui/slider';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiMessageType } from '@/components/thread/types';
-import { CircleDashed, X, ChevronLeft, ChevronRight, Computer, Radio } from 'lucide-react';
+import { CircleDashed, X, ChevronLeft, ChevronRight, Computer, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
@@ -725,7 +725,7 @@ export function ToolCallSidePanel({
                         size="sm"
                         className="h-8 px-3 bg-red-500 hover:bg-red-600 text-white shadow-lg dark:border-red-400 flex items-center gap-1.5"
                       >
-                        <Radio className="h-3 w-3" />
+                        <Zap className="h-3 w-3" />
                         <span className="text-xs font-medium">Jump to Live</span>
                       </Button>
                       <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-red-500"></div>
