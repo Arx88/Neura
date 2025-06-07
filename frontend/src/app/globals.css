@@ -617,6 +617,24 @@
   transform: translateX(-100%);
 }
 
+/* Chat bubble gradients */
+.chat-bubble-gradient {
+  @apply bg-gradient-to-br from-muted to-background;
+}
+
+.dark .chat-bubble-gradient {
+  @apply bg-gradient-to-br from-muted to-background;
+}
+
+/* Tool card gradients */
+.tool-card-gradient {
+  @apply bg-gradient-to-r from-card via-muted to-card;
+}
+
+.dark .tool-card-gradient {
+  @apply bg-gradient-to-r from-card via-muted to-card;
+}
+
 .animate-shimmer-gray {
   @apply relative overflow-hidden rounded-md;
   @apply bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200;

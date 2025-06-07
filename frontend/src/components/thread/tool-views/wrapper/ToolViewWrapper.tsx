@@ -41,7 +41,7 @@ export function ToolViewWrapper({
   const Icon = getToolIcon(name);
 
   return (
-    <div className={cn("flex flex-col h-full", className)}>
+    <div className={cn("flex flex-col h-full tool-card-gradient transition-all duration-200 ease-in-out hover:scale-[1.02] hover:shadow-lg", className)}>
       {(headerContent || showStatus) && (
         <div className={cn(
           "flex items-center p-2 bg-zinc-100 dark:bg-zinc-900 justify-between border-zinc-200 dark:border-zinc-800",
@@ -49,7 +49,7 @@ export function ToolViewWrapper({
         )}>
           <div className="flex ml-1 items-center">
             {Icon && <Icon className="h-4 w-4 mr-2 text-zinc-600 dark:text-zinc-400" />}
-            <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+            <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
               {toolTitle}
             </span>
           </div>
